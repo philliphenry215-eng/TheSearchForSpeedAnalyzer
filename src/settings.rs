@@ -67,7 +67,7 @@ impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
             check_on_startup: true,
-            include_prereleases: false,
+            include_prereleases: is_beta_mode(),
             ignored_version: None,
         }
     }

@@ -76,11 +76,7 @@ impl UpdateChecker {
 }
 
 fn fetch_latest_release(include_prereleases: bool) -> UpdateStatus {
-    let url = if include_prereleases {
-        format!("https://api.github.com/repos/{}/releases?per_page=5", GITHUB_REPO)
-    } else {
-        format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO)
-    };
+    let url = format!("https://api.github.com/repos/{}/releases?per_page=10", GITHUB_REPO);
 
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(6))
@@ -98,24 +94,29 @@ fn fetch_latest_release(include_prereleases: bool) -> UpdateStatus {
         }
     };
 
-    if include_prereleases {
-        let releases: Result<Vec<serde_json::Value>, _> = response.into_json();
-        match releases {
-            Ok(list) => {
-                if let Some(first) = list.into_iter().next() {
-                    parse_release_json(&first)
-                } else {
-                    UpdateStatus::UpToDate
-                }
+    let releases: Result<Vec<serde_json::Value>, _> = response.into_json();
+    match releases {
+        Ok(list) => {
+            if list.is_empty() {
+                return UpdateStatus::UpToDate;
             }
-            Err(e) => UpdateStatus::Error(format!("Invalid response: {}", e)),
+
+            // If include_prereleases is true, take the latest release (stable or pre-release)
+            // If include_prereleases is false, find the latest full stable release
+            let target_release = if include_prereleases {
+                list.into_iter().next()
+            } else {
+                list.into_iter().find(|r| !r["prerelease"].as_bool().unwrap_or(false))
+            };
+
+            if let Some(rel) = target_release {
+                parse_release_json(&rel)
+            } else {
+                // If only beta/pre-releases exist and user hasn't opted into betas, stable is up to date
+                UpdateStatus::UpToDate
+            }
         }
-    } else {
-        let release: Result<serde_json::Value, _> = response.into_json();
-        match release {
-            Ok(json) => parse_release_json(&json),
-            Err(e) => UpdateStatus::Error(format!("Invalid response: {}", e)),
-        }
+        Err(e) => UpdateStatus::Error(format!("Invalid response: {}", e)),
     }
 }
 
