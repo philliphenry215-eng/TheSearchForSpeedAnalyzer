@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod settings;
+mod updater;
 
 use eframe::egui;
 use egui_extras::{TableBuilder, Column};
@@ -856,6 +857,7 @@ struct WarRoomApp {
     grid_sort_key: GridSortKey,
     grid_sort_dir: SortDirection,
     driver_search_query: String,
+    updater: updater::UpdateChecker,
 }
 
 fn load_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
@@ -1563,6 +1565,11 @@ impl WarRoomApp {
             }
         });
         
+        let mut updater = updater::UpdateChecker::new();
+        if settings.updates.check_on_startup {
+            updater.trigger_check(settings.updates.include_prereleases);
+        }
+
         Self { 
             state,
             settings,
@@ -1577,6 +1584,7 @@ impl WarRoomApp {
             grid_sort_key: GridSortKey::Position,
             grid_sort_dir: SortDirection::Ascending,
             driver_search_query: String::new(),
+            updater,
         }
     }
 
@@ -1724,7 +1732,8 @@ impl WarRoomApp {
         let elevated = self.settings.card_elevated_color();
 
         egui::Window::new("Settings & Layouts")
-            .fixed_size([560.0, 540.0])
+            .fixed_size([570.0, 640.0])
+            .vscroll(true)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)
@@ -1940,6 +1949,63 @@ impl WarRoomApp {
                     if ui.selectable_label(self.settings.use_metric, "Metric (km/h / °C / L)").clicked() {
                         self.settings.use_metric = true;
                         self.settings.save();
+                    }
+                });
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ui.label(egui::RichText::new("UPDATES & RELEASE CHANNEL").color(muted).size(11.0).extra_letter_spacing(0.8));
+                ui.horizontal(|ui| {
+                    let version_label = format!("Installed Version: v{}", updater::CURRENT_VERSION);
+                    ui.label(egui::RichText::new(version_label).color(white).size(12.5));
+                    if settings::is_beta_mode() {
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgb(110, 45, 160))
+                            .rounding(egui::Rounding::same(4.0))
+                            .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("BETA / STAGING").size(10.5).color(egui::Color32::WHITE).strong());
+                            });
+                    }
+                });
+
+                ui.add_space(3.0);
+                if ui.checkbox(&mut self.settings.updates.check_on_startup, "Check for updates automatically on launch").changed() {
+                    self.settings.save();
+                }
+                if ui.checkbox(&mut self.settings.updates.include_prereleases, "Include Beta / Staging pre-releases").changed() {
+                    self.settings.save();
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let check_btn = egui::Button::new(egui::RichText::new("Check for Updates Now").color(white).size(12.0))
+                        .fill(elevated);
+                    if ui.add(check_btn).clicked() {
+                        self.updater.trigger_check(self.settings.updates.include_prereleases);
+                    }
+
+                    match &self.updater.status {
+                        updater::UpdateStatus::Idle => {},
+                        updater::UpdateStatus::Checking => {
+                            ui.spinner();
+                            ui.label(egui::RichText::new("Checking GitHub Releases...").color(muted).size(12.0));
+                        },
+                        updater::UpdateStatus::UpToDate => {
+                            ui.label(egui::RichText::new("✓ Up to date").color(egui::Color32::from_rgb(75, 225, 110)).size(12.0));
+                        },
+                        updater::UpdateStatus::UpdateAvailable(info) => {
+                            let text = format!("Update {} available!", info.tag_name);
+                            ui.label(egui::RichText::new(text).color(primary).strong().size(12.0));
+                            if ui.add(egui::Button::new(egui::RichText::new("View Release ↗").color(white).size(11.5)).fill(elevated)).clicked() {
+                                updater::open_browser(&info.html_url);
+                            }
+                        },
+                        updater::UpdateStatus::Error(err) => {
+                            ui.label(egui::RichText::new(format!("⚠ {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(11.0));
+                        }
                     }
                 });
 
@@ -3904,6 +3970,7 @@ impl WarRoomApp {
 
 impl eframe::App for WarRoomApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.updater.poll();
         let primary = self.settings.primary_accent();
         let white = self.settings.text_color();
         let muted = self.settings.text_muted();
@@ -4097,6 +4164,51 @@ impl eframe::App for WarRoomApp {
                 });
             });
         });
+
+        // --- OPTIONAL UPDATE ALERT BANNER ---
+        if let updater::UpdateStatus::UpdateAvailable(info) = &self.updater.status {
+            if self.settings.updates.ignored_version.as_deref() != Some(&info.tag_name) {
+                let info_clone = info.clone();
+                egui::TopBottomPanel::top("update_banner")
+                    .frame(
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgb(18, 32, 54))
+                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 85, 150)))
+                            .inner_margin(egui::Margin::symmetric(14.0, 7.0))
+                    )
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            let icon = if info_clone.is_prerelease { "📢" } else { "🚀" };
+                            let title = if info_clone.is_prerelease {
+                                format!("{} Pre-release Available: {}", icon, info_clone.tag_name)
+                            } else {
+                                format!("{} New Update Available: {}", icon, info_clone.tag_name)
+                            };
+                            ui.label(egui::RichText::new(title).color(egui::Color32::WHITE).strong().size(12.5));
+                            if !info_clone.name.is_empty() && info_clone.name != info_clone.tag_name {
+                                ui.label(egui::RichText::new(format!("({})", info_clone.name)).color(muted).size(12.0));
+                            }
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button(egui::RichText::new("✕ Dismiss").color(muted).size(11.5)).clicked() {
+                                    self.updater.dismiss();
+                                }
+                                if ui.button(egui::RichText::new("Skip this version").color(muted).size(11.5)).clicked() {
+                                    self.settings.updates.ignored_version = Some(info_clone.tag_name.clone());
+                                    self.settings.save();
+                                    self.updater.dismiss();
+                                }
+                                let dl_btn = egui::Button::new(
+                                    egui::RichText::new("Download Update ↗").color(egui::Color32::BLACK).strong().size(12.0)
+                                ).fill(primary);
+                                if ui.add(dl_btn).clicked() {
+                                    updater::open_browser(&info_clone.html_url);
+                                }
+                            });
+                        });
+                    });
+            }
+        }
 
         // --- MAIN WORKSPACE ---
         egui::CentralPanel::default()

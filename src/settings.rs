@@ -49,8 +49,29 @@ impl Default for OverlayShape {
 }
 
 fn default_true() -> bool { true }
+fn default_false() -> bool { false }
 fn default_margin_laps() -> f32 { 1.0 }
 fn default_opacity() -> f32 { 0.88 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateSettings {
+    #[serde(default = "default_true")]
+    pub check_on_startup: bool,
+    #[serde(default = "default_false")]
+    pub include_prereleases: bool,
+    #[serde(default)]
+    pub ignored_version: Option<String>,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self {
+            check_on_startup: true,
+            include_prereleases: false,
+            ignored_version: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverlaySettings {
@@ -161,6 +182,8 @@ pub struct AppSettings {
     pub custom_avg_buckets: Vec<usize>,
     #[serde(default = "default_active_avg_buckets")]
     pub active_avg_buckets: Vec<usize>,
+    #[serde(default)]
+    pub updates: UpdateSettings,
 }
 
 fn default_custom_avg_buckets() -> Vec<usize> {
@@ -183,6 +206,7 @@ impl Default for AppSettings {
             font_size_offset: 0.0,
             custom_avg_buckets: default_custom_avg_buckets(),
             active_avg_buckets: default_active_avg_buckets(),
+            updates: UpdateSettings::default(),
         }
     }
 }
