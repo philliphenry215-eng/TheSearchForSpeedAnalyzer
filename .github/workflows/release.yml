@@ -36,7 +36,10 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-      - name: Prepare binary for release
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Prepare binary and installer for release
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
@@ -53,11 +56,15 @@ jobs:
           
           if ($isBeta) {
             Copy-Item target/release/SearchForSpeedAnalyzer.exe SearchForSpeedAnalyzer-Beta.exe
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppName="The Search For Speed Analyzer (Beta)" /DMyAppExeName="SearchForSpeedAnalyzer-Beta.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Beta-Setup" /DMyAppVersion="$tag" installer.iss
             Write-Output "BINARY_NAME=SearchForSpeedAnalyzer-Beta.exe" >> $env:GITHUB_ENV
+            Write-Output "INSTALLER_NAME=SearchForSpeedAnalyzer-Beta-Setup.exe" >> $env:GITHUB_ENV
             Write-Output "IS_PRERELEASE=true" >> $env:GITHUB_ENV
           } else {
             Copy-Item target/release/SearchForSpeedAnalyzer.exe SearchForSpeedAnalyzer.exe
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppName="The Search For Speed Analyzer" /DMyAppExeName="SearchForSpeedAnalyzer.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Setup" /DMyAppVersion="$tag" installer.iss
             Write-Output "BINARY_NAME=SearchForSpeedAnalyzer.exe" >> $env:GITHUB_ENV
+            Write-Output "INSTALLER_NAME=SearchForSpeedAnalyzer-Setup.exe" >> $env:GITHUB_ENV
             Write-Output "IS_PRERELEASE=false" >> $env:GITHUB_ENV
           }
           Write-Output "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
@@ -71,4 +78,5 @@ jobs:
           draft: false
           generate_release_notes: true
           files: |
+            ${{ env.INSTALLER_NAME }}
             ${{ env.BINARY_NAME }}
