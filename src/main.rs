@@ -19,11 +19,30 @@ fn main() -> eframe::Result<()> {
         "Search For Speed - Stint Analyzer"
     };
 
+    let app_icon = {
+        let bytes = include_bytes!("../assets/icon.ico");
+        image::load_from_memory(bytes).ok().map(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            egui::IconData {
+                rgba: rgba.into_raw(),
+                width: w,
+                height: h,
+            }
+        })
+    };
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1400.0, 820.0])
+        .with_min_inner_size([960.0, 560.0])
+        .with_title(title);
+
+    if let Some(icon) = app_icon {
+        viewport = viewport.with_icon(icon);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 820.0])
-            .with_min_inner_size([960.0, 560.0])
-            .with_title(title),
+        viewport,
         ..Default::default()
     };
 
