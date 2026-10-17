@@ -143,9 +143,19 @@ impl Default for ColumnVisibility {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemePreset {
-    S4SGoldBlue,     // Pitch black + Goldish Bronze + Racing Blue
-    MatteSageGreen,  // Dark mode + Matte Sage Green accents
-    StealthDark,     // Pure monochrome dark + icy white/silver
+    #[serde(alias = "MatteSageGreen")]
+    S4SGoldBlue,      // Pitch black + Vibrant Gold + Electric Racing Blue
+    StealthDark,      // Pure monochrome dark + icy white/silver
+    S4SGoldBlueLight, // Inverted: Daylight Crisp White/Silver + Royal Racing Blue + Warm Gold
+}
+
+impl ThemePreset {
+    pub fn is_dark(&self) -> bool {
+        match self {
+            ThemePreset::S4SGoldBlue | ThemePreset::StealthDark => true,
+            ThemePreset::S4SGoldBlueLight => false,
+        }
+    }
 }
 
 impl Default for ThemePreset {
@@ -310,60 +320,100 @@ impl AppSettings {
         self.save();
     }
 
+    pub fn is_dark_theme(&self) -> bool {
+        self.theme.is_dark()
+    }
+
     pub fn primary_accent(&self) -> Color32 {
         match self.theme {
-            ThemePreset::S4SGoldBlue => Color32::from_rgb(255, 212, 64), // High-Luminance Vibrant Gold
-            ThemePreset::MatteSageGreen => Color32::from_rgb(145, 215, 165), // Crisp Matte Sage Mint
+            ThemePreset::S4SGoldBlue => Color32::from_rgb(255, 212, 64), // Vibrant Gold
             ThemePreset::StealthDark => Color32::from_rgb(255, 255, 255), // Pure Crisp White
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(212, 142, 12), // Deep Warm Amber Gold (high contrast on daylight)
         }
     }
 
     pub fn secondary_accent(&self) -> Color32 {
         match self.theme {
             ThemePreset::S4SGoldBlue => Color32::from_rgb(45, 115, 220), // Electric Racing Blue
-            ThemePreset::MatteSageGreen => Color32::from_rgb(55, 135, 95), // Deep Forest Accent
-            ThemePreset::StealthDark => Color32::from_rgb(90, 100, 115), // Steel Slate
+            ThemePreset::StealthDark => Color32::from_rgb(110, 120, 138), // Steel Slate
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(25, 95, 215), // Vibrant Royal Racing Blue
         }
     }
 
     pub fn bg_color(&self) -> Color32 {
-        Color32::from_rgb(11, 13, 18) // Deep Obsidian Canvas
+        match self.theme {
+            ThemePreset::S4SGoldBlue => Color32::from_rgb(11, 13, 18), // Deep Obsidian Canvas
+            ThemePreset::StealthDark => Color32::from_rgb(10, 11, 14), // Pitch Black Canvas
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(238, 241, 246), // Crisp Light Canvas (Daylight Matte)
+        }
     }
 
     pub fn panel_color(&self) -> Color32 {
-        Color32::from_rgb(19, 22, 29) // Sleek Elevated Card Surface
+        match self.theme {
+            ThemePreset::S4SGoldBlue => Color32::from_rgb(19, 22, 29), // Sleek Elevated Card Surface
+            ThemePreset::StealthDark => Color32::from_rgb(18, 20, 25), // Dark Carbon Surface
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(255, 255, 255), // Pure Crisp White Card Surface
+        }
     }
 
     pub fn card_elevated_color(&self) -> Color32 {
-        Color32::from_rgb(26, 30, 40) // Nested Tile / Pill Surface
+        match self.theme {
+            ThemePreset::S4SGoldBlue => Color32::from_rgb(26, 30, 40), // Nested Tile / Pill Surface
+            ThemePreset::StealthDark => Color32::from_rgb(25, 28, 36), // Gunmetal Tile Surface
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(228, 233, 242), // Soft Cool Tinted Pill Surface
+        }
     }
 
     pub fn text_color(&self) -> Color32 {
-        Color32::from_rgb(236, 240, 246) // Soft High-Contrast White
+        match self.theme {
+            ThemePreset::S4SGoldBlue => Color32::from_rgb(236, 240, 246), // Soft High-Contrast White
+            ThemePreset::StealthDark => Color32::from_rgb(245, 247, 250), // High-Visibility White
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(16, 22, 34), // Deep Navy Charcoal Text
+        }
     }
 
     pub fn text_muted(&self) -> Color32 {
-        Color32::from_rgb(139, 147, 163) // Muted Label Slate
+        match self.theme {
+            ThemePreset::S4SGoldBlue => Color32::from_rgb(139, 147, 163), // Muted Label Slate
+            ThemePreset::StealthDark => Color32::from_rgb(130, 138, 150), // Cool Silver Muted
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(95, 108, 128), // Refined Slate Muted
+        }
     }
 
     pub fn divider_color(&self) -> Color32 {
-        Color32::from_rgb(32, 38, 50) // Subtle Hairline Border
+        match self.theme {
+            ThemePreset::S4SGoldBlue => Color32::from_rgb(32, 38, 50), // Subtle Hairline Border
+            ThemePreset::StealthDark => Color32::from_rgb(32, 35, 45), // Monochrome Border
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(212, 220, 232), // Clean Subtle Light Border
+        }
     }
 
     pub fn status_green(&self) -> Color32 {
-        Color32::from_rgb(75, 225, 110)
+        match self.theme {
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(18, 150, 60),
+            _ => Color32::from_rgb(75, 225, 110),
+        }
     }
 
     pub fn status_amber(&self) -> Color32 {
-        Color32::from_rgb(255, 165, 50)
+        match self.theme {
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(215, 125, 15),
+            _ => Color32::from_rgb(255, 165, 50),
+        }
     }
 
     pub fn status_red(&self) -> Color32 {
-        Color32::from_rgb(255, 75, 75)
+        match self.theme {
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(215, 45, 45),
+            _ => Color32::from_rgb(255, 75, 75),
+        }
     }
 
     pub fn status_purple(&self) -> Color32 {
-        Color32::from_rgb(185, 120, 255)
+        match self.theme {
+            ThemePreset::S4SGoldBlueLight => Color32::from_rgb(130, 50, 205),
+            _ => Color32::from_rgb(185, 120, 255),
+        }
     }
 }
 

@@ -65,10 +65,15 @@ fn with_alpha(c: egui::Color32, alpha: u8) -> egui::Color32 {
 
 fn setup_custom_style(ctx: &egui::Context, settings: &AppSettings) {
     let mut style = (*ctx.style()).clone();
+    let is_dark = settings.is_dark_theme();
     
-    // Explicitly enforce Dark Mode visuals so egui never defaults to light mode text colors
-    style.visuals = egui::Visuals::dark();
-    style.visuals.dark_mode = true;
+    if is_dark {
+        style.visuals = egui::Visuals::dark();
+        style.visuals.dark_mode = true;
+    } else {
+        style.visuals = egui::Visuals::light();
+        style.visuals.dark_mode = false;
+    }
     
     let primary = settings.primary_accent();
     let secondary = settings.secondary_accent();
@@ -80,24 +85,41 @@ fn setup_custom_style(ctx: &egui::Context, settings: &AppSettings) {
 
     style.visuals.window_rounding = egui::Rounding::same(12.0);
     style.visuals.menu_rounding = egui::Rounding::same(8.0);
-    style.visuals.window_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 10.0),
-        blur: 24.0,
-        spread: 0.0,
-        color: egui::Color32::from_black_alpha(160),
-    };
-    style.visuals.popup_shadow = egui::epaint::Shadow {
-        offset: egui::vec2(0.0, 6.0),
-        blur: 14.0,
-        spread: 0.0,
-        color: egui::Color32::from_black_alpha(120),
-    };
+    if is_dark {
+        style.visuals.window_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 10.0),
+            blur: 24.0,
+            spread: 0.0,
+            color: egui::Color32::from_black_alpha(160),
+        };
+        style.visuals.popup_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 6.0),
+            blur: 14.0,
+            spread: 0.0,
+            color: egui::Color32::from_black_alpha(120),
+        };
+        style.visuals.faint_bg_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5);
+        style.visuals.extreme_bg_color = egui::Color32::from_rgb(8, 10, 14);
+    } else {
+        style.visuals.window_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 8.0),
+            blur: 20.0,
+            spread: 0.0,
+            color: egui::Color32::from_rgba_unmultiplied(20, 30, 55, 30),
+        };
+        style.visuals.popup_shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 4.0),
+            blur: 12.0,
+            spread: 0.0,
+            color: egui::Color32::from_rgba_unmultiplied(20, 30, 55, 25),
+        };
+        style.visuals.faint_bg_color = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 6);
+        style.visuals.extreme_bg_color = egui::Color32::from_rgb(255, 255, 255);
+    }
     
     style.visuals.panel_fill = bg_canvas;
     style.visuals.window_fill = card_bg;
     style.visuals.window_stroke = egui::Stroke::new(1.0, divider);
-    style.visuals.faint_bg_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5);
-    style.visuals.extreme_bg_color = egui::Color32::from_rgb(8, 10, 14);
     
     style.visuals.widgets.noninteractive.bg_fill = card_bg;
     style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, text_main);
@@ -112,16 +134,21 @@ fn setup_custom_style(ctx: &egui::Context, settings: &AppSettings) {
     style.visuals.widgets.inactive.rounding = egui::Rounding::same(8.0);
     
     // Hovered buttons
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(36, 42, 56);
-    style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(36, 42, 56);
-    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    let hover_bg = if is_dark {
+        egui::Color32::from_rgb(36, 42, 56)
+    } else {
+        egui::Color32::from_rgb(220, 226, 238)
+    };
+    style.visuals.widgets.hovered.bg_fill = hover_bg;
+    style.visuals.widgets.hovered.weak_bg_fill = hover_bg;
+    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, if is_dark { egui::Color32::WHITE } else { text_main });
     style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, with_alpha(primary, 110));
     style.visuals.widgets.hovered.rounding = egui::Rounding::same(8.0);
     
     // Active buttons
     style.visuals.widgets.active.bg_fill = primary;
     style.visuals.widgets.active.weak_bg_fill = primary;
-    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
+    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, if is_dark { egui::Color32::BLACK } else { egui::Color32::WHITE });
     style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, primary);
     style.visuals.widgets.active.rounding = egui::Rounding::same(8.0);
     
@@ -879,7 +906,7 @@ struct WarRoomApp {
     updater: updater::UpdateChecker,
 }
 
-fn load_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+fn load_logo_texture(ctx: &egui::Context, is_dark: bool) -> Option<egui::TextureHandle> {
     let bytes = include_bytes!("../assets/logo.png");
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
@@ -908,6 +935,12 @@ fn load_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
         (0, 0, w, h)
     };
 
+    let (r, g, b) = if is_dark {
+        (238, 240, 245)
+    } else {
+        (18, 24, 38)
+    };
+
     let mut raw = Vec::with_capacity((crop_w * crop_h * 4) as usize);
     for y in crop_y..(crop_y + crop_h) {
         for x in crop_x..(crop_x + crop_w) {
@@ -915,7 +948,7 @@ fn load_logo_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
             let lum = px[0].max(px[1]).max(px[2]);
             if lum > 15 {
                 let alpha = ((lum as u16 * 255) / 215).min(255) as u8;
-                raw.extend_from_slice(&[238, 240, 245, alpha]);
+                raw.extend_from_slice(&[r, g, b, alpha]);
             } else {
                 raw.extend_from_slice(&[0, 0, 0, 0]);
             }
@@ -930,7 +963,7 @@ impl WarRoomApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = AppSettings::load();
         setup_custom_style(&cc.egui_ctx, &settings);
-        let logo_texture = load_logo_texture(&cc.egui_ctx);
+        let logo_texture = load_logo_texture(&cc.egui_ctx, settings.is_dark_theme());
         
         let state = Arc::new(Mutex::new(WarRoomState {
             track_name: "Waiting for iRacing...".to_string(),
@@ -1940,22 +1973,25 @@ impl WarRoomApp {
                 ui.add_space(4.0);
 
                 ui.label(egui::RichText::new("THEME & UNITS").color(muted).size(11.0).extra_letter_spacing(0.8));
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("Theme:").color(muted));
-                    if ui.selectable_label(self.settings.theme == ThemePreset::S4SGoldBlue, "S4S Gold & Blue").clicked() {
+                    if ui.selectable_label(self.settings.theme == ThemePreset::S4SGoldBlue, "S4S Gold & Blue (Dark)").clicked() {
                         self.settings.theme = ThemePreset::S4SGoldBlue;
                         self.settings.save();
                         setup_custom_style(ctx, &self.settings);
+                        self.logo_texture = load_logo_texture(ctx, self.settings.is_dark_theme());
                     }
-                    if ui.selectable_label(self.settings.theme == ThemePreset::MatteSageGreen, "Matte Sage Green").clicked() {
-                        self.settings.theme = ThemePreset::MatteSageGreen;
+                    if ui.selectable_label(self.settings.theme == ThemePreset::S4SGoldBlueLight, "S4S Daylight (Light Mode)").clicked() {
+                        self.settings.theme = ThemePreset::S4SGoldBlueLight;
                         self.settings.save();
                         setup_custom_style(ctx, &self.settings);
+                        self.logo_texture = load_logo_texture(ctx, self.settings.is_dark_theme());
                     }
                     if ui.selectable_label(self.settings.theme == ThemePreset::StealthDark, "Stealth Monochrome").clicked() {
                         self.settings.theme = ThemePreset::StealthDark;
                         self.settings.save();
                         setup_custom_style(ctx, &self.settings);
+                        self.logo_texture = load_logo_texture(ctx, self.settings.is_dark_theme());
                     }
                 });
 
@@ -4029,7 +4065,7 @@ impl eframe::App for WarRoomApp {
         let header_frame = egui::Frame::none()
             .fill(self.settings.bg_color())
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)));
+            .stroke(egui::Stroke::new(1.0, self.settings.divider_color()));
 
         egui::TopBottomPanel::top("top_header").exact_height(60.0).frame(header_frame).show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
@@ -4046,7 +4082,7 @@ impl eframe::App for WarRoomApp {
                 // Segmented View Switcher (Cockpit | Grid)
                 let is_cockpit = self.settings.view_mode == ActiveViewMode::CockpitEngineer;
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(21, 25, 34))
+                    .fill(elevated)
                     .rounding(egui::Rounding::same(8.0))
                     .inner_margin(egui::Margin::same(3.0))
                     .show(ui, |ui| {
@@ -4054,9 +4090,9 @@ impl eframe::App for WarRoomApp {
                         let c_btn = egui::Button::new(
                             egui::RichText::new("Cockpit")
                                 .size(12.5)
-                                .color(if is_cockpit { egui::Color32::WHITE } else { muted })
+                                .color(if is_cockpit { white } else { muted })
                         )
-                        .fill(if is_cockpit { egui::Color32::from_rgb(35, 42, 56) } else { egui::Color32::TRANSPARENT })
+                        .fill(if is_cockpit { self.settings.panel_color() } else { egui::Color32::TRANSPARENT })
                         .rounding(egui::Rounding::same(6.0));
                         if ui.add(c_btn).clicked() {
                             self.settings.view_mode = ActiveViewMode::CockpitEngineer;
@@ -4066,9 +4102,9 @@ impl eframe::App for WarRoomApp {
                         let g_btn = egui::Button::new(
                             egui::RichText::new("Grid")
                                 .size(12.5)
-                                .color(if !is_cockpit { egui::Color32::WHITE } else { muted })
+                                .color(if !is_cockpit { white } else { muted })
                         )
-                        .fill(if !is_cockpit { egui::Color32::from_rgb(35, 42, 56) } else { egui::Color32::TRANSPARENT })
+                        .fill(if !is_cockpit { self.settings.panel_color() } else { egui::Color32::TRANSPARENT })
                         .rounding(egui::Rounding::same(6.0));
                         if ui.add(g_btn).clicked() {
                             self.settings.view_mode = ActiveViewMode::GridTable;
@@ -4079,7 +4115,7 @@ impl eframe::App for WarRoomApp {
                 ui.add_space(4.0);
 
                 // Context Pills: Track, Car/Session, Position, Full Weather (with Wind Direction & Humidity)
-                let pill_bg = egui::Color32::from_rgb(21, 25, 34);
+                let pill_bg = elevated;
                 let pill_margin = egui::Margin::symmetric(10.0, 5.0);
                 let pill_round = egui::Rounding::same(16.0);
 
