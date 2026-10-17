@@ -1,0 +1,74 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      is_beta:
+        description: 'Check if this is a Beta / Staging build'
+        type: boolean
+        default: false
+      custom_tag:
+        description: 'Release tag name (e.g. v0.1.0 or v0.1.0-beta.1)'
+        required: false
+        default: 'v0.1.0-test'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows Release Binary
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Prepare binary for release
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.custom_tag }}" -ne "") {
+            $tag = "${{ inputs.custom_tag }}"
+          }
+          
+          $isBeta = $false
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $isBeta = [System.Convert]::ToBoolean("${{ inputs.is_beta }}")
+          } elseif ($tag -match "beta|alpha|rc|staging") {
+            $isBeta = $true
+          }
+          
+          if ($isBeta) {
+            Copy-Item target/release/SearchForSpeedAnalyzer.exe SearchForSpeedAnalyzer-Beta.exe
+            Write-Output "BINARY_NAME=SearchForSpeedAnalyzer-Beta.exe" >> $env:GITHUB_ENV
+            Write-Output "IS_PRERELEASE=true" >> $env:GITHUB_ENV
+          } else {
+            Copy-Item target/release/SearchForSpeedAnalyzer.exe SearchForSpeedAnalyzer.exe
+            Write-Output "BINARY_NAME=SearchForSpeedAnalyzer.exe" >> $env:GITHUB_ENV
+            Write-Output "IS_PRERELEASE=false" >> $env:GITHUB_ENV
+          }
+          Write-Output "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Release ${{ env.RELEASE_TAG }}
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+          draft: false
+          generate_release_notes: true
+          files: |
+            ${{ env.BINARY_NAME }}

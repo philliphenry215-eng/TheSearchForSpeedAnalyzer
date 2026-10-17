@@ -4,8 +4,9 @@
 *.pdb
 
 # User settings and local backups
-settings.json
+settings*.json
 backup_pre_redesign/
+SearchForSpeedAnalyzer*.exe
 
 # IDE / OS files
 .vscode/

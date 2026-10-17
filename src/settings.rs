@@ -3,7 +3,25 @@ use std::fs;
 use std::path::Path;
 use eframe::egui::Color32;
 
-const SETTINGS_FILE: &str = "settings.json";
+pub fn is_beta_mode() -> bool {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(name) = exe_path.file_name().and_then(|s| s.to_str()) {
+            let lower = name.to_lowercase();
+            if lower.contains("beta") || lower.contains("staging") {
+                return true;
+            }
+        }
+    }
+    std::env::args().any(|arg| arg == "--beta" || arg == "-beta")
+}
+
+pub fn get_settings_file() -> &'static str {
+    if is_beta_mode() {
+        "settings-beta.json"
+    } else {
+        "settings.json"
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActiveViewMode {
@@ -171,8 +189,9 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub fn load() -> Self {
-        if Path::new(SETTINGS_FILE).exists() {
-            if let Ok(data) = fs::read_to_string(SETTINGS_FILE) {
+        let file_path = get_settings_file();
+        if Path::new(file_path).exists() {
+            if let Ok(data) = fs::read_to_string(file_path) {
                 if let Ok(mut settings) = serde_json::from_str::<AppSettings>(&data) {
                     if settings.custom_avg_buckets.is_empty() {
                         settings.custom_avg_buckets = default_custom_avg_buckets();
@@ -191,7 +210,7 @@ impl AppSettings {
 
     pub fn save(&self) {
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(SETTINGS_FILE, json);
+            let _ = fs::write(get_settings_file(), json);
         }
     }
 

@@ -12,11 +12,17 @@ use iracing::telemetry::Value;
 use settings::{ActiveViewMode, AppSettings, LayoutPreset, OverlayShape, ThemePreset};
 
 fn main() -> eframe::Result<()> {
+    let title = if settings::is_beta_mode() {
+        "Search For Speed - Stint Analyzer [BETA]"
+    } else {
+        "Search For Speed - Stint Analyzer"
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 820.0])
             .with_min_inner_size([960.0, 560.0])
-            .with_title("Search For Speed - Stint Analyzer"),
+            .with_title(title),
         ..Default::default()
     };
 
