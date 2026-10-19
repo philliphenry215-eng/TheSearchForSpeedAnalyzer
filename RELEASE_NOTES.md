@@ -1,3 +1,21 @@
+# The Search For Speed Analyzer — v0.1.1
+
+### 🛠️ Bug Fixes & Improvements:
+
+#### 1. Session Phase Transitions & Lap Reset (Practice ➔ Qualify ➔ Race)
+* **Clean Session Isolation:** Moving from Practice to Qualifying to Race now resets active driver lap counters, stints, caution states, and fast laps cleanly. Qualifying flyer laps no longer bleed into your race session fast lap.
+* **Historical Baseline Fuel Retention:** Fuel burn rates calculated in previous sessions are preserved as an instant strategy baseline until active race laps are logged.
+* **Session History Archiving:** Completed session stints are archived in memory for historical reference.
+
+#### 2. Stint 1 Setup Name Fix
+* **Setup Display Across Stints:** Fixed an issue where Stint 1 erroneously displayed the car name rather than the loaded setup name. Setup names are now correctly captured and back-filled from garage YAML data.
+* **Universal Neutral Fallback:** Cleaned `.sto` file extensions and directory paths across all stints and grid table rows, defaulting cleanly to `"Baseline"` rather than the car model name.
+
+#### 3. Real-Time Track State in Header
+* **Session Track State Display:** The top header bar's session details pill now includes the live track condition (e.g. `Clean Track`, `Moderate Rubber`, `Heavy Rubber`) along with live wetness states (`Light Wet`, `Moderate Wet`, `Very Wet`).
+
+---
+
 # The Search For Speed Analyzer — v0.1.0 (Official Production Baseline)
 
 ### 🏁 What is The Search For Speed Analyzer?

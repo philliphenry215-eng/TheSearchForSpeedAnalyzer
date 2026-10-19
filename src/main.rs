@@ -375,7 +375,98 @@ impl StintData {
     }
 }
 
-#[derive(Clone, Default)]
+pub fn format_session_type(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    if lower.contains("open practice") || lower.contains("practice") {
+        "PRACTICE".to_string()
+    } else if lower.contains("lone qualify") || lower.contains("qualif") {
+        "QUALIFYING".to_string()
+    } else if lower.contains("warmup") {
+        "WARMUP".to_string()
+    } else if lower.contains("race") {
+        "RACE".to_string()
+    } else if !raw.is_empty() {
+        raw.to_uppercase()
+    } else {
+        "SESSION".to_string()
+    }
+}
+
+pub fn format_track_state(raw: &str, wetness_code: i32) -> String {
+    let wetness_str = match wetness_code {
+        2 => "Mostly Dry",
+        3 => "Very Light Wet",
+        4 => "Light Wet",
+        5 => "Moderate Wet",
+        6 => "Very Wet",
+        7 => "Extremely Wet",
+        _ => "", // 0 = unknown, 1 = dry
+    };
+
+    let raw_clean = raw.trim();
+    let rubber_str = if raw_clean.is_empty() || raw_clean == "..." || raw_clean == "—" {
+        ""
+    } else {
+        let lower = raw_clean.to_lowercase();
+        if lower.contains("clean") || lower.contains("clear") {
+            "Clean Track"
+        } else if lower.contains("moderate") {
+            "Moderate Rubber"
+        } else if lower.contains("very high") || lower.contains("heavy") {
+            "Heavy Rubber"
+        } else if lower.contains("high") {
+            "High Rubber"
+        } else if lower.contains("max") {
+            "Maximum Rubber"
+        } else if lower.contains("low") || lower.contains("light") {
+            "Light Rubber"
+        } else if lower.contains("carry") || lower.contains("carried") {
+            "Carried Over"
+        } else {
+            raw_clean
+        }
+    };
+
+    if !wetness_str.is_empty() && !rubber_str.is_empty() {
+        format!("{} ({})", rubber_str, wetness_str)
+    } else if !wetness_str.is_empty() {
+        wetness_str.to_string()
+    } else if !rubber_str.is_empty() {
+        rubber_str.to_string()
+    } else {
+        "Clean Track".to_string()
+    }
+}
+
+pub fn clean_setup_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "—" || trimmed == "..." {
+        return String::new();
+    }
+    // Take filename without directory path (handle both / and \)
+    let filename = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let clean = if let Some(stripped) = filename.strip_suffix(".sto").or_else(|| filename.strip_suffix(".STO")) {
+        stripped.trim()
+    } else {
+        filename.trim()
+    };
+    if clean.is_empty() {
+        String::new()
+    } else {
+        clean.to_string()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SessionArchive {
+    pub session_num: i32,
+    pub session_type: String,
+    pub drivers: HashMap<usize, DriverState>,
+    pub caution_count: i32,
+    pub caution_laps: i32,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct DriverState {
     pub car_idx: usize,
     pub driver_name: String,
@@ -389,6 +480,7 @@ pub struct DriverState {
     pub last_known_lap_time: f32,
     pub setup_name: String,
     pub stints: Vec<StintData>,
+    pub historical_fuel_burn_rate: f32,
 }
 
 impl DriverState {
@@ -400,14 +492,14 @@ impl DriverState {
                 return b;
             }
         }
-        // 2. Fallback to previous closed stint with valid fuel data
+        // 2. Fallback to previous closed stint with valid fuel data in this session
         for stint in self.stints.iter().rev() {
             let b = stint.fuel_per_lap();
             if b > 0.001 {
                 return b;
             }
         }
-        // 3. Fallback to session-wide valid lap burn average across all stints
+        // 3. Fallback to session-wide valid lap burn average across all stints in this session
         let all_burns: Vec<f32> = self.stints.iter()
             .flat_map(|s| s.lap_fuel_burns.iter().copied())
             .filter(|&b| b > 0.005 && b < 25.0)
@@ -415,14 +507,20 @@ impl DriverState {
         if !all_burns.is_empty() {
             return all_burns.iter().sum::<f32>() / all_burns.len() as f32;
         }
+        // 4. Fallback to historical fuel burn rate from earlier sessions (e.g. Practice before Race)
+        if self.historical_fuel_burn_rate > 0.001 {
+            return self.historical_fuel_burn_rate;
+        }
         0.0
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct WarRoomState {
     pub is_connected: bool,
     pub session_id: i32,
+    pub session_num: i32,
+    pub session_unique_id: i32,
     pub session_laps_total: i32,
     pub session_laps_remain: i32,
     pub sof: i32,
@@ -430,7 +528,12 @@ pub struct WarRoomState {
     pub track_length: String,
     pub car_name: String,
     pub session_type: String,
+    pub subsession_types: HashMap<i32, String>,
+    pub subsession_rubber_states: HashMap<i32, String>,
+    pub session_history: Vec<SessionArchive>,
     pub track_state: String,
+    pub track_wetness: i32,
+    pub player_setup_name: String,
     
     // Telemetry Environmental strings
     pub weather_type: String,
@@ -480,6 +583,121 @@ pub struct WarRoomState {
     pub debug_session_state: i32,
     pub debug_session_flags: u32,
     pub debug_event_logs: Vec<String>,
+}
+
+impl Default for WarRoomState {
+    fn default() -> Self {
+        Self {
+            is_connected: false,
+            session_id: 0,
+            session_num: -1,
+            session_unique_id: -1,
+            session_laps_total: 0,
+            session_laps_remain: 0,
+            sof: 0,
+            track_name: "Waiting for iRacing...".to_string(),
+            track_length: "—".to_string(),
+            car_name: "—".to_string(),
+            session_type: "—".to_string(),
+            subsession_types: HashMap::new(),
+            subsession_rubber_states: HashMap::new(),
+            session_history: Vec::new(),
+            track_state: "Clean Track".to_string(),
+            track_wetness: 0,
+            player_setup_name: "Baseline".to_string(),
+            weather_type: "...".to_string(),
+            air_temp_raw: "...".to_string(),
+            track_temp_raw: "...".to_string(),
+            wind_speed_raw: "...".to_string(),
+            wind_dir_raw: "...".to_string(),
+            relative_humidity_raw: "...".to_string(),
+            drivers: HashMap::new(),
+            player_car_idx: 0,
+            player_fuel_level: 0.0,
+            player_fuel_capacity: 0.0,
+            player_fuel_pct: 0.0,
+            player_gap_ahead: 0.0,
+            player_gap_behind: 0.0,
+            player_lap_distance_pct: 0.0,
+            latest_tire_data: StintTireSet::default(),
+            player_is_in_car: false,
+            player_incidents: 0,
+            incident_limit: 0,
+            caution_count: 0,
+            caution_laps: 0,
+            is_under_caution: false,
+            session_flag_name: "GREEN".to_string(),
+            debug_lap_number: 0,
+            debug_lap_completed: 0,
+            debug_lap_current_time: 0.0,
+            debug_lap_last_time: 0.0,
+            debug_lap_best_time: 0.0,
+            debug_lap_best_lap_num: 0,
+            debug_lap_dist: 0.0,
+            debug_on_pit_road: true,
+            debug_track_surface: 0,
+            debug_is_on_track: false,
+            debug_speed: 0.0,
+            debug_rpm: 0.0,
+            debug_gear: 0,
+            debug_throttle: 0.0,
+            debug_brake: 0.0,
+            debug_session_time: 0.0,
+            debug_session_state: 0,
+            debug_session_flags: 0,
+            debug_event_logs: Vec::new(),
+        }
+    }
+}
+
+impl WarRoomState {
+    pub fn reset_session_data(&mut self, manual: bool) {
+        // 1. Archive current session data before clearing if any laps or stints exist
+        if !self.drivers.is_empty() && self.drivers.values().any(|d| !d.stints.is_empty() || d.total_laps_completed > 0) {
+            self.session_history.push(SessionArchive {
+                session_num: self.session_num,
+                session_type: self.session_type.clone(),
+                drivers: self.drivers.clone(),
+                caution_count: self.caution_count,
+                caution_laps: self.caution_laps,
+            });
+        }
+
+        // 2. Snapshot player's historical fuel burn rate from practice/warmup before clearing stints
+        for driver in self.drivers.values_mut() {
+            let burn = driver.estimated_fuel_burn_ltr();
+            if burn > 0.001 {
+                driver.historical_fuel_burn_rate = burn;
+            }
+            driver.stints.clear();
+            driver.total_laps_completed = 0;
+            driver.last_processed_lap = 0;
+            driver.last_known_lap_time = 0.0;
+            driver.position = 0;
+            driver.is_on_pit_road = true;
+            driver.is_in_world = false;
+        }
+
+        // 3. Reset session-level counters
+        self.caution_count = 0;
+        self.caution_laps = 0;
+        self.is_under_caution = false;
+        self.session_flag_name = "GREEN".to_string();
+        self.debug_lap_number = 0;
+        self.debug_lap_completed = 0;
+        self.debug_lap_current_time = 0.0;
+        self.debug_lap_last_time = 0.0;
+        self.debug_lap_best_time = 0.0;
+        self.debug_lap_best_lap_num = 0;
+        self.latest_tire_data = StintTireSet::default();
+
+        if manual {
+            self.debug_event_logs.push(format!(
+                "[MANUAL REFRESH] Session {} (Phase #{}) cleared manually — Stints, lap counts, and best laps reset cleanly.",
+                self.session_type, self.session_num
+            ));
+        }
+    }
 }
 
 fn convert_unit(val: &str, to_metric: bool) -> String {
@@ -1018,7 +1236,6 @@ impl WarRoomApp {
                                 s.track_name = "iRacing Live Session".to_string();
                             }
                             s.track_length = info.weekend.track_length.clone();
-                            s.session_type = info.weekend.event_type.clone();
                             s.weather_type = info.weekend.track_weather.clone();
                             s.air_temp_raw = info.weekend.track_air_tempearture.clone();
                             s.track_temp_raw = info.weekend.track_surface_temperature.clone();
@@ -1032,6 +1249,34 @@ impl WarRoomApp {
                             s.session_id = info.weekend.session_id;
                             s.player_car_idx = info.drivers.car_index;
                             s.player_fuel_capacity = info.drivers.fuel_capacity;
+
+                            // Cache all subsession definitions and rubber states
+                            for sess in &info.session.sessions {
+                                let s_num = sess.session_number as i32;
+                                s.subsession_types.insert(s_num, sess.session_type.clone());
+                                if !sess.track_rubber_state.is_empty() {
+                                    s.subsession_rubber_states.insert(s_num, sess.track_rubber_state.clone());
+                                }
+                            }
+                            if s.session_num >= 0 {
+                                if let Some(stype) = s.subsession_types.get(&s.session_num) {
+                                    s.session_type = format_session_type(stype);
+                                }
+                                if let Some(rstate) = s.subsession_rubber_states.get(&s.session_num) {
+                                    s.track_state = format_track_state(rstate, s.track_wetness);
+                                }
+                            } else if let Some(first_sess) = info.session.sessions.first() {
+                                s.session_type = format_session_type(&first_sess.session_type);
+                                s.track_state = format_track_state(&first_sess.track_rubber_state, s.track_wetness);
+                            } else if !info.weekend.event_type.is_empty() {
+                                s.session_type = format_session_type(&info.weekend.event_type);
+                            }
+
+                            let clean_setup = clean_setup_name(&info.drivers.setup_name);
+                            if !clean_setup.is_empty() {
+                                s.player_setup_name = clean_setup;
+                            }
+                            let effective_setup = if !s.player_setup_name.is_empty() { s.player_setup_name.clone() } else { "Baseline".to_string() };
 
                             let player_car = info.drivers.other_drivers.iter()
                                 .find(|d| d.index == info.drivers.car_index)
@@ -1051,6 +1296,7 @@ impl WarRoomApp {
 
                             for d in &info.drivers.other_drivers {
                                 let idx = d.index as usize;
+                                let setup = if idx == s.player_car_idx { effective_setup.clone() } else { "Baseline".to_string() };
                                 s.drivers.entry(idx).or_insert(DriverState {
                                     car_idx: idx,
                                     driver_name: d.user_name.clone(),
@@ -1062,9 +1308,23 @@ impl WarRoomApp {
                                     total_laps_completed: 0,
                                     last_processed_lap: 0,
                                     last_known_lap_time: 0.0,
-                                    setup_name: info.drivers.setup_name.clone(),
+                                    setup_name: setup,
                                     stints: Vec::new(),
+                                    historical_fuel_burn_rate: 0.0,
                                 });
+                            }
+
+                            // Backfill setup_name into player driver and any stints that were started before setup was known
+                            if effective_setup != "Baseline" {
+                                let player_idx = s.player_car_idx;
+                                if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+                                    player_drv.setup_name = effective_setup.clone();
+                                    for stint in &mut player_drv.stints {
+                                        if stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline" {
+                                            stint.setup_name = effective_setup.clone();
+                                        }
+                                    }
+                                }
                             }
                         }
                         ctx_clone.request_repaint();
@@ -1088,15 +1348,40 @@ impl WarRoomApp {
                                                 if !info.weekend.track_length.is_empty() {
                                                     s.track_length = info.weekend.track_length.clone();
                                                 }
-                                                if !info.weekend.event_type.is_empty() {
-                                                    s.session_type = info.weekend.event_type.clone();
-                                                }
                                                 if !info.weekend.track_weather.is_empty() {
                                                     s.weather_type = info.weekend.track_weather.clone();
                                                 }
                                                 s.session_id = info.weekend.session_id;
                                                 s.player_car_idx = info.drivers.car_index;
                                                 s.player_fuel_capacity = info.drivers.fuel_capacity;
+
+                                                // Refresh subsession definitions and rubber states
+                                                for sess in &info.session.sessions {
+                                                    let s_num = sess.session_number as i32;
+                                                    s.subsession_types.insert(s_num, sess.session_type.clone());
+                                                    if !sess.track_rubber_state.is_empty() {
+                                                        s.subsession_rubber_states.insert(s_num, sess.track_rubber_state.clone());
+                                                    }
+                                                }
+                                                if s.session_num >= 0 {
+                                                    if let Some(stype) = s.subsession_types.get(&s.session_num) {
+                                                        s.session_type = format_session_type(stype);
+                                                    }
+                                                    if let Some(rstate) = s.subsession_rubber_states.get(&s.session_num) {
+                                                        s.track_state = format_track_state(rstate, s.track_wetness);
+                                                    }
+                                                } else if let Some(first_sess) = info.session.sessions.first() {
+                                                    s.session_type = format_session_type(&first_sess.session_type);
+                                                    s.track_state = format_track_state(&first_sess.track_rubber_state, s.track_wetness);
+                                                } else if !info.weekend.event_type.is_empty() {
+                                                    s.session_type = format_session_type(&info.weekend.event_type);
+                                                }
+
+                                                let clean_setup = clean_setup_name(&info.drivers.setup_name);
+                                                if !clean_setup.is_empty() {
+                                                    s.player_setup_name = clean_setup;
+                                                }
+                                                let effective_setup = if !s.player_setup_name.is_empty() { s.player_setup_name.clone() } else { "Baseline".to_string() };
 
                                                 let player_car = info.drivers.other_drivers.iter()
                                                     .find(|d| d.index == info.drivers.car_index)
@@ -1114,13 +1399,18 @@ impl WarRoomApp {
                                                     }
                                                 }
 
+                                                let player_idx = s.player_car_idx;
                                                 for d in &info.drivers.other_drivers {
                                                     let idx = d.index as usize;
+                                                    let setup = if idx == player_idx { effective_setup.clone() } else { "Baseline".to_string() };
+                                                    let setup_clone = effective_setup.clone();
                                                     s.drivers.entry(idx).and_modify(|target| {
                                                         target.driver_name = d.user_name.clone();
                                                         target.car_num = d.car_number.to_string();
                                                         target.irating = d.i_rating.to_string();
-                                                        target.setup_name = info.drivers.setup_name.clone();
+                                                        if idx == player_idx && setup_clone != "Baseline" {
+                                                            target.setup_name = setup_clone;
+                                                        }
                                                     }).or_insert(DriverState {
                                                         car_idx: idx,
                                                         driver_name: d.user_name.clone(),
@@ -1132,9 +1422,22 @@ impl WarRoomApp {
                                                         total_laps_completed: 0,
                                                         last_processed_lap: 0,
                                                         last_known_lap_time: 0.0,
-                                                        setup_name: info.drivers.setup_name.clone(),
+                                                        setup_name: setup,
                                                         stints: Vec::new(),
+                                                        historical_fuel_burn_rate: 0.0,
                                                     });
+                                                }
+
+                                                // Backfill setup_name into player driver and any stints that were started before setup was known
+                                                if effective_setup != "Baseline" {
+                                                    if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+                                                        player_drv.setup_name = effective_setup.clone();
+                                                        for stint in &mut player_drv.stints {
+                                                            if stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline" {
+                                                                stint.setup_name = effective_setup.clone();
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -1240,7 +1543,73 @@ impl WarRoomApp {
                                         if let Ok(Value::FLOAT(thr)) = live.get("Throttle") { s.debug_throttle = thr; }
                                         if let Ok(Value::FLOAT(brk)) = live.get("Brake") { s.debug_brake = brk; }
                                         if let Ok(Value::DOUBLE(stime)) = live.get("SessionTime") { s.debug_session_time = stime; }
-                                        if let Ok(Value::INT(sstate)) = live.get("SessionState") { s.debug_session_state = sstate; }
+                                        let cur_session_num = match live.get("SessionNum") {
+                                            Ok(Value::INT(n)) => n,
+                                            _ => -1,
+                                        };
+                                        let cur_session_state = match live.get("SessionState") {
+                                            Ok(Value::INT(st)) => st,
+                                            _ => 0,
+                                        };
+                                        let cur_unique_id = match live.get("SessionUniqueID") {
+                                            Ok(Value::INT(id)) => id,
+                                            _ => -1,
+                                        };
+
+                                        // Session Phase and Subsession Transition Detector
+                                        let is_first_init = s.session_num == -1;
+                                        let is_subsession_changed = !is_first_init && cur_session_num != -1 && cur_session_num != s.session_num;
+                                        let is_unique_id_changed = !is_first_init && s.session_unique_id != -1 && cur_unique_id != -1 && cur_unique_id != s.session_unique_id;
+                                        let is_session_restarted = !is_first_init && s.debug_session_state >= 5 && cur_session_state > 0 && cur_session_state <= 3;
+
+                                        let mut transition_detected = false;
+                                        if is_first_init {
+                                            if cur_session_num != -1 {
+                                                s.session_num = cur_session_num;
+                                            }
+                                            if cur_unique_id != -1 {
+                                                s.session_unique_id = cur_unique_id;
+                                            }
+                                            if let Some(stype) = s.subsession_types.get(&s.session_num) {
+                                                s.session_type = format_session_type(stype);
+                                            }
+                                            let raw_rubber = s.subsession_rubber_states.get(&s.session_num).cloned().unwrap_or_default();
+                                            s.track_state = format_track_state(&raw_rubber, s.track_wetness);
+                                        } else if is_subsession_changed || is_unique_id_changed || is_session_restarted {
+                                            let old_type = s.session_type.clone();
+                                            let old_num = s.session_num;
+
+                                            s.reset_session_data(false);
+
+                                            if cur_session_num != -1 {
+                                                s.session_num = cur_session_num;
+                                            }
+                                            if cur_unique_id != -1 {
+                                                s.session_unique_id = cur_unique_id;
+                                            }
+                                            if let Some(stype) = s.subsession_types.get(&s.session_num) {
+                                                s.session_type = format_session_type(stype);
+                                            }
+                                            let raw_rubber = s.subsession_rubber_states.get(&s.session_num).cloned().unwrap_or_default();
+                                            s.track_state = format_track_state(&raw_rubber, s.track_wetness);
+
+                                            let log_msg = format!(
+                                                "[SESSION TRANSITION] {} (Phase #{}) -> {} (Phase #{}) · Stints & laps reset cleanly for new session.",
+                                                old_type, old_num, s.session_type, s.session_num
+                                            );
+                                            s.debug_event_logs.push(log_msg);
+                                            transition_detected = true;
+                                        }
+
+                                        if let Ok(Value::INT(wetness)) = live.get("TrackWetness") {
+                                            if wetness >= 0 && wetness <= 6 && wetness != s.track_wetness {
+                                                s.track_wetness = wetness;
+                                                let raw_rubber = s.subsession_rubber_states.get(&s.session_num).cloned().unwrap_or_default();
+                                                s.track_state = format_track_state(&raw_rubber, s.track_wetness);
+                                            }
+                                        }
+
+                                        s.debug_session_state = cur_session_state;
                                         if let Ok(Value::BITS(flags)) = live.get("SessionFlags") {
                                             s.debug_session_flags = flags;
                                             let is_yellow = (flags & (0x00000004 | 0x00000008 | 0x00000400 | 0x00000800)) != 0;
@@ -1276,10 +1645,11 @@ impl WarRoomApp {
                                         let positions = match live.get("CarIdxPosition") { Ok(Value::IntVec(v)) => v, _ => vec![0; 64] };
                                         let surfaces = match live.get("CarIdxTrackSurface") { Ok(Value::IntVec(v)) => v, _ => vec![0; 64] };
 
-                                        let mut state_changed = false;
+                                        let mut state_changed = transition_detected;
                                         let mut pending_logs = Vec::new();
                                         let mut player_pit_tire_sample: Option<StintTireSet> = None;
                                         let player_idx = s.player_car_idx;
+                                        let player_setup_snapshot = s.player_setup_name.clone();
                                         let track_temp_snapshot = s.track_temp_raw.clone();
                                         let air_temp_snapshot = s.air_temp_raw.clone();
                                         let is_under_caution_snapshot = s.is_under_caution;
@@ -1306,67 +1676,206 @@ impl WarRoomApp {
                                                 total_laps_completed: 0,
                                                 last_processed_lap: 0,
                                                 last_known_lap_time: 0.0,
-                                                setup_name: "—".to_string(),
+                                                setup_name: if idx == player_idx && !player_setup_snapshot.is_empty() { player_setup_snapshot.clone() } else { "Baseline".to_string() },
                                                 stints: Vec::new(),
+                                                historical_fuel_burn_rate: 0.0,
                                             });
 
                                             driver.position = pos;
+                                            if idx == player_idx && (driver.setup_name.is_empty() || driver.setup_name == "—" || driver.setup_name == "Baseline") {
+                                                if !player_setup_snapshot.is_empty() && player_setup_snapshot != "Baseline" {
+                                                    driver.setup_name = player_setup_snapshot.clone();
+                                                }
+                                            }
                                             
                                             let current_lap_sdk = *laps_comp.get(idx).unwrap_or(&0) as i32;
                                             let last_lap_time = *last_laps.get(idx).unwrap_or(&0.0) as f32;
-                                            let best_lap_time = *fast_laps.get(idx).unwrap_or(&0.0) as f32;
+                                            let _best_lap_time = *fast_laps.get(idx).unwrap_or(&0.0) as f32;
 
-                                                // First-frame initialization guard
-                                                if driver.last_processed_lap == 0 {
-                                                    driver.last_processed_lap = current_lap_sdk;
-                                                    driver.total_laps_completed = current_lap_sdk;
-                                                    driver.last_known_lap_time = last_lap_time;
-                                                    driver.is_on_pit_road = is_pit;
-                                                    driver.is_in_world = in_world;
+                                            // First-frame initialization guard
+                                            if driver.last_processed_lap == 0 {
+                                                driver.last_processed_lap = current_lap_sdk;
+                                                driver.total_laps_completed = current_lap_sdk;
+                                                driver.last_known_lap_time = last_lap_time;
+                                                driver.is_on_pit_road = is_pit;
+                                                driver.is_in_world = in_world;
+                                            }
+
+                                            let was_in_pit = driver.is_on_pit_road;
+                                            let was_in_world = driver.is_in_world;
+
+                                            // Keep active stint's setup_name in sync with driver setup name
+                                            let active_setup = if !driver.setup_name.is_empty() && driver.setup_name != "—" && driver.setup_name != "Baseline" {
+                                                driver.setup_name.clone()
+                                            } else if idx == player_idx && !player_setup_snapshot.is_empty() && player_setup_snapshot != "Baseline" {
+                                                player_setup_snapshot.clone()
+                                            } else {
+                                                "Baseline".to_string()
+                                            };
+
+                                            if let Some(active) = driver.stints.last_mut() {
+                                                if active.is_active && (active.setup_name.is_empty() || active.setup_name == "—" || active.setup_name == "Baseline") {
+                                                    if active_setup != "Baseline" {
+                                                        active.setup_name = active_setup.clone();
+                                                    }
                                                 }
+                                            }
 
-                                                let was_in_pit = driver.is_on_pit_road;
-                                                let was_in_world = driver.is_in_world;
+                                            // Sample active dynamic on-track pressures and fuel for player car
+                                            if idx == player_idx && !is_pit && in_world {
+                                                let cur_lf_p = get_sample_f32(&live, "LFpressure");
+                                                let cur_rf_p = get_sample_f32(&live, "RFpressure");
+                                                let cur_lr_p = get_sample_f32(&live, "LRpressure");
+                                                let cur_rr_p = get_sample_f32(&live, "RRpressure");
 
-                                                // Sample active dynamic on-track pressures and fuel for player car
-                                                if idx == player_idx && !is_pit && in_world {
-                                                    let cur_lf_p = get_sample_f32(&live, "LFpressure");
-                                                    let cur_rf_p = get_sample_f32(&live, "RFpressure");
-                                                    let cur_lr_p = get_sample_f32(&live, "LRpressure");
-                                                    let cur_rr_p = get_sample_f32(&live, "RRpressure");
-
-                                                    if let Some(active) = driver.stints.last_mut() {
-                                                        if active.is_active {
-                                                            if cur_lf_p > 1.0 {
-                                                                active.tires.lf.pressure = cur_lf_p;
-                                                                active.tires.rf.pressure = cur_rf_p;
-                                                                active.tires.lr.pressure = cur_lr_p;
-                                                                active.tires.rr.pressure = cur_rr_p;
-                                                            }
-                                                            if active.fuel_start <= 0.0 && current_fuel_sample > 0.0 {
-                                                                active.fuel_start = current_fuel_sample;
-                                                            }
-                                                            if active.fuel_start > 0.0 && current_fuel_sample > 0.0 && current_fuel_sample <= active.fuel_start {
-                                                                active.fuel_used = (active.fuel_start - current_fuel_sample).max(active.fuel_used);
-                                                            }
+                                                if let Some(active) = driver.stints.last_mut() {
+                                                    if active.is_active {
+                                                        if cur_lf_p > 1.0 {
+                                                            active.tires.lf.pressure = cur_lf_p;
+                                                            active.tires.rf.pressure = cur_rf_p;
+                                                            active.tires.lr.pressure = cur_lr_p;
+                                                            active.tires.rr.pressure = cur_rr_p;
+                                                        }
+                                                        if active.fuel_start <= 0.0 && current_fuel_sample > 0.0 {
+                                                            active.fuel_start = current_fuel_sample;
+                                                        }
+                                                        if active.fuel_start > 0.0 && current_fuel_sample > 0.0 && current_fuel_sample <= active.fuel_start {
+                                                            active.fuel_used = (active.fuel_start - current_fuel_sample).max(active.fuel_used);
                                                         }
                                                     }
                                                 }
+                                            }
 
-                                                // 1. CAR EXITED PITS / ENTERED TRACK (Begin Stint)
-                                                if (was_in_pit && !is_pit && in_world) || (!was_in_world && in_world && !is_pit) {
-                                                    if let Some(active) = driver.stints.last_mut() {
-                                                        active.is_active = false;
+                                            // 1. CAR EXITED PITS / ENTERED TRACK (Begin Stint)
+                                            if (was_in_pit && !is_pit && in_world) || (!was_in_world && in_world && !is_pit) {
+                                                if let Some(active) = driver.stints.last_mut() {
+                                                    active.is_active = false;
+                                                    active.end_lap = current_lap_sdk;
+                                                }
+
+                                                // Discard previous 0-lap stint if aborted before completing any timed laps
+                                                if let Some(last) = driver.stints.last() {
+                                                    if last.laps_completed == 0 {
+                                                        driver.stints.pop();
+                                                    }
+                                                }
+
+                                                let new_stint_num = driver.stints.len() as i32 + 1;
+                                                let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
+                                                    let eff = driver.estimated_fuel_burn_ltr();
+                                                    if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
+                                                } else { 0.0 };
+                                                let prior_burn_rate = driver.estimated_fuel_burn_ltr();
+
+                                                driver.stints.push(StintData {
+                                                    stint_number: new_stint_num,
+                                                    start_lap: current_lap_sdk,
+                                                    end_lap: current_lap_sdk,
+                                                    out_lap_completed: false,
+                                                    laps_completed: 0,
+                                                    lap_times: Vec::new(),
+                                                    fuel_start: current_fuel_sample,
+                                                    fuel_used: 0.0,
+                                                    last_lap: 0.0,
+                                                    fast_lap: 0.0,
+                                                    is_active: true,
+                                                    is_expanded: false,
+                                                    tires: StintTireSet::default(),
+                                                    setup_name: active_setup.clone(),
+                                                    track_temp_at_start: track_temp_snapshot.clone(),
+                                                    air_temp_at_start: air_temp_snapshot.clone(),
+                                                    notes: String::new(),
+                                                    crossing_fuel_level: current_fuel_sample,
+                                                    laps_of_fuel_crossing: initial_laps_of_fuel,
+                                                    latched_fuel_burn_rate: prior_burn_rate,
+                                                    lap_fuel_burns: Vec::new(),
+                                                    prev_crossing_fuel: 0.0,
+                                                });
+                                                driver.last_processed_lap = current_lap_sdk;
+                                                driver.total_laps_completed = current_lap_sdk;
+                                                driver.last_known_lap_time = last_lap_time;
+
+                                                if idx == player_idx {
+                                                    pending_logs.push(format!("[PIT EXIT] Stint S{} Started at Lap {}", new_stint_num, current_lap_sdk));
+                                                }
+                                                state_changed = true;
+                                            }
+
+                                            // 2. CAR ENTERED PITS OR EXITED CAR (Stint Ends / Reset)
+                                            if (!was_in_pit && is_pit) || (was_in_world && !in_world) {
+                                                let mut aborted = false;
+                                                let mut stint_num = 0;
+                                                let mut completed_laps = 0;
+
+                                                if let Some(active) = driver.stints.last_mut() {
+                                                    if active.is_active {
+                                                         active.is_active = false;
                                                         active.end_lap = current_lap_sdk;
-                                                    }
-
-                                                    // Discard previous 0-lap stint if aborted before completing any timed laps
-                                                    if let Some(last) = driver.stints.last() {
-                                                        if last.laps_completed == 0 {
-                                                            driver.stints.pop();
+                                                        stint_num = active.stint_number;
+                                                        completed_laps = active.laps_completed;
+                                                        if idx == player_idx && active.fuel_start > 0.0 && current_fuel_sample > 0.0 && current_fuel_sample <= active.fuel_start {
+                                                            if active.fuel_used <= 0.0 {
+                                                                active.fuel_used = (active.fuel_start - current_fuel_sample).max(0.0);
+                                                            }
+                                                            active.latched_fuel_burn_rate = active.fuel_per_lap();
+                                                        }
+                                                        if active.laps_completed == 0 {
+                                                            aborted = true;
                                                         }
                                                     }
+                                                }
 
+                                                if aborted {
+                                                    driver.stints.pop();
+                                                    if idx == player_idx {
+                                                        pending_logs.push(format!("[ABORTED RUN] Stint S{} had 0 completed laps; discarded to prevent empty stint line.", stint_num));
+                                                    }
+                                                } else if stint_num > 0 && idx == player_idx {
+                                                    let prev_hot = driver.stints.last().map(|st| &st.tires);
+                                                    let sample_tires = read_player_tires(&live, prev_hot);
+                                                    if sample_tires.is_valid() {
+                                                        if let Some(closed_stint) = driver.stints.last_mut() {
+                                                            closed_stint.tires = sample_tires.clone();
+                                                        }
+                                                        player_pit_tire_sample = Some(sample_tires);
+                                                        pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed ({} Laps) · Tire Data Recorded!", stint_num, completed_laps));
+                                                    } else {
+                                                        pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed (Total {} Laps)", stint_num, completed_laps));
+                                                    }
+                                                }
+
+                                                driver.last_processed_lap = current_lap_sdk;
+                                                driver.total_laps_completed = current_lap_sdk;
+                                                driver.last_known_lap_time = last_lap_time;
+                                                state_changed = true;
+                                            }
+
+                                            // 3. NEW LAP TIME EMITTED BY IRACING ON TRACK (Direct SDK Fire)
+                                            let is_new_lap_time = (last_lap_time - driver.last_known_lap_time).abs() > 0.0005 && last_lap_time > 3.0;
+                                            let is_new_lap_count = current_lap_sdk > driver.last_processed_lap && current_lap_sdk > 0;
+
+                                            // 3a. UNTIMED OUT-LAP COMPLETION (Start/Finish crossed for the first time since pit exit)
+                                            if is_new_lap_count && !is_pit && in_world && !is_new_lap_time {
+                                                if let Some(active) = driver.stints.last_mut() {
+                                                    if active.is_active && !active.out_lap_completed {
+                                                        active.out_lap_completed = true;
+                                                        active.prev_crossing_fuel = current_fuel_sample;
+                                                        active.crossing_fuel_level = current_fuel_sample;
+                                                        if active.latched_fuel_burn_rate > 0.001 {
+                                                            active.laps_of_fuel_crossing = (current_fuel_sample / active.latched_fuel_burn_rate).max(0.0);
+                                                        }
+                                                        driver.last_processed_lap = current_lap_sdk;
+                                                        driver.total_laps_completed = current_lap_sdk;
+                                                        if idx == player_idx {
+                                                            pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Crossed start/finish at Lap {}. Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, current_lap_sdk, current_fuel_sample));
+                                                        }
+                                                        state_changed = true;
+                                                    }
+                                                }
+                                            }
+
+                                            if (is_new_lap_time || (is_new_lap_count && (last_lap_time - driver.last_known_lap_time).abs() > 0.0005)) && !is_pit && in_world {
+                                                if driver.stints.is_empty() || !driver.stints.last().map_or(false, |st| st.is_active) {
                                                     let new_stint_num = driver.stints.len() as i32 + 1;
                                                     let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
                                                         let eff = driver.estimated_fuel_burn_ltr();
@@ -1376,9 +1885,9 @@ impl WarRoomApp {
 
                                                     driver.stints.push(StintData {
                                                         stint_number: new_stint_num,
-                                                        start_lap: current_lap_sdk,
+                                                        start_lap: current_lap_sdk - 1,
                                                         end_lap: current_lap_sdk,
-                                                        out_lap_completed: false,
+                                                        out_lap_completed: true,
                                                         laps_completed: 0,
                                                         lap_times: Vec::new(),
                                                         fuel_start: current_fuel_sample,
@@ -1388,7 +1897,7 @@ impl WarRoomApp {
                                                         is_active: true,
                                                         is_expanded: false,
                                                         tires: StintTireSet::default(),
-                                                        setup_name: driver.setup_name.clone(),
+                                                        setup_name: active_setup.clone(),
                                                         track_temp_at_start: track_temp_snapshot.clone(),
                                                         air_temp_at_start: air_temp_snapshot.clone(),
                                                         notes: String::new(),
@@ -1396,125 +1905,9 @@ impl WarRoomApp {
                                                         laps_of_fuel_crossing: initial_laps_of_fuel,
                                                         latched_fuel_burn_rate: prior_burn_rate,
                                                         lap_fuel_burns: Vec::new(),
-                                                        prev_crossing_fuel: 0.0,
+                                                        prev_crossing_fuel: current_fuel_sample,
                                                     });
-                                                    driver.last_processed_lap = current_lap_sdk;
-                                                    driver.total_laps_completed = current_lap_sdk;
-                                                    driver.last_known_lap_time = last_lap_time;
-
-                                                    if idx == player_idx {
-                                                        pending_logs.push(format!("[PIT EXIT] Stint S{} Started at Lap {}", new_stint_num, current_lap_sdk));
-                                                    }
-                                                    state_changed = true;
                                                 }
-
-                                                // 2. CAR ENTERED PITS OR EXITED CAR (Stint Ends / Reset)
-                                                if (!was_in_pit && is_pit) || (was_in_world && !in_world) {
-                                                    let mut aborted = false;
-                                                    let mut stint_num = 0;
-                                                    let mut completed_laps = 0;
-
-                                                    if let Some(active) = driver.stints.last_mut() {
-                                                        if active.is_active {
-                                                             active.is_active = false;
-                                                            active.end_lap = current_lap_sdk;
-                                                            stint_num = active.stint_number;
-                                                            completed_laps = active.laps_completed;
-                                                            if idx == player_idx && active.fuel_start > 0.0 && current_fuel_sample > 0.0 && current_fuel_sample <= active.fuel_start {
-                                                                if active.fuel_used <= 0.0 {
-                                                                    active.fuel_used = (active.fuel_start - current_fuel_sample).max(0.0);
-                                                                }
-                                                                active.latched_fuel_burn_rate = active.fuel_per_lap();
-                                                            }
-                                                            if active.laps_completed == 0 {
-                                                                aborted = true;
-                                                            }
-                                                        }
-                                                    }
-
-                                                    if aborted {
-                                                        driver.stints.pop();
-                                                        if idx == player_idx {
-                                                            pending_logs.push(format!("[ABORTED RUN] Stint S{} had 0 completed laps; discarded to prevent empty stint line.", stint_num));
-                                                        }
-                                                    } else if stint_num > 0 && idx == player_idx {
-                                                        let prev_hot = driver.stints.last().map(|st| &st.tires);
-                                                        let sample_tires = read_player_tires(&live, prev_hot);
-                                                        if sample_tires.is_valid() {
-                                                            if let Some(closed_stint) = driver.stints.last_mut() {
-                                                                closed_stint.tires = sample_tires.clone();
-                                                            }
-                                                            player_pit_tire_sample = Some(sample_tires);
-                                                            pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed ({} Laps) · Tire Data Recorded!", stint_num, completed_laps));
-                                                        } else {
-                                                            pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed (Total {} Laps)", stint_num, completed_laps));
-                                                        }
-                                                    }
-
-                                                    driver.last_processed_lap = current_lap_sdk;
-                                                    driver.total_laps_completed = current_lap_sdk;
-                                                    driver.last_known_lap_time = last_lap_time;
-                                                    state_changed = true;
-                                                }
-
-                                                // 3. NEW LAP TIME EMITTED BY IRACING ON TRACK (Direct SDK Fire)
-                                                let is_new_lap_time = (last_lap_time - driver.last_known_lap_time).abs() > 0.0005 && last_lap_time > 3.0;
-                                                let is_new_lap_count = current_lap_sdk > driver.last_processed_lap && current_lap_sdk > 0;
-
-                                                // 3a. UNTIMED OUT-LAP COMPLETION (Start/Finish crossed for the first time since pit exit)
-                                                if is_new_lap_count && !is_pit && in_world && !is_new_lap_time {
-                                                    if let Some(active) = driver.stints.last_mut() {
-                                                        if active.is_active && !active.out_lap_completed {
-                                                            active.out_lap_completed = true;
-                                                            active.prev_crossing_fuel = current_fuel_sample;
-                                                            active.crossing_fuel_level = current_fuel_sample;
-                                                            if active.latched_fuel_burn_rate > 0.001 {
-                                                                active.laps_of_fuel_crossing = (current_fuel_sample / active.latched_fuel_burn_rate).max(0.0);
-                                                            }
-                                                            driver.last_processed_lap = current_lap_sdk;
-                                                            driver.total_laps_completed = current_lap_sdk;
-                                                            if idx == player_idx {
-                                                                pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Crossed start/finish at Lap {}. Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, current_lap_sdk, current_fuel_sample));
-                                                            }
-                                                            state_changed = true;
-                                                        }
-                                                    }
-                                                }
-
-                                                if (is_new_lap_time || (is_new_lap_count && (last_lap_time - driver.last_known_lap_time).abs() > 0.0005)) && !is_pit && in_world {
-                                                    if driver.stints.is_empty() || !driver.stints.last().map_or(false, |st| st.is_active) {
-                                                        let new_stint_num = driver.stints.len() as i32 + 1;
-                                                        let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
-                                                            let eff = driver.estimated_fuel_burn_ltr();
-                                                            if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
-                                                        } else { 0.0 };
-                                                        let prior_burn_rate = driver.estimated_fuel_burn_ltr();
-
-                                                        driver.stints.push(StintData {
-                                                            stint_number: new_stint_num,
-                                                            start_lap: current_lap_sdk - 1,
-                                                            end_lap: current_lap_sdk,
-                                                            out_lap_completed: true,
-                                                            laps_completed: 0,
-                                                            lap_times: Vec::new(),
-                                                            fuel_start: current_fuel_sample,
-                                                            fuel_used: 0.0,
-                                                            last_lap: 0.0,
-                                                            fast_lap: 0.0,
-                                                            is_active: true,
-                                                            is_expanded: false,
-                                                            tires: StintTireSet::default(),
-                                                            setup_name: driver.setup_name.clone(),
-                                                            track_temp_at_start: track_temp_snapshot.clone(),
-                                                            air_temp_at_start: air_temp_snapshot.clone(),
-                                                            notes: String::new(),
-                                                            crossing_fuel_level: current_fuel_sample,
-                                                            laps_of_fuel_crossing: initial_laps_of_fuel,
-                                                            latched_fuel_burn_rate: prior_burn_rate,
-                                                            lap_fuel_burns: Vec::new(),
-                                                            prev_crossing_fuel: current_fuel_sample,
-                                                        });
-                                                    }
 
                                                     if let Some(active) = driver.stints.last_mut() {
                                                         if last_lap_time > 3.0 && last_lap_time < 360.0 {
@@ -1527,8 +1920,6 @@ impl WarRoomApp {
                                                             
                                                             if active.fast_lap <= 0.0 || last_lap_time < active.fast_lap {
                                                                 active.fast_lap = last_lap_time;
-                                                            } else if best_lap_time > 0.0 && best_lap_time < active.fast_lap {
-                                                                active.fast_lap = best_lap_time;
                                                             }
                                                             if active.fuel_start <= 0.0 && current_fuel_sample > 0.0 {
                                                                 active.fuel_start = current_fuel_sample;
@@ -1831,7 +2222,7 @@ impl WarRoomApp {
         } else if let updater::UpdateStatus::UpdateAvailable(info) = &self.updater.status {
             (info.name.clone(), if !info.body.is_empty() { info.body.clone() } else { embedded_notes.to_string() }, info.html_url.clone())
         } else {
-            ("What's New in v0.1.0".to_string(), embedded_notes.to_string(), "https://github.com/philliphenry215-eng/TheSearchForSpeedAnalyzer/releases/tag/v0.1.0".to_string())
+            (format!("What's New in v{}", updater::CURRENT_VERSION), embedded_notes.to_string(), format!("https://github.com/philliphenry215-eng/TheSearchForSpeedAnalyzer/releases/tag/v{}", updater::CURRENT_VERSION))
         };
 
         egui::Window::new("📖 Release Notes & What's New")
@@ -2578,7 +2969,15 @@ impl WarRoomApp {
                     // Key Setup & Conditions Bar
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Setup").color(muted).size(12.0));
-                        let setup_display = if stint.setup_name.is_empty() || stint.setup_name == "—" { &s.car_name } else { &stint.setup_name };
+                        let setup_display = if !stint.setup_name.is_empty() && stint.setup_name != "—" && stint.setup_name != "Baseline" {
+                            &stint.setup_name
+                        } else if !drv_ref.setup_name.is_empty() && drv_ref.setup_name != "—" && drv_ref.setup_name != "Baseline" {
+                            &drv_ref.setup_name
+                        } else if target_car_idx == s.player_car_idx && !s.player_setup_name.is_empty() && s.player_setup_name != "Baseline" {
+                            &s.player_setup_name
+                        } else {
+                            "Baseline"
+                        };
                         ui.label(egui::RichText::new(setup_display).color(white).strong().size(12.5));
                         
                         ui.add_space(16.0);
@@ -3269,6 +3668,13 @@ impl WarRoomApp {
             let is_player = car_idx == s.player_car_idx;
             if drv.stints.is_empty() {
                 if drv.position > 0 || drv.is_in_world {
+                    let entry_setup = if !drv.setup_name.is_empty() && drv.setup_name != "—" && drv.setup_name != "Baseline" {
+                        &drv.setup_name
+                    } else if is_player && !s.player_setup_name.is_empty() && s.player_setup_name != "Baseline" {
+                        &s.player_setup_name
+                    } else {
+                        "Baseline"
+                    };
                     entries.push(StintGridEntry {
                         car_idx,
                         pos: drv.position,
@@ -3277,7 +3683,7 @@ impl WarRoomApp {
                         irating: &drv.irating,
                         is_player,
                         is_on_pit_road: drv.is_on_pit_road,
-                        setup_name: &drv.setup_name,
+                        setup_name: entry_setup,
                         stint_num: 1,
                         stint_is_active: false,
                         laps_completed: 0,
@@ -3290,6 +3696,15 @@ impl WarRoomApp {
             } else {
                 for stint in &drv.stints {
                     let bucket_avgs = active_buckets.iter().map(|&b| (b, stint.avg_first_n(b))).collect();
+                    let entry_setup = if !stint.setup_name.is_empty() && stint.setup_name != "—" && stint.setup_name != "Baseline" {
+                        &stint.setup_name
+                    } else if !drv.setup_name.is_empty() && drv.setup_name != "—" && drv.setup_name != "Baseline" {
+                        &drv.setup_name
+                    } else if is_player && !s.player_setup_name.is_empty() && s.player_setup_name != "Baseline" {
+                        &s.player_setup_name
+                    } else {
+                        "Baseline"
+                    };
                     entries.push(StintGridEntry {
                         car_idx,
                         pos: drv.position,
@@ -3298,7 +3713,7 @@ impl WarRoomApp {
                         irating: &drv.irating,
                         is_player,
                         is_on_pit_road: drv.is_on_pit_road,
-                        setup_name: &drv.setup_name,
+                        setup_name: entry_setup,
                         stint_num: stint.stint_number,
                         stint_is_active: stint.is_active,
                         laps_completed: stint.laps_completed,
@@ -3836,7 +4251,7 @@ impl WarRoomApp {
                                 // SETUP NAME
                                 if cols.setup_name {
                                     row.col(|ui| {
-                                        let setup_str = if !e.setup_name.is_empty() && e.setup_name != "—" { e.setup_name } else { &s.car_name };
+                                        let setup_str = if !e.setup_name.is_empty() && e.setup_name != "—" { e.setup_name } else { "Baseline" };
                                         ui.label(egui::RichText::new(setup_str).color(muted).size(11.5));
                                     });
                                 }
@@ -4217,6 +4632,7 @@ impl eframe::App for WarRoomApp {
         let track_len = s.track_length.clone();
         let car_name = s.car_name.clone();
         let sess_type = s.session_type.clone();
+        let track_state = s.track_state.clone();
         let session_id = s.session_id;
         let sof = s.sof;
         let current_state = s.clone_state_for_ui();
@@ -4313,7 +4729,12 @@ impl eframe::App for WarRoomApp {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         ui.label(egui::RichText::new(&car_name).color(white).size(12.5));
-                        ui.label(egui::RichText::new(format!("· {} L{}", sess_type, player_laps)).color(muted).size(12.0));
+                        let sess_info = if !track_state.is_empty() && track_state != "—" && track_state != "..." {
+                            format!("· {} L{} · {}", sess_type, player_laps, track_state)
+                        } else {
+                            format!("· {} L{}", sess_type, player_laps)
+                        };
+                        ui.label(egui::RichText::new(sess_info).color(muted).size(12.0));
                     });
                 });
 
@@ -4364,6 +4785,12 @@ impl eframe::App for WarRoomApp {
                         if ui.button(unit_label).clicked() {
                             self.settings.use_metric = !current_metric;
                             self.settings.save();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("🔄 Reset / Clear Session Stints").on_hover_text("Cleanly resets stint counts, lap numbers, and best lap times for a new session or run, while preserving baseline fuel burn rate.").clicked() {
+                            let mut s = self.state.lock().unwrap();
+                            s.reset_session_data(true);
                             ui.close_menu();
                         }
                         ui.separator();
@@ -4535,6 +4962,124 @@ mod tests {
         // Test 20-lap total
         let sum_20 = stint.sum_first_n(20);
         assert!((sum_20 - 299.941).abs() < 0.001, "Expected ~299.941, got {}", sum_20);
+    }
+
+    #[test]
+    fn test_format_session_type() {
+        assert_eq!(format_session_type("Open Practice"), "PRACTICE");
+        assert_eq!(format_session_type("Lone Qualifying"), "QUALIFYING");
+        assert_eq!(format_session_type("Qualify"), "QUALIFYING");
+        assert_eq!(format_session_type("Warmup"), "WARMUP");
+        assert_eq!(format_session_type("Race"), "RACE");
+        assert_eq!(format_session_type("Feature Race"), "RACE");
+        assert_eq!(format_session_type(""), "SESSION");
+    }
+
+    #[test]
+    fn test_session_transition_reset_and_archive() {
+        let mut state = WarRoomState::default();
+        state.session_num = 0;
+        state.session_type = "PRACTICE".to_string();
+
+        let mut driver = DriverState::default();
+        driver.car_idx = 0;
+        driver.driver_name = "Player 1".to_string();
+        driver.car_num = "42".to_string();
+
+        // Simulate Practice Stint with 10 laps and 2.50L burn per lap
+        let mut stint = StintData::default();
+        stint.stint_number = 1;
+        stint.laps_completed = 10;
+        stint.fast_lap = 14.850;
+        stint.lap_fuel_burns = vec![2.50, 2.48, 2.52, 2.50, 2.50];
+        driver.stints.push(stint);
+        driver.total_laps_completed = 10;
+        driver.last_processed_lap = 10;
+        driver.last_known_lap_time = 14.900;
+        state.drivers.insert(0, driver);
+
+        // Verify fuel burn calculated in practice
+        let practice_burn = state.drivers.get(&0).unwrap().estimated_fuel_burn_ltr();
+        assert!(practice_burn > 2.45 && practice_burn < 2.55, "Burn should be ~2.50L");
+
+        // Transition: Practice -> Qualifying
+        state.reset_session_data(false);
+        state.session_num = 1;
+        state.session_type = "QUALIFYING".to_string();
+
+        // 1. Verify Practice was archived
+        assert_eq!(state.session_history.len(), 1);
+        assert_eq!(state.session_history[0].session_num, 0);
+        assert_eq!(state.session_history[0].session_type, "PRACTICE");
+
+        // 2. Verify active driver state is clean for new session
+        let drv_qual = state.drivers.get(&0).unwrap();
+        assert_eq!(drv_qual.stints.len(), 0, "Stints should be empty for new session");
+        assert_eq!(drv_qual.total_laps_completed, 0);
+        assert_eq!(drv_qual.last_processed_lap, 0);
+        assert_eq!(drv_qual.last_known_lap_time, 0.0);
+
+        // 3. Verify historical fuel burn rate is preserved as fallback
+        assert!((drv_qual.historical_fuel_burn_rate - practice_burn).abs() < 0.001);
+        assert_eq!(drv_qual.estimated_fuel_burn_ltr(), practice_burn, "Should use historical baseline burn rate");
+
+        // Simulate Qualifying Stint (low fuel flyer)
+        let drv_qual_mut = state.drivers.get_mut(&0).unwrap();
+        let mut q_stint = StintData::default();
+        q_stint.stint_number = 1;
+        q_stint.laps_completed = 2;
+        q_stint.fast_lap = 14.200; // Fast qualifying flyer
+        q_stint.lap_fuel_burns = vec![2.40, 2.40];
+        drv_qual_mut.stints.push(q_stint);
+        drv_qual_mut.total_laps_completed = 2;
+
+        // Transition: Qualifying -> Race
+        state.reset_session_data(false);
+        state.session_num = 2;
+        state.session_type = "RACE".to_string();
+
+        // 4. Verify Qualifying was archived
+        assert_eq!(state.session_history.len(), 2);
+        assert_eq!(state.session_history[1].session_num, 1);
+        assert_eq!(state.session_history[1].session_type, "QUALIFYING");
+
+        // 5. Verify Race starts fresh: S1, no 14.200 qualifying lap bleeding in
+        let drv_race = state.drivers.get(&0).unwrap();
+        assert_eq!(drv_race.stints.len(), 0);
+        assert_eq!(drv_race.total_laps_completed, 0);
+
+        // New Race stint starts as S1
+        let drv_race_mut = state.drivers.get_mut(&0).unwrap();
+        let mut r_stint = StintData::default();
+        r_stint.stint_number = drv_race_mut.stints.len() as i32 + 1;
+        assert_eq!(r_stint.stint_number, 1, "Race should start cleanly at Stint S1");
+        r_stint.laps_completed = 1;
+        r_stint.fast_lap = 15.100; // Race lap pace
+        drv_race_mut.stints.push(r_stint);
+
+        assert_eq!(drv_race_mut.stints[0].fast_lap, 15.100, "Fast lap in race should NOT be the 14.200 qualifying lap!");
+    }
+
+    #[test]
+    fn test_format_track_state() {
+        assert_eq!(format_track_state("Moderate", 1), "Moderate Rubber");
+        assert_eq!(format_track_state("Clean", 1), "Clean Track");
+        assert_eq!(format_track_state("Heavy", 1), "Heavy Rubber");
+        assert_eq!(format_track_state("Light", 3), "Light Rubber (Very Light Wet)");
+        assert_eq!(format_track_state("Carried over", 5), "Carried Over (Moderate Wet)");
+        assert_eq!(format_track_state("", 0), "Clean Track");
+        assert_eq!(format_track_state("...", 1), "Clean Track");
+        assert_eq!(format_track_state("high rubber", 4), "High Rubber (Light Wet)");
+    }
+
+    #[test]
+    fn test_clean_setup_name() {
+        assert_eq!(clean_setup_name(r"C:\Users\peebs\Documents\iRacing\setups\mustanggt3\Atlanta_Race_v2.sto"), "Atlanta_Race_v2");
+        assert_eq!(clean_setup_name("mustanggt3/Atlanta_Qual.STO"), "Atlanta_Qual");
+        assert_eq!(clean_setup_name("baseline.sto"), "baseline");
+        assert_eq!(clean_setup_name("baseline"), "baseline");
+        assert_eq!(clean_setup_name(""), "");
+        assert_eq!(clean_setup_name("—"), "");
     }
 }
 
