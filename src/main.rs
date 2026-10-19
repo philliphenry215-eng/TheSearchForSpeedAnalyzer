@@ -1191,6 +1191,7 @@ fn load_logo_texture(ctx: &egui::Context, is_dark: bool) -> Option<egui::Texture
 
 impl WarRoomApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        updater::cleanup_old_updates();
         let settings = AppSettings::load();
         setup_custom_style(&cc.egui_ctx, &settings);
         let logo_texture = load_logo_texture(&cc.egui_ctx, settings.is_dark_theme());
@@ -2291,6 +2292,33 @@ impl WarRoomApp {
                             self.show_release_notes_modal = false;
                             self.release_notes_custom_content = None;
                         }
+
+                        let updater_status = self.updater.status.clone();
+                        match &updater_status {
+                            updater::UpdateStatus::UpdateAvailable(info) => {
+                                let info_clone = info.clone();
+                                let update_btn = egui::Button::new(
+                                    egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(12.0)
+                                ).fill(primary);
+                                if ui.add(update_btn).clicked() {
+                                    self.updater.trigger_download_and_install(&info_clone);
+                                }
+                            }
+                            updater::UpdateStatus::Downloading { percent, downloaded_bytes, total_bytes, .. } => {
+                                let mb_down = *downloaded_bytes as f32 / (1024.0 * 1024.0);
+                                let mb_tot = *total_bytes as f32 / (1024.0 * 1024.0);
+                                ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(12.0));
+                            }
+                            updater::UpdateStatus::ReadyToRestart { .. } => {
+                                let restart_btn = egui::Button::new(
+                                    egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(12.0)
+                                ).fill(self.settings.status_green());
+                                if ui.add(restart_btn).clicked() {
+                                    let _ = updater::apply_update_and_restart();
+                                }
+                            }
+                            _ => {}
+                        }
                     });
                 });
             });
@@ -2568,7 +2596,8 @@ impl WarRoomApp {
                         self.show_release_notes_modal = true;
                     }
 
-                    match &self.updater.status {
+                    let updater_status = self.updater.status.clone();
+                    match &updater_status {
                         updater::UpdateStatus::Idle => {},
                         updater::UpdateStatus::Checking => {
                             ui.spinner();
@@ -2580,8 +2609,22 @@ impl WarRoomApp {
                         updater::UpdateStatus::UpdateAvailable(info) => {
                             let text = format!("Update {} available!", info.tag_name);
                             ui.label(egui::RichText::new(text).color(primary).strong().size(12.0));
+                            let info_clone = info.clone();
+                            if ui.add(egui::Button::new(egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(11.5)).fill(primary)).clicked() {
+                                self.updater.trigger_download_and_install(&info_clone);
+                            }
                             if ui.add(egui::Button::new(egui::RichText::new("View Release ↗").color(white).size(11.5)).fill(elevated)).clicked() {
                                 updater::open_browser(&info.html_url);
+                            }
+                        },
+                        updater::UpdateStatus::Downloading { percent, downloaded_bytes, total_bytes, .. } => {
+                            let mb_down = *downloaded_bytes as f32 / (1024.0 * 1024.0);
+                            let mb_tot = *total_bytes as f32 / (1024.0 * 1024.0);
+                            ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(12.0));
+                        },
+                        updater::UpdateStatus::ReadyToRestart { .. } => {
+                            if ui.add(egui::Button::new(egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(11.5)).fill(self.settings.status_green())).clicked() {
+                                let _ = updater::apply_update_and_restart();
                             }
                         },
                         updater::UpdateStatus::Error(err) => {
@@ -4831,51 +4874,104 @@ impl eframe::App for WarRoomApp {
         });
 
         // --- OPTIONAL UPDATE ALERT BANNER ---
-        if let updater::UpdateStatus::UpdateAvailable(info) = &self.updater.status {
-            if self.settings.updates.ignored_version.as_deref() != Some(&info.tag_name) {
-                let info_clone = info.clone();
-                egui::TopBottomPanel::top("update_banner")
-                    .frame(
-                        egui::Frame::none()
-                            .fill(egui::Color32::from_rgb(18, 32, 54))
-                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 85, 150)))
-                            .inner_margin(egui::Margin::symmetric(14.0, 7.0))
-                    )
-                    .show(ctx, |ui| {
-                        ui.horizontal(|ui| {
-                            let icon = if info_clone.is_prerelease { "📢" } else { "🚀" };
-                            let title = if info_clone.is_prerelease {
-                                format!("{} Pre-release Available: {}", icon, info_clone.tag_name)
-                            } else {
-                                format!("{} New Update Available: {}", icon, info_clone.tag_name)
-                            };
-                            ui.label(egui::RichText::new(title).color(egui::Color32::WHITE).strong().size(12.5));
-                            if !info_clone.name.is_empty() && info_clone.name != info_clone.tag_name {
-                                ui.label(egui::RichText::new(format!("({})", info_clone.name)).color(muted).size(12.0));
-                            }
-
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button(egui::RichText::new("✕ Dismiss").color(muted).size(11.5)).clicked() {
-                                    self.updater.dismiss();
-                                }
-                                if ui.button(egui::RichText::new("Skip this version").color(muted).size(11.5)).clicked() {
-                                    self.settings.updates.ignored_version = Some(info_clone.tag_name.clone());
-                                    self.settings.save();
-                                    self.updater.dismiss();
-                                }
-                                if ui.button(egui::RichText::new("What's New 📖").color(white).size(12.0)).clicked() {
-                                    self.show_release_notes_modal = true;
-                                }
-                                let dl_btn = egui::Button::new(
-                                    egui::RichText::new("Download Update ↗").color(egui::Color32::BLACK).strong().size(12.0)
-                                ).fill(primary);
-                                if ui.add(dl_btn).clicked() {
-                                    updater::open_browser(&info_clone.html_url);
-                                }
-                            });
-                        });
-                    });
+        let show_banner = match &self.updater.status {
+            updater::UpdateStatus::UpdateAvailable(info) => {
+                self.settings.updates.ignored_version.as_deref() != Some(&info.tag_name)
             }
+            updater::UpdateStatus::Downloading { .. } => true,
+            updater::UpdateStatus::ReadyToRestart { .. } => true,
+            updater::UpdateStatus::Error(_) => true,
+            _ => false,
+        };
+
+        if show_banner {
+            egui::TopBottomPanel::top("update_banner")
+                .frame(
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(18, 32, 54))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 85, 150)))
+                        .inner_margin(egui::Margin::symmetric(14.0, 7.0))
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let updater_status = self.updater.status.clone();
+                    match &updater_status {
+                            updater::UpdateStatus::UpdateAvailable(info) => {
+                                let info_clone = info.clone();
+                                let icon = if info_clone.is_prerelease { "📢" } else { "🚀" };
+                                let title = if info_clone.is_prerelease {
+                                    format!("{} Pre-release Available: {}", icon, info_clone.tag_name)
+                                } else {
+                                    format!("{} New Update Available: {}", icon, info_clone.tag_name)
+                                };
+                                ui.label(egui::RichText::new(title).color(egui::Color32::WHITE).strong().size(12.5));
+                                if !info_clone.name.is_empty() && info_clone.name != info_clone.tag_name {
+                                    ui.label(egui::RichText::new(format!("({})", info_clone.name)).color(muted).size(12.0));
+                                }
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button(egui::RichText::new("✕ Dismiss").color(muted).size(11.5)).clicked() {
+                                        self.updater.dismiss();
+                                    }
+                                    if ui.button(egui::RichText::new("Skip this version").color(muted).size(11.5)).clicked() {
+                                        self.settings.updates.ignored_version = Some(info_clone.tag_name.clone());
+                                        self.settings.save();
+                                        self.updater.dismiss();
+                                    }
+                                    if ui.button(egui::RichText::new("What's New 📖").color(white).size(12.0)).clicked() {
+                                        self.show_release_notes_modal = true;
+                                    }
+                                    let update_btn = egui::Button::new(
+                                        egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(12.0)
+                                    ).fill(primary);
+                                    if ui.add(update_btn).clicked() {
+                                        self.updater.trigger_download_and_install(&info_clone);
+                                    }
+                                });
+                            }
+                            updater::UpdateStatus::Downloading { tag, percent, downloaded_bytes, total_bytes } => {
+                                ui.spinner();
+                                let mb_down = *downloaded_bytes as f32 / (1024.0 * 1024.0);
+                                let mb_tot = *total_bytes as f32 / (1024.0 * 1024.0);
+                                let text = if *total_bytes > 0 {
+                                    format!("📥 Downloading {}: {:.0}% ({:.1} / {:.1} MB)", tag, percent, mb_down, mb_tot)
+                                } else {
+                                    format!("📥 Downloading {}: {:.1} MB", tag, mb_down)
+                                };
+                                ui.label(egui::RichText::new(text).color(white).strong().size(12.5));
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let prog = if *total_bytes > 0 { *percent / 100.0 } else { 0.5 };
+                                    ui.add(egui::ProgressBar::new(prog).desired_width(180.0).show_percentage());
+                                });
+                            }
+                            updater::UpdateStatus::ReadyToRestart { tag } => {
+                                ui.label(egui::RichText::new(format!("✅ Update {} downloaded and ready!", tag)).color(self.settings.status_green()).strong().size(12.5));
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button(egui::RichText::new("Later").color(muted).size(11.5)).clicked() {
+                                        self.updater.dismiss();
+                                    }
+                                    let restart_btn = egui::Button::new(
+                                        egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(12.0)
+                                    ).fill(self.settings.status_green());
+                                    if ui.add(restart_btn).clicked() {
+                                        let _ = updater::apply_update_and_restart();
+                                    }
+                                });
+                            }
+                            updater::UpdateStatus::Error(err) => {
+                                ui.label(egui::RichText::new(format!("⚠ Update notice: {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(12.0));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.button(egui::RichText::new("✕ Dismiss").color(muted).size(11.5)).clicked() {
+                                        self.updater.dismiss();
+                                    }
+                                });
+                            }
+                            _ => {}
+                        }
+                    });
+                });
         }
 
         // --- MAIN WORKSPACE ---

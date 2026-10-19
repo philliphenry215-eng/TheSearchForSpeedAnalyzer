@@ -1,3 +1,13 @@
+# The Search For Speed Analyzer — v0.1.2
+
+### ⚡ Seamless 1-Click In-App Updater:
+* **Direct Background Downloading:** Clicking "Update Now ⚡" now downloads update packages directly inside the app with a real-time progress bar.
+* **No More Setup Wizards or Manual Downloads:** Updates are applied in place automatically with zero Inno Setup wizard dialogs and without redirecting to GitHub in your browser.
+* **Instant In-Place Restart:** A single click on "Restart to Apply 🔄" restarts the app immediately into the new version.
+* **Update from Release Notes:** When reading "What's New 📖", you can now trigger the update directly from the release notes dialog.
+
+---
+
 # The Search For Speed Analyzer — v0.1.1
 
 ### 🛠️ Bug Fixes & Improvements:
