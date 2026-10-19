@@ -352,9 +352,19 @@ impl StintData {
     }
 
     pub fn fuel_per_lap(&self) -> f32 {
-        let valid_burns: Vec<f32> = self.lap_fuel_burns.iter().copied().filter(|&b| b > 0.005 && b < 25.0).collect();
+        let valid_burns: Vec<f32> = self.lap_fuel_burns.iter().copied().filter(|&b| b > 0.05 && b < 25.0).collect();
         if !valid_burns.is_empty() {
-            valid_burns.iter().sum::<f32>() / valid_burns.len() as f32
+            if valid_burns.len() >= 3 {
+                // Responsive rolling average: 70% weight to recent 5 laps, 30% to stint base
+                let count = valid_burns.len();
+                let recent_count = count.min(5);
+                let recent_burns = &valid_burns[count - recent_count..];
+                let recent_avg = recent_burns.iter().sum::<f32>() / recent_count as f32;
+                let overall_avg = valid_burns.iter().sum::<f32>() / count as f32;
+                0.7 * recent_avg + 0.3 * overall_avg
+            } else {
+                valid_burns.iter().sum::<f32>() / valid_burns.len() as f32
+            }
         } else if self.latched_fuel_burn_rate > 0.001 {
             self.latched_fuel_burn_rate
         } else if self.laps_completed > 0 && self.fuel_used > 0.0 {
@@ -1360,6 +1370,7 @@ impl WarRoomApp {
                                                         let eff = driver.estimated_fuel_burn_ltr();
                                                         if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
                                                     } else { 0.0 };
+                                                    let prior_burn_rate = driver.estimated_fuel_burn_ltr();
 
                                                     driver.stints.push(StintData {
                                                         stint_number: new_stint_num,
@@ -1381,9 +1392,9 @@ impl WarRoomApp {
                                                         notes: String::new(),
                                                         crossing_fuel_level: current_fuel_sample,
                                                         laps_of_fuel_crossing: initial_laps_of_fuel,
-                                                        latched_fuel_burn_rate: 0.0,
+                                                        latched_fuel_burn_rate: prior_burn_rate,
                                                         lap_fuel_burns: Vec::new(),
-                                                        prev_crossing_fuel: current_fuel_sample,
+                                                        prev_crossing_fuel: 0.0,
                                                     });
                                                     driver.last_processed_lap = current_lap_sdk;
                                                     driver.total_laps_completed = current_lap_sdk;
@@ -1448,6 +1459,26 @@ impl WarRoomApp {
                                                 let is_new_lap_time = (last_lap_time - driver.last_known_lap_time).abs() > 0.0005 && last_lap_time > 3.0;
                                                 let is_new_lap_count = current_lap_sdk > driver.last_processed_lap && current_lap_sdk > 0;
 
+                                                // 3a. UNTIMED OUT-LAP COMPLETION (Start/Finish crossed for the first time since pit exit)
+                                                if is_new_lap_count && !is_pit && in_world && !is_new_lap_time {
+                                                    if let Some(active) = driver.stints.last_mut() {
+                                                        if active.is_active && !active.out_lap_completed {
+                                                            active.out_lap_completed = true;
+                                                            active.prev_crossing_fuel = current_fuel_sample;
+                                                            active.crossing_fuel_level = current_fuel_sample;
+                                                            if active.latched_fuel_burn_rate > 0.001 {
+                                                                active.laps_of_fuel_crossing = (current_fuel_sample / active.latched_fuel_burn_rate).max(0.0);
+                                                            }
+                                                            driver.last_processed_lap = current_lap_sdk;
+                                                            driver.total_laps_completed = current_lap_sdk;
+                                                            if idx == player_idx {
+                                                                pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Crossed start/finish at Lap {}. Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, current_lap_sdk, current_fuel_sample));
+                                                            }
+                                                            state_changed = true;
+                                                        }
+                                                    }
+                                                }
+
                                                 if (is_new_lap_time || (is_new_lap_count && (last_lap_time - driver.last_known_lap_time).abs() > 0.0005)) && !is_pit && in_world {
                                                     if driver.stints.is_empty() || !driver.stints.last().map_or(false, |st| st.is_active) {
                                                         let new_stint_num = driver.stints.len() as i32 + 1;
@@ -1455,6 +1486,7 @@ impl WarRoomApp {
                                                             let eff = driver.estimated_fuel_burn_ltr();
                                                             if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
                                                         } else { 0.0 };
+                                                        let prior_burn_rate = driver.estimated_fuel_burn_ltr();
 
                                                         driver.stints.push(StintData {
                                                             stint_number: new_stint_num,
@@ -1476,7 +1508,7 @@ impl WarRoomApp {
                                                             notes: String::new(),
                                                             crossing_fuel_level: current_fuel_sample,
                                                             laps_of_fuel_crossing: initial_laps_of_fuel,
-                                                            latched_fuel_burn_rate: 0.0,
+                                                            latched_fuel_burn_rate: prior_burn_rate,
                                                             lap_fuel_burns: Vec::new(),
                                                             prev_crossing_fuel: current_fuel_sample,
                                                         });
@@ -1484,11 +1516,12 @@ impl WarRoomApp {
 
                                                     if let Some(active) = driver.stints.last_mut() {
                                                         if last_lap_time > 3.0 && last_lap_time < 360.0 {
+                                                            let was_uncompleted_out_lap = !active.out_lap_completed;
+                                                            active.out_lap_completed = true;
                                                             active.lap_times.push(last_lap_time);
                                                             active.last_lap = last_lap_time;
                                                             active.laps_completed = active.lap_times.len() as i32;
                                                             active.end_lap = current_lap_sdk;
-                                                            active.out_lap_completed = true;
                                                             
                                                             if active.fast_lap <= 0.0 || last_lap_time < active.fast_lap {
                                                                 active.fast_lap = last_lap_time;
@@ -1506,32 +1539,34 @@ impl WarRoomApp {
                                                                     caution_laps_increment += 1;
                                                                 }
 
-                                                                // Only record true green-flag racing laps into fuel burn average
-                                                                if !is_caution_lap {
+                                                                if was_uncompleted_out_lap {
+                                                                    // The sim timed the out-lap itself: latch fuel at start/finish line so Lap 1 is measured cleanly
+                                                                    active.prev_crossing_fuel = current_fuel_sample;
+                                                                    active.crossing_fuel_level = current_fuel_sample;
+                                                                    if active.latched_fuel_burn_rate > 0.001 {
+                                                                        active.laps_of_fuel_crossing = (current_fuel_sample / active.latched_fuel_burn_rate).max(0.0);
+                                                                    }
+                                                                    pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Timed out-lap ({:.3}s). Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, last_lap_time, current_fuel_sample));
+                                                                } else if !is_caution_lap {
+                                                                    // Clean green-flag flying lap burn
                                                                     if active.prev_crossing_fuel > 0.0 && active.prev_crossing_fuel >= current_fuel_sample {
                                                                         let lap_burn = active.prev_crossing_fuel - current_fuel_sample;
-                                                                        if lap_burn > 0.005 && lap_burn < 25.0 {
+                                                                        if lap_burn > 0.05 && lap_burn < 25.0 {
                                                                             active.lap_fuel_burns.push(lap_burn);
                                                                             active.fuel_used += lap_burn;
                                                                             active.latched_fuel_burn_rate = active.fuel_per_lap();
                                                                         }
-                                                                    } else if active.fuel_start > 0.0 && current_fuel_sample <= active.fuel_start && active.lap_fuel_burns.is_empty() {
-                                                                        let initial_burn = active.fuel_start - current_fuel_sample;
-                                                                        if initial_burn > 0.005 && initial_burn < 25.0 {
-                                                                            active.lap_fuel_burns.push(initial_burn);
-                                                                            active.fuel_used = initial_burn;
-                                                                            active.latched_fuel_burn_rate = initial_burn;
-                                                                        }
                                                                     }
-                                                                }
-
-                                                                active.prev_crossing_fuel = current_fuel_sample;
-                                                                active.crossing_fuel_level = current_fuel_sample;
-                                                                let burn_rate = active.fuel_per_lap();
-                                                                if burn_rate > 0.001 {
-                                                                    active.laps_of_fuel_crossing = (current_fuel_sample / burn_rate).max(0.0);
+                                                                    active.prev_crossing_fuel = current_fuel_sample;
+                                                                    active.crossing_fuel_level = current_fuel_sample;
+                                                                    let burn_rate = active.fuel_per_lap();
+                                                                    if burn_rate > 0.001 {
+                                                                        active.laps_of_fuel_crossing = (current_fuel_sample / burn_rate).max(0.0);
+                                                                    }
                                                                 } else {
-                                                                    active.laps_of_fuel_crossing = 0.0;
+                                                                    // Caution lap: update fuel level without distorting green-flag fuel burn average
+                                                                    active.prev_crossing_fuel = current_fuel_sample;
+                                                                    active.crossing_fuel_level = current_fuel_sample;
                                                                 }
                                                             }
 
@@ -3765,6 +3800,32 @@ impl WarRoomApp {
         let last_lap = active_stint.map_or(0.0, |s| s.last_lap);
         let fast_lap = active_stint.map_or(0.0, |s| s.fast_lap);
 
+        let player_pos = player.map_or(99, |p| p.position);
+        let (comp_driver, comp_header, comp_label) = if player_pos == 1 {
+            (state.drivers.values().find(|d| d.position == 2), "P2 LAST", "P2")
+        } else {
+            (state.drivers.values().find(|d| d.position == 1), "LEADER LAST", "P1")
+        };
+
+        let comp_last_lap = comp_driver.map_or(0.0, |d| {
+            if d.last_known_lap_time > 0.0 {
+                d.last_known_lap_time
+            } else {
+                d.stints.iter().rev().find_map(|s| if s.last_lap > 0.0 { Some(s.last_lap) } else { None }).unwrap_or(0.0)
+            }
+        });
+
+        let comp_sub = comp_driver.map_or_else(
+            || "—".to_string(),
+            |d| format!("{} · #{}", comp_label, d.car_num)
+        );
+
+        let delta_opt = if last_lap > 3.0 && comp_last_lap > 3.0 {
+            Some(last_lap - comp_last_lap)
+        } else {
+            None
+        };
+
         let fuel_level_ltr = state.player_fuel_level;
         let fuel_burn_rate_ltr = active_stint
             .map(|s| s.fuel_per_lap())
@@ -3806,8 +3867,8 @@ impl WarRoomApp {
 
         let vp_id = egui::ViewportId::from_hash_of("s4s_floating_overlay_hud");
         let initial_size = match self.settings.overlay.shape {
-            OverlayShape::Square => [520.0, 235.0],
-            OverlayShape::Horizontal => [800.0, 125.0],
+            OverlayShape::Square => [540.0, 248.0],
+            OverlayShape::Horizontal => [840.0, 130.0],
             OverlayShape::Vertical => [280.0, 480.0],
         };
 
@@ -3870,21 +3931,39 @@ impl WarRoomApp {
                                 cols[0].vertical(|ui| {
                                     ui.label(egui::RichText::new("STINT · LAP").color(muted).size(10.0).extra_letter_spacing(0.8));
                                     ui.label(egui::RichText::new(format!("S{} · L{}", stint_num, stint_lap_count)).font(display_font(19.0)).color(primary));
+                                    let avg_str = if stint_avg > 0.0 { format!("Avg {}", format_time(stint_avg)) } else { "—".to_string() };
+                                    ui.label(egui::RichText::new(avg_str).color(muted).size(11.0));
                                 });
                                 cols[1].vertical(|ui| {
-                                    ui.label(egui::RichText::new("STINT AVG").color(muted).size(10.0).extra_letter_spacing(0.8));
-                                    let avg_str = if stint_avg > 0.0 { format_time(stint_avg) } else { "—".to_string() };
-                                    ui.label(egui::RichText::new(avg_str).font(display_font(19.0)).color(white));
-                                });
-                                cols[2].vertical(|ui| {
-                                    ui.label(egui::RichText::new("LAST LAP").color(muted).size(10.0).extra_letter_spacing(0.8));
+                                    ui.label(egui::RichText::new("YOUR LAST").color(muted).size(10.0).extra_letter_spacing(0.8));
                                     let last_str = if last_lap > 0.0 { format_time(last_lap) } else { "—".to_string() };
                                     ui.label(egui::RichText::new(last_str).font(display_font(19.0)).color(white));
+                                    let best_str = if fast_lap > 0.0 { format!("Best {}", format_time(fast_lap)) } else { "—".to_string() };
+                                    ui.label(egui::RichText::new(best_str).color(muted).size(11.0));
+                                });
+                                cols[2].vertical(|ui| {
+                                    ui.label(egui::RichText::new(comp_header).color(muted).size(10.0).extra_letter_spacing(0.8));
+                                    let comp_str = if comp_last_lap > 0.0 { format_time(comp_last_lap) } else { "—".to_string() };
+                                    ui.label(egui::RichText::new(comp_str).font(display_font(19.0)).color(white));
+                                    ui.label(egui::RichText::new(comp_sub).color(muted).size(11.0));
                                 });
                                 cols[3].vertical(|ui| {
-                                    ui.label(egui::RichText::new("BEST LAP").color(muted).size(10.0).extra_letter_spacing(0.8));
-                                    let best_str = if fast_lap > 0.0 { format_time(fast_lap) } else { "—".to_string() };
-                                    ui.label(egui::RichText::new(best_str).font(display_font(19.0)).color(green));
+                                    let delta_title = if player_pos == 1 { "DELTA VS P2" } else { "DELTA VS P1" };
+                                    ui.label(egui::RichText::new(delta_title).color(muted).size(10.0).extra_letter_spacing(0.8));
+                                    if let Some(delta) = delta_opt {
+                                        let (delta_str, delta_color, sub_text) = if delta < -0.005 {
+                                            (format!("-{:.3}s", delta.abs()), green, if player_pos == 1 { "Pulling away" } else { "Faster than P1" })
+                                        } else if delta > 0.005 {
+                                            (format!("+{:.3}s", delta), amber, if player_pos == 1 { "P2 closing" } else { "Slower than P1" })
+                                        } else {
+                                            ("±0.000s".to_string(), white, "Equal pace")
+                                        };
+                                        ui.label(egui::RichText::new(delta_str).font(display_font(19.0)).color(delta_color));
+                                        ui.label(egui::RichText::new(sub_text).color(muted).size(11.0));
+                                    } else {
+                                        ui.label(egui::RichText::new("—").font(display_font(19.0)).color(muted));
+                                        ui.label(egui::RichText::new("Awaiting Laps").color(muted).size(11.0));
+                                    }
                                 });
                             });
                         });
