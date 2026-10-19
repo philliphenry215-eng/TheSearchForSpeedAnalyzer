@@ -168,6 +168,23 @@ pub fn is_newer_version(remote: &str, current: &str) -> bool {
     if _c_pre.is_some() && _r_pre.is_none() {
         return true;
     }
+    if _c_pre.is_none() && _r_pre.is_some() {
+        return false;
+    }
+    if let (Some(cp), Some(rp)) = (_c_pre, _r_pre) {
+        let r_pre_nums = parse_version_numbers(rp);
+        let c_pre_nums = parse_version_numbers(cp);
+        for i in 0..r_pre_nums.len().max(c_pre_nums.len()) {
+            let r = r_pre_nums.get(i).copied().unwrap_or(0);
+            let c = c_pre_nums.get(i).copied().unwrap_or(0);
+            if r > c {
+                return true;
+            } else if r < c {
+                return false;
+            }
+        }
+        return rp > cp;
+    }
 
     false
 }
@@ -183,7 +200,7 @@ fn split_version(s: &str) -> (&str, Option<&str>) {
 }
 
 fn parse_version_numbers(s: &str) -> Vec<u32> {
-    s.split('.')
+    s.split(|c: char| !c.is_ascii_digit())
         .filter_map(|part| part.parse::<u32>().ok())
         .collect()
 }
@@ -208,7 +225,11 @@ mod tests {
         assert!(is_newer_version("v1.0.0", "0.9.9"));
         assert!(is_newer_version("v0.2.0-beta.1", "0.1.0"));
         assert!(is_newer_version("0.1.0", "0.1.0-beta.1"));
+        assert!(is_newer_version("v0.1.0-beta.3", "0.1.0-beta.2"));
 
+        assert!(!is_newer_version("v0.1.0-beta.2", "0.1.0-beta.3"));
+        assert!(!is_newer_version("v0.1.0-beta.3", "0.1.0-beta.3"));
+        assert!(!is_newer_version("v0.1.0-beta.3", "0.1.0"));
         assert!(!is_newer_version("v0.1.0", "0.1.0"));
         assert!(!is_newer_version("0.0.9", "0.1.0"));
         assert!(!is_newer_version("v0.1.0-alpha", "0.1.0"));
