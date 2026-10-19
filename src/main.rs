@@ -914,6 +914,8 @@ struct WarRoomApp {
     grid_sort_dir: SortDirection,
     driver_search_query: String,
     updater: updater::UpdateChecker,
+    show_release_notes_modal: bool,
+    release_notes_custom_content: Option<String>,
 }
 
 fn load_logo_texture(ctx: &egui::Context, is_dark: bool) -> Option<egui::TextureHandle> {
@@ -1672,6 +1674,8 @@ impl WarRoomApp {
             grid_sort_dir: SortDirection::Ascending,
             driver_search_query: String::new(),
             updater,
+            show_release_notes_modal: false,
+            release_notes_custom_content: None,
         }
     }
 
@@ -1806,6 +1810,98 @@ impl WarRoomApp {
                             }
                         });
                     });
+            });
+    }
+
+    fn render_release_notes_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_release_notes_modal {
+            return;
+        }
+
+        let primary = self.settings.primary_accent();
+        let white = self.settings.text_color();
+        let muted = self.settings.text_muted();
+        let elevated = self.settings.card_elevated_color();
+        let panel_bg = self.settings.panel_color();
+        let border = self.settings.divider_color();
+
+        let embedded_notes = include_str!("../RELEASE_NOTES.md");
+        let (display_title, display_body, html_url) = if let Some(ref custom) = self.release_notes_custom_content {
+            ("Release Notes".to_string(), custom.clone(), "https://github.com/philliphenry215-eng/TheSearchForSpeedAnalyzer/releases".to_string())
+        } else if let updater::UpdateStatus::UpdateAvailable(info) = &self.updater.status {
+            (info.name.clone(), if !info.body.is_empty() { info.body.clone() } else { embedded_notes.to_string() }, info.html_url.clone())
+        } else {
+            ("What's New in v0.1.0".to_string(), embedded_notes.to_string(), "https://github.com/philliphenry215-eng/TheSearchForSpeedAnalyzer/releases/tag/v0.1.0".to_string())
+        };
+
+        egui::Window::new("📖 Release Notes & What's New")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(640.0)
+            .default_height(520.0)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.screen_rect().center())
+            .frame(egui::Frame::window(&ctx.style()).fill(panel_bg).stroke(egui::Stroke::new(1.0, border)).rounding(10.0).inner_margin(16.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(display_title).font(display_font(18.0)).color(primary));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new(egui::RichText::new("Open on GitHub ↗").color(white).size(12.0)).fill(elevated)).clicked() {
+                            updater::open_browser(&html_url);
+                        }
+                    });
+                });
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                egui::ScrollArea::vertical()
+                    .max_height(420.0)
+                    .show(ui, |ui| {
+                        for line in display_body.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("# ") {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new(trimmed.trim_start_matches("# ").trim()).font(display_font(17.0)).color(primary));
+                            } else if trimmed.starts_with("## ") {
+                                ui.add_space(6.0);
+                                ui.label(egui::RichText::new(trimmed.trim_start_matches("## ").trim()).font(display_font(15.0)).color(primary));
+                            } else if trimmed.starts_with("### ") {
+                                ui.add_space(5.0);
+                                ui.label(egui::RichText::new(trimmed.trim_start_matches("### ").trim()).color(white).strong().size(13.5));
+                            } else if trimmed.starts_with("#### ") {
+                                ui.add_space(4.0);
+                                ui.label(egui::RichText::new(trimmed.trim_start_matches("#### ").trim()).color(primary).strong().size(12.5));
+                            } else if trimmed.starts_with("* ") || trimmed.starts_with("- ") {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(" •").color(primary).size(13.0));
+                                    let bullet = trimmed[2..].trim();
+                                    ui.label(egui::RichText::new(bullet).color(white).size(12.0));
+                                });
+                            } else if trimmed.is_empty() {
+                                ui.add_space(4.0);
+                            } else if trimmed == "---" {
+                                ui.separator();
+                            } else {
+                                ui.label(egui::RichText::new(trimmed).color(muted).size(12.0));
+                            }
+                        }
+                    });
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("Installed Version: v{}", updater::CURRENT_VERSION)).color(muted).size(11.5));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_sized(egui::vec2(90.0, 28.0), egui::Button::new(egui::RichText::new("Done").color(egui::Color32::BLACK).strong()).fill(primary)).clicked() {
+                            self.show_release_notes_modal = false;
+                            self.release_notes_custom_content = None;
+                        }
+                    });
+                });
             });
     }
 
@@ -2075,6 +2171,10 @@ impl WarRoomApp {
                         .fill(elevated);
                     if ui.add(check_btn).clicked() {
                         self.updater.trigger_check(self.settings.updates.include_prereleases);
+                    }
+
+                    if ui.add(egui::Button::new(egui::RichText::new("📖 What's New / Notes").color(white).size(12.0)).fill(elevated)).clicked() {
+                        self.show_release_notes_modal = true;
                     }
 
                     match &self.updater.status {
@@ -4245,7 +4345,11 @@ impl eframe::App for WarRoomApp {
                     }
 
                     ui.menu_button(egui::RichText::new("⋯").color(white).size(15.0), |ui| {
-                        ui.set_min_width(190.0);
+                        ui.set_min_width(210.0);
+                        if ui.button("📖 What's New & Release Notes").clicked() {
+                            self.show_release_notes_modal = true;
+                            ui.close_menu();
+                        }
                         if ui.button("Stint Telemetry Analyzer").clicked() {
                             self.show_stint_analyzer_modal = true;
                             ui.close_menu();
@@ -4332,6 +4436,9 @@ impl eframe::App for WarRoomApp {
                                     self.settings.save();
                                     self.updater.dismiss();
                                 }
+                                if ui.button(egui::RichText::new("What's New 📖").color(white).size(12.0)).clicked() {
+                                    self.show_release_notes_modal = true;
+                                }
                                 let dl_btn = egui::Button::new(
                                     egui::RichText::new("Download Update ↗").color(egui::Color32::BLACK).strong().size(12.0)
                                 ).fill(primary);
@@ -4361,6 +4468,7 @@ impl eframe::App for WarRoomApp {
         self.render_settings_modal(ctx);
         self.render_telemetry_debugger(ctx, &current_state);
         self.render_stint_analyzer_modal(ctx, &current_state);
+        self.render_release_notes_modal(ctx);
         self.render_floating_overlay_hud(ctx, &current_state);
 
         // Toast Notification Overlay
