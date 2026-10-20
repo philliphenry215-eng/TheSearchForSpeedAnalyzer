@@ -475,6 +475,7 @@ pub struct DriverState {
     pub position: i32,
     pub is_on_pit_road: bool,
     pub is_in_world: bool,
+    pub is_initialized: bool,
     pub total_laps_completed: i32,
     pub last_processed_lap: i32,
     pub last_known_lap_time: f32,
@@ -676,6 +677,7 @@ impl WarRoomState {
             driver.position = 0;
             driver.is_on_pit_road = true;
             driver.is_in_world = false;
+            driver.is_initialized = false;
         }
 
         // 3. Reset session-level counters
@@ -936,6 +938,7 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                 position: 0,
                 is_on_pit_road: true,
                 is_in_world: false,
+                is_initialized: false,
                 total_laps_completed: 0,
                 last_processed_lap: 0,
                 last_known_lap_time: 0.0,
@@ -1744,6 +1747,7 @@ impl WarRoomApp {
                                                 position: pos,
                                                 is_on_pit_road: is_pit,
                                                 is_in_world: in_world,
+                                                is_initialized: false,
                                                 total_laps_completed: 0,
                                                 last_processed_lap: 0,
                                                 last_known_lap_time: 0.0,
@@ -1763,18 +1767,6 @@ impl WarRoomApp {
                                             let last_lap_time = *last_laps.get(idx).unwrap_or(&0.0) as f32;
                                             let _best_lap_time = *fast_laps.get(idx).unwrap_or(&0.0) as f32;
 
-                                            // First-frame initialization guard
-                                            if driver.last_processed_lap == 0 {
-                                                driver.last_processed_lap = current_lap_sdk;
-                                                driver.total_laps_completed = current_lap_sdk;
-                                                driver.last_known_lap_time = last_lap_time;
-                                                driver.is_on_pit_road = is_pit;
-                                                driver.is_in_world = in_world;
-                                            }
-
-                                            let was_in_pit = driver.is_on_pit_road;
-                                            let was_in_world = driver.is_in_world;
-
                                             // Keep active stint's setup_name in sync with driver setup name
                                             let active_setup = if !driver.setup_name.is_empty() && driver.setup_name != "—" && driver.setup_name != "Baseline" {
                                                 driver.setup_name.clone()
@@ -1783,6 +1775,57 @@ impl WarRoomApp {
                                             } else {
                                                 "Baseline".to_string()
                                             };
+
+                                            // First-frame initialization guard (runs once per driver per session)
+                                            if !driver.is_initialized {
+                                                driver.is_initialized = true;
+                                                driver.last_processed_lap = current_lap_sdk;
+                                                driver.total_laps_completed = current_lap_sdk;
+                                                driver.last_known_lap_time = last_lap_time;
+                                                driver.is_on_pit_road = is_pit;
+                                                driver.is_in_world = in_world;
+
+                                                // If car is ALREADY on track driving when app connects, start Stint 1 immediately!
+                                                if !is_pit && in_world && driver.stints.is_empty() {
+                                                    let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
+                                                        let eff = driver.estimated_fuel_burn_ltr();
+                                                        if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
+                                                    } else { 0.0 };
+                                                    let prior_burn_rate = driver.estimated_fuel_burn_ltr();
+
+                                                    driver.stints.push(StintData {
+                                                        stint_number: 1,
+                                                        start_lap: current_lap_sdk,
+                                                        end_lap: current_lap_sdk,
+                                                        out_lap_completed: current_lap_sdk > 0,
+                                                        laps_completed: 0,
+                                                        lap_times: Vec::new(),
+                                                        fuel_start: current_fuel_sample,
+                                                        fuel_used: 0.0,
+                                                        last_lap: 0.0,
+                                                        fast_lap: 0.0,
+                                                        is_active: true,
+                                                        is_expanded: false,
+                                                        tires: StintTireSet::default(),
+                                                        setup_name: active_setup.clone(),
+                                                        track_temp_at_start: track_temp_snapshot.clone(),
+                                                        air_temp_at_start: air_temp_snapshot.clone(),
+                                                        notes: String::new(),
+                                                        crossing_fuel_level: current_fuel_sample,
+                                                        laps_of_fuel_crossing: initial_laps_of_fuel,
+                                                        latched_fuel_burn_rate: prior_burn_rate,
+                                                        lap_fuel_burns: Vec::new(),
+                                                        prev_crossing_fuel: current_fuel_sample,
+                                                    });
+                                                    if idx == player_idx {
+                                                        pending_logs.push(format!("[LIVE ATTACH] Connected to on-track session at Lap {}. Stint S1 active.", current_lap_sdk));
+                                                    }
+                                                    state_changed = true;
+                                                }
+                                            }
+
+                                            let was_in_pit = driver.is_on_pit_road;
+                                            let was_in_world = driver.is_in_world;
 
                                             if let Some(active) = driver.stints.last_mut() {
                                                 if active.is_active && (active.setup_name.is_empty() || active.setup_name == "—" || active.setup_name == "Baseline") {
@@ -2297,12 +2340,10 @@ impl WarRoomApp {
         };
 
         egui::Window::new("📖 Release Notes & What's New")
+            .fixed_size([580.0, 620.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
-            .resizable(true)
-            .default_width(640.0)
-            .default_height(520.0)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_pos(ctx.screen_rect().center())
+            .resizable(false)
             .frame(egui::Frame::window(&ctx.style()).fill(panel_bg).stroke(egui::Stroke::new(1.0, border)).rounding(10.0).inner_margin(16.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -2319,34 +2360,35 @@ impl WarRoomApp {
                 ui.add_space(6.0);
 
                 egui::ScrollArea::vertical()
-                    .max_height(420.0)
+                    .max_height(480.0)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.set_max_width(540.0);
                         for line in display_body.lines() {
                             let trimmed = line.trim();
                             if trimmed.starts_with("# ") {
                                 ui.add_space(8.0);
-                                ui.label(egui::RichText::new(trimmed.trim_start_matches("# ").trim()).font(display_font(17.0)).color(primary));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("# ").trim()).font(display_font(17.0)).color(primary)).wrap(true));
                             } else if trimmed.starts_with("## ") {
                                 ui.add_space(6.0);
-                                ui.label(egui::RichText::new(trimmed.trim_start_matches("## ").trim()).font(display_font(15.0)).color(primary));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("## ").trim()).font(display_font(15.0)).color(primary)).wrap(true));
                             } else if trimmed.starts_with("### ") {
                                 ui.add_space(5.0);
-                                ui.label(egui::RichText::new(trimmed.trim_start_matches("### ").trim()).color(white).strong().size(13.5));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("### ").trim()).color(white).strong().size(13.5)).wrap(true));
                             } else if trimmed.starts_with("#### ") {
                                 ui.add_space(4.0);
-                                ui.label(egui::RichText::new(trimmed.trim_start_matches("#### ").trim()).color(primary).strong().size(12.5));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("#### ").trim()).color(primary).strong().size(12.5)).wrap(true));
                             } else if trimmed.starts_with("* ") || trimmed.starts_with("- ") {
-                                ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(" •").color(primary).size(13.0));
-                                    let bullet = trimmed[2..].trim();
-                                    ui.label(egui::RichText::new(bullet).color(white).size(12.0));
-                                });
+                                let bullet = trimmed[2..].trim();
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new(format!("  •  {}", bullet)).color(white).size(12.0)
+                                ).wrap(true));
                             } else if trimmed.is_empty() {
                                 ui.add_space(4.0);
                             } else if trimmed == "---" {
                                 ui.separator();
                             } else {
-                                ui.label(egui::RichText::new(trimmed).color(muted).size(12.0));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed).color(muted).size(12.0)).wrap(true));
                             }
                         }
                     });
@@ -5336,6 +5378,71 @@ DriverInfo:
         assert_eq!(ben.car_num, "33");
         assert_eq!(ben.irating, "1980");
         assert_eq!(ben.setup_name, "Baseline");
+    }
+
+    #[test]
+    fn test_driver_first_frame_initialization_and_live_attach() {
+        // Test 1: Driver connected while in pit stall on Lap 0
+        let mut d_pit = DriverState::default();
+        d_pit.car_idx = 1;
+        assert!(!d_pit.is_initialized);
+
+        let is_pit_frame1 = true;
+        let in_world_frame1 = true;
+        let current_lap_0 = 0;
+
+        // Simulate Frame 1 in pit
+        if !d_pit.is_initialized {
+            d_pit.is_initialized = true;
+            d_pit.last_processed_lap = current_lap_0;
+            d_pit.is_on_pit_road = is_pit_frame1;
+            d_pit.is_in_world = in_world_frame1;
+        }
+
+        assert!(d_pit.is_initialized);
+        assert!(d_pit.is_on_pit_road);
+        assert!(d_pit.stints.is_empty(), "Car in pit should not start stint yet");
+
+        // Simulate Frame 2 (car leaves pit onto track)
+        let was_in_pit = d_pit.is_on_pit_road;
+        let is_pit_frame2 = false;
+        let in_world_frame2 = true;
+
+        assert!(was_in_pit && !is_pit_frame2 && in_world_frame2, "Pit exit MUST be detected even on Lap 0");
+
+        // Test 2: Driver connected while ALREADY driving on track (e.g. Lap 5)
+        let mut d_track = DriverState::default();
+        d_track.car_idx = 1;
+        assert!(!d_track.is_initialized);
+
+        let is_pit_track = false;
+        let in_world_track = true;
+        let current_lap_5 = 5;
+
+        // Simulate Frame 1 on track
+        if !d_track.is_initialized {
+            d_track.is_initialized = true;
+            d_track.last_processed_lap = current_lap_5;
+            d_track.is_on_pit_road = is_pit_track;
+            d_track.is_in_world = in_world_track;
+
+            if !is_pit_track && in_world_track && d_track.stints.is_empty() {
+                d_track.stints.push(StintData {
+                    stint_number: 1,
+                    start_lap: current_lap_5,
+                    end_lap: current_lap_5,
+                    out_lap_completed: true,
+                    laps_completed: 0,
+                    is_active: true,
+                    ..Default::default()
+                });
+            }
+        }
+
+        assert!(d_track.is_initialized);
+        assert_eq!(d_track.stints.len(), 1, "Connecting while on track should immediately start Stint 1");
+        assert!(d_track.stints[0].is_active);
+        assert_eq!(d_track.stints[0].start_lap, 5);
     }
 }
 

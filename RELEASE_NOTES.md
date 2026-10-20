@@ -1,3 +1,16 @@
+# The Search For Speed Analyzer — v0.1.4
+
+### 🏎️ Instant First-Frame Telemetry & Mid-Run Attach:
+* **Immediate Lap 0 Pit Exit Detection:** Fixed an issue where launching the app while sitting in the pit or garage on Lap 0 could clear the pit exit transition check, preventing Stint 1 from starting until the app was closed and reopened.
+* **Instant Mid-Run Attach:** Launching the app while already driving out on track now immediately recognizes the active session and creates Stint 1 at your current lap, recording telemetry and fuel with zero missed laps.
+
+### 📖 Release Notes & "What's New" Window Overhaul:
+* **Compact, Centered Layout:** Redesigned the "What's New" dialog into a fixed, centered 580x620 modal that never stretches horizontally off-screen.
+* **Smart Word Wrapping:** Added automatic text wrapping across all bullet points and descriptions, completely eliminating horizontal scrolling.
+* **Always-Visible Controls:** The "Done" button is permanently pinned within the visible window at the bottom right.
+
+---
+
 # The Search For Speed Analyzer — v0.1.3
 
 ### 🏎️ Driver Roster & Stint Grid Restoration:
