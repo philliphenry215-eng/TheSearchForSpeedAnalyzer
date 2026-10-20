@@ -1,3 +1,17 @@
+# The Search For Speed Analyzer — v0.1.3
+
+### 🏎️ Driver Roster & Stint Grid Restoration:
+* **Direct Shared-Memory YAML Parser:** Replaced the third-party SDK session parser with a custom direct memory-mapped ISO-8859-1 YAML reader. This eliminates crashes caused by unpopulated subsession result schemas (`ResultsPositions: ~`) and permanently restores full driver names, car numbers, and iRatings across all stint grids and HUD views.
+* **Resilient Driver Name Population:** Grid rows no longer fall back to placeholder `Car #1, Car #2` names when active sessions load. Real competitor names and numbers populate immediately.
+
+### ⚡ Seamless 1-Click In-App Updater:
+* **Direct Background Downloading:** Clicking "Update Now ⚡" downloads updates directly inside the app with a real-time progress bar.
+* **No More Setup Wizards or Manual Downloads:** Updates are applied in place automatically with zero Inno Setup wizard dialogs and without redirecting to GitHub in your browser.
+* **Instant In-Place Restart:** A single click on "Restart to Apply 🔄" restarts the app immediately into the new version.
+* **Update from Release Notes:** When reading "What's New 📖", you can now trigger the update directly from the release notes dialog.
+
+---
+
 # The Search For Speed Analyzer — v0.1.2
 
 ### ⚡ Seamless 1-Click In-App Updater:

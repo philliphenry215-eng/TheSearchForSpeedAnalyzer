@@ -700,6 +700,267 @@ impl WarRoomState {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn read_raw_iracing_yaml() -> Option<String> {
+    use encoding::all::ISO_8859_1;
+    use encoding::{DecoderTrap, Encoding};
+    use std::slice::from_raw_parts;
+
+    type HANDLE = *mut std::ffi::c_void;
+    type LPVOID = *mut std::ffi::c_void;
+    type LPCWSTR = *const u16;
+
+    extern "system" {
+        fn OpenFileMappingW(desired_access: u32, inherit_handle: i32, name: LPCWSTR) -> HANDLE;
+        fn MapViewOfFile(file_mapping_object: HANDLE, desired_access: u32, file_offset_high: u32, file_offset_low: u32, number_of_bytes_to_map: usize) -> LPVOID;
+        fn CloseHandle(handle: HANDLE) -> i32;
+        fn UnmapViewOfFile(base_address: LPVOID) -> i32;
+    }
+
+    const FILE_MAP_READ: u32 = 0x0004;
+    const TELEMETRY_PATH: &str = "Local\\IRSDKMemMapFileName";
+
+    let mut path: Vec<u16> = TELEMETRY_PATH.encode_utf16().collect();
+    path.push(0);
+
+    let mapping = unsafe { OpenFileMappingW(FILE_MAP_READ, 0, path.as_ptr()) };
+    if mapping.is_null() {
+        return None;
+    }
+
+    let view = unsafe { MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0) };
+    if view.is_null() {
+        unsafe { CloseHandle(mapping); }
+        return None;
+    }
+
+    let header_ptr = view as *const i32;
+    let (info_len, info_offset) = unsafe {
+        let len = *header_ptr.add(4);
+        let offset = *header_ptr.add(5);
+        (len as usize, offset as usize)
+    };
+
+    if info_len == 0 || info_offset == 0 {
+        unsafe {
+            UnmapViewOfFile(view);
+            CloseHandle(mapping);
+        }
+        return None;
+    }
+
+    let start = (view as usize + info_offset) as *const u8;
+    let data: &[u8] = unsafe { from_raw_parts(start, info_len) };
+
+    let content = match ISO_8859_1.decode(data, DecoderTrap::Replace) {
+        Ok(v) => v,
+        Err(_) => {
+            unsafe {
+                UnmapViewOfFile(view);
+                CloseHandle(mapping);
+            }
+            return None;
+        }
+    };
+
+    unsafe {
+        UnmapViewOfFile(view);
+        CloseHandle(mapping);
+    }
+
+    Some(content)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn read_raw_iracing_yaml() -> Option<String> {
+    None
+}
+
+pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool {
+    let root: serde_yaml::Value = match serde_yaml::from_str(yaml_str) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    // 1. Weekend Info
+    let weekend = &root["WeekendInfo"];
+    if let Some(name) = weekend["TrackDisplayName"].as_str() {
+        if !name.is_empty() {
+            s.track_name = name.to_string();
+        }
+    }
+    if let Some(len) = weekend["TrackLength"].as_str() {
+        if !len.is_empty() {
+            s.track_length = len.to_string();
+        }
+    }
+    if let Some(w) = weekend["TrackWeatherType"].as_str() {
+        if !w.is_empty() {
+            s.weather_type = w.to_string();
+        }
+    }
+    if let Some(t) = weekend["TrackAirTemp"].as_str() {
+        s.air_temp_raw = t.to_string();
+    }
+    if let Some(t) = weekend["TrackSurfaceTemp"].as_str() {
+        s.track_temp_raw = t.to_string();
+    }
+    if let Some(w) = weekend["TrackWindVel"].as_str() {
+        s.wind_speed_raw = w.to_string();
+    }
+    let opt_wind = weekend["WeekendOptions"]["WindDirection"].as_str();
+    let trk_wind = weekend["TrackWindDir"].as_str();
+    if let Some(dir) = opt_wind.or(trk_wind) {
+        s.wind_dir_raw = dir.to_string();
+    }
+    if let Some(rh) = weekend["WeekendOptions"]["RelativeHumidity"].as_str() {
+        s.relative_humidity_raw = rh.to_string();
+    }
+    if let Some(sid) = weekend["SessionID"].as_i64() {
+        s.session_id = sid as i32;
+    }
+
+    // 2. Subsession Definitions & Rubber States
+    if let Some(sessions) = root["SessionInfo"]["Sessions"].as_sequence() {
+        for sess in sessions {
+            let s_num = sess["SessionNum"].as_i64().unwrap_or(-1) as i32;
+            if s_num >= 0 {
+                if let Some(stype) = sess["SessionType"].as_str() {
+                    s.subsession_types.insert(s_num, stype.to_string());
+                }
+                if let Some(rstate) = sess["SessionTrackRubberState"].as_str() {
+                    if !rstate.is_empty() {
+                        s.subsession_rubber_states.insert(s_num, rstate.to_string());
+                    }
+                }
+            }
+        }
+
+        if s.session_num >= 0 {
+            if let Some(stype) = s.subsession_types.get(&s.session_num) {
+                s.session_type = format_session_type(stype);
+            }
+            if let Some(rstate) = s.subsession_rubber_states.get(&s.session_num) {
+                s.track_state = format_track_state(rstate, s.track_wetness);
+            }
+        } else if let Some(first_sess) = sessions.first() {
+            if let Some(stype) = first_sess["SessionType"].as_str() {
+                s.session_type = format_session_type(stype);
+            }
+            if let Some(rstate) = first_sess["SessionTrackRubberState"].as_str() {
+                s.track_state = format_track_state(rstate, s.track_wetness);
+            }
+        }
+    }
+
+    // 3. Driver Info
+    let driver_info = &root["DriverInfo"];
+    if let Some(car_idx) = driver_info["DriverCarIdx"].as_u64() {
+        s.player_car_idx = car_idx as usize;
+    }
+    if let Some(fuel) = driver_info["DriverCarFuelMaxLtr"].as_f64() {
+        s.player_fuel_capacity = fuel as f32;
+    }
+
+    let raw_setup = driver_info["DriverSetupName"].as_str().unwrap_or("");
+    let clean_setup = clean_setup_name(raw_setup);
+    if !clean_setup.is_empty() {
+        s.player_setup_name = clean_setup;
+    }
+    let effective_setup = if !s.player_setup_name.is_empty() {
+        s.player_setup_name.clone()
+    } else {
+        "Baseline".to_string()
+    };
+
+    let player_idx = s.player_car_idx;
+
+    if let Some(drivers) = driver_info["Drivers"].as_sequence() {
+        for d in drivers {
+            let idx = d["CarIdx"].as_u64().unwrap_or(999) as usize;
+            if idx >= 64 {
+                continue;
+            }
+            let user_name = d["UserName"].as_str().unwrap_or("").to_string();
+            let car_num = match &d["CarNumber"] {
+                serde_yaml::Value::String(s) => s.clone(),
+                serde_yaml::Value::Number(n) => n.to_string(),
+                _ => idx.to_string(),
+            };
+            let irating_str = match &d["IRating"] {
+                serde_yaml::Value::Number(n) => n.to_string(),
+                serde_yaml::Value::String(s) => s.clone(),
+                _ => "—".to_string(),
+            };
+            let car_screen_name = d["CarScreenName"].as_str().unwrap_or("").to_string();
+            let car_screen_short = d["CarScreenNameShort"].as_str().unwrap_or("").to_string();
+            let car_path = d["CarPath"].as_str().unwrap_or("").to_string();
+
+            // Set player's car name
+            if idx == player_idx {
+                if !car_screen_name.is_empty() {
+                    s.car_name = car_screen_name.clone();
+                } else if !car_screen_short.is_empty() {
+                    s.car_name = car_screen_short;
+                } else if !car_path.is_empty() {
+                    s.car_name = car_path;
+                } else {
+                    s.car_name = format!("Car #{}", car_num);
+                }
+            }
+
+            let setup_to_assign = if idx == player_idx {
+                effective_setup.clone()
+            } else {
+                "Baseline".to_string()
+            };
+
+            s.drivers.entry(idx).and_modify(|target| {
+                if !user_name.is_empty() {
+                    target.driver_name = user_name.clone();
+                }
+                if !car_num.is_empty() {
+                    target.car_num = car_num.clone();
+                }
+                if !irating_str.is_empty() && irating_str != "—" {
+                    target.irating = irating_str.clone();
+                }
+                if idx == player_idx && setup_to_assign != "Baseline" {
+                    target.setup_name = setup_to_assign.clone();
+                }
+            }).or_insert(DriverState {
+                car_idx: idx,
+                driver_name: if !user_name.is_empty() { user_name } else { format!("Car #{}", idx) },
+                car_num: if !car_num.is_empty() { car_num } else { idx.to_string() },
+                irating: irating_str,
+                position: 0,
+                is_on_pit_road: true,
+                is_in_world: false,
+                total_laps_completed: 0,
+                last_processed_lap: 0,
+                last_known_lap_time: 0.0,
+                setup_name: setup_to_assign,
+                stints: Vec::new(),
+                historical_fuel_burn_rate: 0.0,
+            });
+        }
+    }
+
+    // Backfill setup_name into player driver and any stints that were started before setup was known
+    if effective_setup != "Baseline" {
+        if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+            player_drv.setup_name = effective_setup.clone();
+            for stint in &mut player_drv.stints {
+                if stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline" {
+                    stint.setup_name = effective_setup.clone();
+                }
+            }
+        }
+    }
+
+    true
+}
+
 fn convert_unit(val: &str, to_metric: bool) -> String {
     let clean = val.trim();
     if clean.is_empty() || clean == "—" || clean == "..." { return clean.to_string(); }
@@ -1219,7 +1480,7 @@ impl WarRoomApp {
         thread::spawn(move || {
             loop {
                 match Connection::new() {
-                    Ok(mut conn) => {
+                    Ok(conn) => {
                         {
                             let mut s = state_clone.lock().unwrap();
                             s.is_connected = true;
@@ -1227,106 +1488,11 @@ impl WarRoomApp {
                         }
                         ctx_clone.request_repaint();
 
-                        // Try initial session YAML parse (non-blocking if it fails)
-                        if let Ok(info) = conn.session_info() {
+                        // Try initial session YAML parse via direct shared memory reader (resilient to schema nulls)
+                        if let Some(raw_yaml) = read_raw_iracing_yaml() {
                             let mut s = state_clone.lock().unwrap();
                             s.is_connected = true;
-                            if !info.weekend.track_display_name.is_empty() {
-                                s.track_name = info.weekend.track_display_name.clone();
-                            } else {
-                                s.track_name = "iRacing Live Session".to_string();
-                            }
-                            s.track_length = info.weekend.track_length.clone();
-                            s.weather_type = info.weekend.track_weather.clone();
-                            s.air_temp_raw = info.weekend.track_air_tempearture.clone();
-                            s.track_temp_raw = info.weekend.track_surface_temperature.clone();
-                            s.wind_speed_raw = info.weekend.track_wind_speed.clone();
-                            if !info.weekend.options.wind_direction.is_empty() {
-                                s.wind_dir_raw = info.weekend.options.wind_direction.clone();
-                            } else {
-                                s.wind_dir_raw = info.weekend.track_wind_direction.clone();
-                            }
-                            s.relative_humidity_raw = info.weekend.options.relative_humidity.clone();
-                            s.session_id = info.weekend.session_id;
-                            s.player_car_idx = info.drivers.car_index;
-                            s.player_fuel_capacity = info.drivers.fuel_capacity;
-
-                            // Cache all subsession definitions and rubber states
-                            for sess in &info.session.sessions {
-                                let s_num = sess.session_number as i32;
-                                s.subsession_types.insert(s_num, sess.session_type.clone());
-                                if !sess.track_rubber_state.is_empty() {
-                                    s.subsession_rubber_states.insert(s_num, sess.track_rubber_state.clone());
-                                }
-                            }
-                            if s.session_num >= 0 {
-                                if let Some(stype) = s.subsession_types.get(&s.session_num) {
-                                    s.session_type = format_session_type(stype);
-                                }
-                                if let Some(rstate) = s.subsession_rubber_states.get(&s.session_num) {
-                                    s.track_state = format_track_state(rstate, s.track_wetness);
-                                }
-                            } else if let Some(first_sess) = info.session.sessions.first() {
-                                s.session_type = format_session_type(&first_sess.session_type);
-                                s.track_state = format_track_state(&first_sess.track_rubber_state, s.track_wetness);
-                            } else if !info.weekend.event_type.is_empty() {
-                                s.session_type = format_session_type(&info.weekend.event_type);
-                            }
-
-                            let clean_setup = clean_setup_name(&info.drivers.setup_name);
-                            if !clean_setup.is_empty() {
-                                s.player_setup_name = clean_setup;
-                            }
-                            let effective_setup = if !s.player_setup_name.is_empty() { s.player_setup_name.clone() } else { "Baseline".to_string() };
-
-                            let player_car = info.drivers.other_drivers.iter()
-                                .find(|d| d.index == info.drivers.car_index)
-                                .or_else(|| info.drivers.other_drivers.get(info.drivers.car_index));
-
-                            if let Some(player_drv) = player_car {
-                                if !player_drv.car_screen_name.is_empty() {
-                                    s.car_name = player_drv.car_screen_name.clone();
-                                } else if !player_drv.car_screen_name_short.is_empty() {
-                                    s.car_name = player_drv.car_screen_name_short.clone();
-                                } else if !player_drv.car_path.is_empty() {
-                                    s.car_name = player_drv.car_path.clone();
-                                } else {
-                                    s.car_name = format!("Car #{}", player_drv.car_number);
-                                }
-                            }
-
-                            for d in &info.drivers.other_drivers {
-                                let idx = d.index as usize;
-                                let setup = if idx == s.player_car_idx { effective_setup.clone() } else { "Baseline".to_string() };
-                                s.drivers.entry(idx).or_insert(DriverState {
-                                    car_idx: idx,
-                                    driver_name: d.user_name.clone(),
-                                    car_num: d.car_number.to_string(),
-                                    irating: d.i_rating.to_string(),
-                                    position: 0,
-                                    is_on_pit_road: true,
-                                    is_in_world: false,
-                                    total_laps_completed: 0,
-                                    last_processed_lap: 0,
-                                    last_known_lap_time: 0.0,
-                                    setup_name: setup,
-                                    stints: Vec::new(),
-                                    historical_fuel_burn_rate: 0.0,
-                                });
-                            }
-
-                            // Backfill setup_name into player driver and any stints that were started before setup was known
-                            if effective_setup != "Baseline" {
-                                let player_idx = s.player_car_idx;
-                                if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                                    player_drv.setup_name = effective_setup.clone();
-                                    for stint in &mut player_drv.stints {
-                                        if stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline" {
-                                            stint.setup_name = effective_setup.clone();
-                                        }
-                                    }
-                                }
-                            }
+                            parse_iracing_session_yaml(&raw_yaml, &mut s);
                         }
                         ctx_clone.request_repaint();
 
@@ -1341,105 +1507,9 @@ impl WarRoomApp {
                                         // Throttled background Session YAML refresh (at most once every 2.0 seconds)
                                         if last_session_parse_time.elapsed().as_secs_f32() >= 2.0 {
                                             last_session_parse_time = std::time::Instant::now();
-                                            if let Ok(info) = conn.session_info() {
+                                            if let Some(raw_yaml) = read_raw_iracing_yaml() {
                                                 let mut s = state_clone.lock().unwrap();
-                                                if !info.weekend.track_display_name.is_empty() {
-                                                    s.track_name = info.weekend.track_display_name.clone();
-                                                }
-                                                if !info.weekend.track_length.is_empty() {
-                                                    s.track_length = info.weekend.track_length.clone();
-                                                }
-                                                if !info.weekend.track_weather.is_empty() {
-                                                    s.weather_type = info.weekend.track_weather.clone();
-                                                }
-                                                s.session_id = info.weekend.session_id;
-                                                s.player_car_idx = info.drivers.car_index;
-                                                s.player_fuel_capacity = info.drivers.fuel_capacity;
-
-                                                // Refresh subsession definitions and rubber states
-                                                for sess in &info.session.sessions {
-                                                    let s_num = sess.session_number as i32;
-                                                    s.subsession_types.insert(s_num, sess.session_type.clone());
-                                                    if !sess.track_rubber_state.is_empty() {
-                                                        s.subsession_rubber_states.insert(s_num, sess.track_rubber_state.clone());
-                                                    }
-                                                }
-                                                if s.session_num >= 0 {
-                                                    if let Some(stype) = s.subsession_types.get(&s.session_num) {
-                                                        s.session_type = format_session_type(stype);
-                                                    }
-                                                    if let Some(rstate) = s.subsession_rubber_states.get(&s.session_num) {
-                                                        s.track_state = format_track_state(rstate, s.track_wetness);
-                                                    }
-                                                } else if let Some(first_sess) = info.session.sessions.first() {
-                                                    s.session_type = format_session_type(&first_sess.session_type);
-                                                    s.track_state = format_track_state(&first_sess.track_rubber_state, s.track_wetness);
-                                                } else if !info.weekend.event_type.is_empty() {
-                                                    s.session_type = format_session_type(&info.weekend.event_type);
-                                                }
-
-                                                let clean_setup = clean_setup_name(&info.drivers.setup_name);
-                                                if !clean_setup.is_empty() {
-                                                    s.player_setup_name = clean_setup;
-                                                }
-                                                let effective_setup = if !s.player_setup_name.is_empty() { s.player_setup_name.clone() } else { "Baseline".to_string() };
-
-                                                let player_car = info.drivers.other_drivers.iter()
-                                                    .find(|d| d.index == info.drivers.car_index)
-                                                    .or_else(|| info.drivers.other_drivers.get(info.drivers.car_index));
-
-                                                if let Some(player_drv) = player_car {
-                                                    if !player_drv.car_screen_name.is_empty() {
-                                                        s.car_name = player_drv.car_screen_name.clone();
-                                                    } else if !player_drv.car_screen_name_short.is_empty() {
-                                                        s.car_name = player_drv.car_screen_name_short.clone();
-                                                    } else if !player_drv.car_path.is_empty() {
-                                                        s.car_name = player_drv.car_path.clone();
-                                                    } else {
-                                                        s.car_name = format!("Car #{}", player_drv.car_number);
-                                                    }
-                                                }
-
-                                                let player_idx = s.player_car_idx;
-                                                for d in &info.drivers.other_drivers {
-                                                    let idx = d.index as usize;
-                                                    let setup = if idx == player_idx { effective_setup.clone() } else { "Baseline".to_string() };
-                                                    let setup_clone = effective_setup.clone();
-                                                    s.drivers.entry(idx).and_modify(|target| {
-                                                        target.driver_name = d.user_name.clone();
-                                                        target.car_num = d.car_number.to_string();
-                                                        target.irating = d.i_rating.to_string();
-                                                        if idx == player_idx && setup_clone != "Baseline" {
-                                                            target.setup_name = setup_clone;
-                                                        }
-                                                    }).or_insert(DriverState {
-                                                        car_idx: idx,
-                                                        driver_name: d.user_name.clone(),
-                                                        car_num: d.car_number.to_string(),
-                                                        irating: d.i_rating.to_string(),
-                                                        position: 0,
-                                                        is_on_pit_road: true,
-                                                        is_in_world: false,
-                                                        total_laps_completed: 0,
-                                                        last_processed_lap: 0,
-                                                        last_known_lap_time: 0.0,
-                                                        setup_name: setup,
-                                                        stints: Vec::new(),
-                                                        historical_fuel_burn_rate: 0.0,
-                                                    });
-                                                }
-
-                                                // Backfill setup_name into player driver and any stints that were started before setup was known
-                                                if effective_setup != "Baseline" {
-                                                    if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                                                        player_drv.setup_name = effective_setup.clone();
-                                                        for stint in &mut player_drv.stints {
-                                                            if stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline" {
-                                                                stint.setup_name = effective_setup.clone();
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                                parse_iracing_session_yaml(&raw_yaml, &mut s);
                                             }
                                         }
 
@@ -5176,6 +5246,96 @@ mod tests {
         assert_eq!(clean_setup_name("baseline"), "baseline");
         assert_eq!(clean_setup_name(""), "");
         assert_eq!(clean_setup_name("—"), "");
+    }
+
+    #[test]
+    fn test_parse_iracing_session_yaml_resilient() {
+        // Test sample YAML containing 'ResultsPositions: ~' which causes iracing-0.4.1 to crash
+        let sample_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Atlanta Motor Speedway - Oval"
+  TrackLength: "1.54 mi"
+  TrackWeatherType: "Realistic"
+  TrackAirTemp: "72.4 F"
+  TrackSurfaceTemp: "85.1 F"
+  TrackWindVel: "5.2 mph"
+  TrackWindDir: "1.23 rad"
+  WeekendOptions:
+    WindDirection: "NW"
+    RelativeHumidity: "45%"
+  SessionID: 1234567
+
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Practice"
+      SessionTrackRubberState: "Moderately Grooved"
+      ResultsPositions: ~
+    - SessionNum: 1
+      SessionType: "Race"
+      SessionTrackRubberState: "Heavily Grooved"
+      ResultsPositions: ~
+
+DriverInfo:
+  DriverCarIdx: 1
+  DriverCarFuelMaxLtr: 120.0
+  DriverSetupName: "mustanggt3/Atlanta_Race_v2.sto"
+  Drivers:
+    - CarIdx: 0
+      UserName: "Pace Car"
+      CarNumber: "0"
+      IRating: 0
+    - CarIdx: 1
+      UserName: "PB Henry"
+      CarNumber: "95"
+      IRating: 2450
+      CarScreenName: "Ford Mustang GT3"
+    - CarIdx: 2
+      UserName: "Ben Tracy"
+      CarNumber: 33
+      IRating: 1980
+      CarScreenName: "BMW M4 GT3"
+"#;
+
+        let mut state = WarRoomState::default();
+        let success = parse_iracing_session_yaml(sample_yaml, &mut state);
+        assert!(success, "parse_iracing_session_yaml should succeed with unit ResultsPositions: ~");
+
+        // Verify Weekend & Session Info
+        assert_eq!(state.track_name, "Atlanta Motor Speedway - Oval");
+        assert_eq!(state.track_length, "1.54 mi");
+        assert_eq!(state.weather_type, "Realistic");
+        assert_eq!(state.air_temp_raw, "72.4 F");
+        assert_eq!(state.track_temp_raw, "85.1 F");
+        assert_eq!(state.wind_speed_raw, "5.2 mph");
+        assert_eq!(state.wind_dir_raw, "NW");
+        assert_eq!(state.relative_humidity_raw, "45%");
+        assert_eq!(state.session_id, 1234567);
+
+        // Verify Subsessions
+        assert_eq!(state.subsession_types.get(&0).unwrap(), "Practice");
+        assert_eq!(state.subsession_types.get(&1).unwrap(), "Race");
+
+        // Verify Driver & Setup
+        assert_eq!(state.player_car_idx, 1);
+        assert_eq!(state.car_name, "Ford Mustang GT3");
+        assert_eq!(state.player_setup_name, "Atlanta_Race_v2");
+        assert_eq!(state.player_fuel_capacity, 120.0);
+
+        // Verify Driver Registry
+        assert!(state.drivers.contains_key(&1));
+        let pb = state.drivers.get(&1).unwrap();
+        assert_eq!(pb.driver_name, "PB Henry");
+        assert_eq!(pb.car_num, "95");
+        assert_eq!(pb.irating, "2450");
+        assert_eq!(pb.setup_name, "Atlanta_Race_v2");
+
+        assert!(state.drivers.contains_key(&2));
+        let ben = state.drivers.get(&2).unwrap();
+        assert_eq!(ben.driver_name, "Ben Tracy");
+        assert_eq!(ben.car_num, "33");
+        assert_eq!(ben.irating, "1980");
+        assert_eq!(ben.setup_name, "Baseline");
     }
 }
 
