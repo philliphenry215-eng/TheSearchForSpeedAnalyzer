@@ -5,6 +5,15 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.2.1] — 2026-10-20
+
+### Fixed & Improved
+* **Tire Temps & Wear Single-Line Fix:** Widened Column 3 (`345px` min), reduced button padding, and enforced non-breaking single-line layout (`.wrap(false)`) so tire temperatures and wear percentages (`100% · 100% · 100%`) never wrap onto multiple rows.
+* **15.5pt In-Car Overlay Sub-Labels:** Increased overlay secondary font size to bold 15.5pt for effortless glanceability from your sim cockpit.
+* **Trimmed Bottom HUD Space:** Eliminated ~40px of bottom dead space in the in-car overlay, creating clean, uniform 8px borders around all cards without any empty space.
+
+---
+
 ## [0.2.0] — 2026-10-20
 
 ### Added

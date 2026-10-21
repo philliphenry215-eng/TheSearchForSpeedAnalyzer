@@ -3558,18 +3558,18 @@ fn render_tire_corner_card(
 
     let temp_str = if data.temp_m > 1.0 {
         if use_metric {
-            format!("{:.0}° · {:.0}° · {:.0}°C", data.temp_l, data.temp_m, data.temp_r)
+            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°C", data.temp_l, data.temp_m, data.temp_r)
         } else {
-            format!("{:.0}° · {:.0}° · {:.0}°F", data.temp_l * 1.8 + 32.0, data.temp_m * 1.8 + 32.0, data.temp_r * 1.8 + 32.0)
+            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°F", data.temp_l * 1.8 + 32.0, data.temp_m * 1.8 + 32.0, data.temp_r * 1.8 + 32.0)
         }
     } else {
-        "— · — · —".to_string()
+        "—\u{00A0}·\u{00A0}—\u{00A0}·\u{00A0}—".to_string()
     };
 
     let wear_str = if data.wear_m > 0.01 {
-        format!("{:.0}% · {:.0}% · {:.0}%", data.wear_l, data.wear_m, data.wear_r)
+        format!("{:.0}%\u{00A0}·\u{00A0}{:.0}%\u{00A0}·\u{00A0}{:.0}%", data.wear_l, data.wear_m, data.wear_r)
     } else {
-        "—% · —% · —%".to_string()
+        "—%\u{00A0}·\u{00A0}—%\u{00A0}·\u{00A0}—%".to_string()
     };
 
     let zone_label = if corner_title.contains("LEFT") || corner_title.starts_with("LF") || corner_title.starts_with("LR") {
@@ -3588,8 +3588,9 @@ fn render_tire_corner_card(
         .fill(egui::Color32::from_rgb(25, 29, 38))
         .stroke(egui::Stroke::new(1.0, card_border))
         .rounding(egui::Rounding::same(10.0))
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .inner_margin(egui::Margin::symmetric(8.0, 7.0))
         .show(ui, |ui| {
+            ui.spacing_mut().button_padding = egui::vec2(2.0, 2.0);
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(corner_title).color(white).size(12.5).strong());
@@ -3600,20 +3601,30 @@ fn render_tire_corner_card(
                     ui.label(egui::RichText::new(press_str).color(muted).size(11.5));
                 });
             });
-            ui.add_space(6.0);
+            ui.add_space(5.0);
 
             ui.label(egui::RichText::new(format!("TEMPS ({})", zone_label)).color(muted).size(9.5).extra_letter_spacing(0.4));
-            let temp_resp = ui.selectable_label(false, egui::RichText::new(&temp_str).color(white).size(12.0).strong());
+            let temp_resp = ui.add(
+                egui::Button::new(egui::RichText::new(&temp_str).color(white).size(12.0).strong())
+                    .fill(egui::Color32::TRANSPARENT)
+                    .frame(false)
+                    .wrap(false)
+            );
             if temp_resp.clicked() && data.temp_m > 1.0 {
                 let tsv = format_single_tire_temps_tsv(data, use_metric);
                 ui.output_mut(|o| o.copied_text = tsv);
             }
             temp_resp.on_hover_text("Click to copy temperatures for Excel");
 
-            ui.add_space(4.0);
+            ui.add_space(3.0);
 
             ui.label(egui::RichText::new(format!("WEAR ({})", zone_label)).color(muted).size(9.5).extra_letter_spacing(0.4));
-            let wear_resp = ui.selectable_label(false, egui::RichText::new(&wear_str).color(wear_color).size(12.0).strong());
+            let wear_resp = ui.add(
+                egui::Button::new(egui::RichText::new(&wear_str).color(wear_color).size(12.0).strong())
+                    .fill(egui::Color32::TRANSPARENT)
+                    .frame(false)
+                    .wrap(false)
+            );
             if wear_resp.clicked() && data.wear_m > 0.01 {
                 let tsv = format_single_tire_wear_tsv(data);
                 ui.output_mut(|o| o.copied_text = tsv);
@@ -4165,9 +4176,9 @@ impl WarRoomApp {
         let total_avail_w = ui.available_width();
         let total_avail_h = ui.available_height();
 
-        let col1_w = (total_avail_w * 0.22).clamp(240.0, 290.0);
-        let col3_w = (total_avail_w * 0.29).clamp(290.0, 350.0);
-        let col2_w = (total_avail_w - col1_w - col3_w - 24.0).max(320.0);
+        let col1_w = (total_avail_w * 0.21).clamp(240.0, 280.0);
+        let col3_w = (total_avail_w * 0.33).clamp(345.0, 420.0);
+        let col2_w = (total_avail_w - col1_w - col3_w - 24.0).max(300.0);
 
         let card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10));
 
@@ -5364,31 +5375,31 @@ impl WarRoomApp {
         let mut base_h = 16.0;
         let mut count = 0;
         if show_pace {
-            base_h += 80.0;
+            base_h += 77.0;
             count += 1;
         }
         if show_fuel {
-            base_h += 80.0;
+            base_h += 77.0;
             count += 1;
         }
         if show_rc {
-            base_h += 34.0;
+            base_h += 29.0;
             count += 1;
         }
         if count > 1 {
-            base_h += (count - 1) as f32 * 6.0;
+            base_h += (count - 1) as f32 * 5.0;
         }
-        // Generous bottom cushion so card borders, padding, and text descenders never clip
-        base_h += 26.0;
+        // Minimal clean buffer for border stroke (4px) - eliminates dead void at bottom
+        base_h += 4.0;
 
         let target_height = (base_h * scale).round();
-        let target_width = (585.0 * scale).round();
+        let target_width = (595.0 * scale).round();
 
         let hdr_font_size = (11.5 * scale).round();
-        let hero_font_size = (21.5 * scale).round();
-        let sub_font_size = (13.0 * scale).round();
-        let rc_font_size = (13.5 * scale).round();
-        let card_padding_y = (7.0 * scale).max(4.0);
+        let hero_font_size = (22.0 * scale).round();
+        let sub_font_size = (15.5 * scale).round();
+        let rc_font_size = (14.0 * scale).round();
+        let card_padding_y = (6.0 * scale).max(4.0);
         let card_padding_x = (10.0 * scale).max(6.0);
 
         let vp_id = egui::ViewportId::from_hash_of("s4s_floating_overlay_hud");
@@ -5606,7 +5617,7 @@ impl WarRoomApp {
                         egui::Frame::none()
                             .fill(card_fill)
                             .rounding(8.0)
-                            .inner_margin(egui::Margin::symmetric(card_padding_x, (6.0 * scale).max(4.0)))
+                            .inner_margin(egui::Margin::symmetric(card_padding_x, (5.0 * scale).max(3.0)))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 8.0 * scale;

@@ -1,3 +1,12 @@
+# The Search For Speed Analyzer — v0.2.1
+
+### 🛠️ UI Refinements & Styling Fixes:
+* **Tire Wear & Temps Line Wrapping Fix:** Widened Column 3 (`345px` min), reduced button padding, and enforced non-breaking single-line layout (`.wrap(false)`) so 3-digit tire temperatures and wear percentages (`100% · 100% · 100%`) never wrap onto multiple rows.
+* **15.5pt In-Car Overlay Sub-Labels:** Increased overlay secondary font size to bold 15.5pt for effortless glanceability from your sim cockpit.
+* **Trimmed Bottom HUD Space:** Eliminated ~40px of bottom void in the in-car overlay, creating clean, symmetrical 8px borders around all cards without any empty space.
+
+---
+
 # The Search For Speed Analyzer — v0.2.0
 
 ### 🏁 Customizable In-Car Overlay & Fuel Sizing:
