@@ -5,6 +5,38 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.2.0] — 2026-10-20
+
+### Added
+* **Customizable In-Car Overlay System:**
+  * Modular section visibility toggles in Settings: independently show or hide `Pace & Stint`, `Fuel & Strategy`, and `Race Control & Flags`.
+  * **Primary Fuel Stat Focus:** Choose between **Fuel in Tank (Gallons / Liters)** as the primary large hero metric or **Laps to Empty**.
+  * **HUD Scale Slider:** Smooth scaling from **75% to 150%** for single-screen, triple-monitor, ultrawide, and VR rigs.
+  * **Live HUD Preview:** Toggle overlay preview in Settings to position and scale without needing to be on track.
+* **Enhanced In-Car Legibility:**
+  * Enlarged sub-labels to 13pt and header labels to 11.5pt with display hero font (21.5pt) for rapid glanceability at speed.
+  * Tightened row spacing for authentic cockpit digital dash appearance.
+  * Adaptive window height with generous buffer ensuring zero clipping across all screen resolutions and scales.
+
+---
+
+## [0.1.4] — 2026-10-20
+* Instant first-frame telemetry attach on Lap 0 pit exit and mid-run session join.
+* Compact, centered 580x620 "What's New" release notes modal with smart word wrapping.
+
+## [0.1.3] — 2026-10-19
+* Direct shared-memory YAML parser for resilient driver names, car numbers, and iRatings.
+* Seamless 1-click in-app background auto-updater with in-place restart.
+
+## [0.1.2] — 2026-10-19
+* Background downloading with real-time progress bar.
+
+## [0.1.1] — 2026-10-19
+* Session phase isolation (Practice ➔ Qualify ➔ Race) with clean stint and lap resets.
+* Stint 1 setup name detection and baseline fallbacks.
+
+---
+
 ## [0.1.0] — 2026-10-18 (Official Production Baseline)
 
 ### 🏁 What is The Search For Speed Analyzer?

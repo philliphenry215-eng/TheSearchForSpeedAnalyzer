@@ -52,6 +52,19 @@ fn default_true() -> bool { true }
 fn default_false() -> bool { false }
 fn default_margin_laps() -> f32 { 1.0 }
 fn default_opacity() -> f32 { 0.88 }
+fn default_hud_scale() -> f32 { 1.0 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FuelHeroMetric {
+    FuelAmount,  // Fuel level in tank (gallons / liters) is primary
+    LapsToEmpty, // Laps remaining is primary
+}
+
+impl Default for FuelHeroMetric {
+    fn default() -> Self {
+        Self::FuelAmount
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateSettings {
@@ -83,8 +96,21 @@ pub struct OverlaySettings {
     pub always_on_top: bool,
     #[serde(default = "default_margin_laps")]
     pub safety_margin_laps: f32,
+    #[serde(default = "default_true")]
+    pub show_pace_card: bool,
+    #[serde(default = "default_true")]
+    pub show_fuel_card: bool,
+    #[serde(default = "default_true")]
+    pub show_race_control_card: bool,
+    #[serde(default)]
+    pub fuel_hero_metric: FuelHeroMetric,
+    #[serde(default = "default_hud_scale")]
+    pub hud_scale: f32,
+    #[serde(default = "default_true")]
     pub show_weather: bool,
+    #[serde(default = "default_true")]
     pub show_fastest: bool,
+    #[serde(default = "default_true")]
     pub show_averages: bool,
     #[serde(default)]
     pub position: Option<[f32; 2]>,
@@ -98,6 +124,11 @@ impl Default for OverlaySettings {
             opacity: 0.88,
             always_on_top: true,
             safety_margin_laps: 1.0,
+            show_pace_card: true,
+            show_fuel_card: true,
+            show_race_control_card: true,
+            fuel_hero_metric: FuelHeroMetric::FuelAmount,
+            hud_scale: 1.0,
             show_weather: true,
             show_fastest: true,
             show_averages: true,

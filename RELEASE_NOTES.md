@@ -1,3 +1,21 @@
+# The Search For Speed Analyzer — v0.2.0
+
+### 🏁 Customizable In-Car Overlay & Fuel Sizing:
+* **Primary Fuel Stat Focus:** You can now choose what takes center stage in the HUD fuel box! Set your prominent hero figure to **Fuel in Tank (Gallons / Liters)** with large display typography in vibrant accent color, or keep **Laps to Empty** as primary with raw fuel underneath.
+* **Modular Section Visibility:** Customize your HUD footprint with independent show/hide toggles in Settings for:
+  * **Pace & Stint:** Stint/lap counters, your last/best lap, leader/P2 lap, and live delta.
+  * **Fuel & Strategy:** Tank fuel level, laps of fuel, target pit lap, burn rate, and fuel to add on F4.
+  * **Race Control & Flags:** Incidents (`X/17x`), caution laps, and session flag indicators.
+* **Global HUD Scale Slider:** Scale the entire HUD seamlessly between **75% and 150%** to match single-screen, triple-monitor, ultrawide, or VR sim rigs.
+* **Live HUD Preview Mode:** Added a "Show HUD Preview" toggle in Settings to position, scale, and preview your overlay anywhere on your monitors without needing to be in an active iRacing session.
+
+### 🔍 Enhanced In-Car Legibility:
+* **Enlarged Secondary & Header Fonts:** Sub-labels (laps left, averages, fuel burn rate, pit window) have been bumped to a crisp, high-visibility 13pt font for instant readability in milliseconds at race pace.
+* **Motorsport-Grade Spacing:** Tightened internal column item spacing for an authentic, compact MoTeC/Bosch digital dash appearance with zero wasted vertical space.
+* **Zero Cutoff Layout:** Window dimensions automatically resize based on visible modules and scale with generous bottom cushioning so no text, cards, or rounded borders ever clip.
+
+---
+
 # The Search For Speed Analyzer — v0.1.4
 
 ### 🏎️ Instant First-Frame Telemetry & Mid-Run Attach:
