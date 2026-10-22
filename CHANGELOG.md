@@ -5,6 +5,18 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.2.2] — 2026-10-21
+
+### Fixed & Improved
+* **Tire Data Garage Synchronization:** Integrated direct extraction of iRacing's definitive garage tire data (`CarSetup`) from the session string, guaranteeing exact 1-to-1 matches with the in-game iRacing garage screen for last hot pressures, carcass temperatures, and tread wear percentages.
+* **Tire Orientation Correction (Left vs. Right):** Resolved inverted left-side tire ordering. Left Front (LF) and Left Rear (LR) now correctly display in canonical Outer-Middle-Inner (`O·M·I`) order, matching iRacing garage telemetry (`164° · 187° · 194°F` and `100% · 86% · 86%`), while Right Front (RF) and Right Rear (RR) remain Inner-Middle-Outer (`I·M·O`).
+* **Zero Estimation Policy:** Completely eliminated ideal gas law math and pressure estimation formulas. Stint tires now exclusively report ground-truth telemetry values directly measured by iRacing.
+* **Accurate Pit Stall Latching:** Prevented premature tire latching at the pit entry line while moving at speed. Stint tires are now latched when stationary in the pit stall following crew service or upon returning to the garage.
+* **Isolated Stint Data:** Removed unserviced stint fallback to previous runs. Stints without pit tire service (such as 1-lap runs or drive-throughs) now cleanly display empty dashes (`"—% · —% · —%"`, `"— psi"`) with clear `"NO PIT SERVICE"` indicators instead of showing wear from another stint.
+* **Excel TSV Export Alignment:** Updated all clipboard export functions ("Copy Temps", "Copy Wear", "Copy 4-Tire Table") to respect tire orientation conventions for seamless analysis in spreadsheets.
+
+---
+
 ## [0.2.1] — 2026-10-20
 
 ### Fixed & Improved

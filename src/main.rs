@@ -915,7 +915,6 @@ impl WarRoomState {
 
         let mut state_changed = transition_detected || caution_just_started || green_just_started;
         let mut pending_logs = Vec::new();
-        let mut player_pit_tire_sample: Option<StintTireSet> = None;
         let player_idx = self.player_car_idx;
         let player_setup_snapshot = self.player_setup_name.clone();
         let track_temp_snapshot = self.track_temp_raw.clone();
@@ -1275,21 +1274,7 @@ impl WarRoomState {
                         pending_logs.push(format!("[ABORTED RUN] Stint S{} had 0 completed laps; discarded to prevent empty stint line.", stint_num));
                     }
                 } else if stint_num > 0 && idx == player_idx {
-                    if let Some(live) = live_sample {
-                        let prev_hot = driver.stints.last().map(|st| &st.tires);
-                        let sample_tires = read_player_tires(live, prev_hot);
-                        if sample_tires.is_valid() {
-                            if let Some(closed_stint) = driver.stints.last_mut() {
-                                closed_stint.tires = sample_tires.clone();
-                            }
-                            player_pit_tire_sample = Some(sample_tires);
-                            pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed ({} Laps) · Tire Data Recorded!", stint_num, completed_laps));
-                        } else {
-                            pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed (Total {} Laps)", stint_num, completed_laps));
-                        }
-                    } else {
-                        pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed (Total {} Laps)", stint_num, completed_laps));
-                    }
+                    pending_logs.push(format!("[PIT ENTRY] Stint S{} Closed (Total {} Laps) · Awaiting Pit Stop Service", stint_num, completed_laps));
                 }
 
                 if is_race_green {
@@ -1508,13 +1493,14 @@ impl WarRoomState {
             self.had_caution_since_last_green = false;
         }
 
-        if let Some(sample) = player_pit_tire_sample {
-            self.latest_tire_data = sample;
-        }
+        // Continuous Pit Stall / Garage Tire Capture for Player (only after completed laps)
+        // Latch tire wear & temperatures when the car is stationary in the pit stall or in the garage
+        let is_in_stall_or_garage = frame.surfaces.get(player_idx).map_or(false, |&s| s == 2)
+            || (self.debug_on_pit_road && self.debug_speed < 2.0)
+            || !self.debug_is_on_track
+            || !self.player_is_in_car;
 
-        // Continuous Pit / Garage Tire Capture for Player (only after completed laps)
-        let is_in_pit_or_garage = self.debug_on_pit_road || self.debug_track_surface == 2 || !self.debug_is_on_track;
-        if is_in_pit_or_garage {
+        if is_in_stall_or_garage {
             if let Some(live) = live_sample {
                 let player_drv_opt = self.drivers.get(&player_idx);
                 let has_completed_laps = player_drv_opt.and_then(|d| d.stints.last()).map_or(false, |st| st.laps_completed > 0);
@@ -1526,7 +1512,7 @@ impl WarRoomState {
                         self.latest_tire_data = pit_tires.clone();
                         if let Some(player_drv) = self.drivers.get_mut(&player_idx) {
                             if let Some(last_stint) = player_drv.stints.last_mut() {
-                                if !last_stint.tires.has_data {
+                                if !last_stint.is_active {
                                     last_stint.tires = pit_tires;
                                     state_changed = true;
                                 }
@@ -2108,7 +2094,195 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
         }
     }
 
+    // 3. Extract definitive garage tire measurements from CarSetup (exact match to iRacing garage screen)
+    if let Some(car_setup) = root.get("CarSetup") {
+        if let Some(garage_tires) = parse_car_setup_tires(car_setup) {
+            if garage_tires.is_valid() {
+                s.latest_tire_data = garage_tires.clone();
+                if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+                    if let Some(last_stint) = player_drv.stints.last_mut() {
+                        if !last_stint.is_active && last_stint.laps_completed > 0 {
+                            last_stint.tires = garage_tires;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     true
+}
+
+pub fn parse_pressure_str_to_kpa(raw: &str) -> f32 {
+    let clean = raw.trim();
+    if clean.is_empty() || clean == "—" {
+        return 0.0;
+    }
+    let mut num_end = 0;
+    for (i, c) in clean.char_indices() {
+        if c.is_ascii_digit() || c == '.' || c == '-' || c == '+' {
+            num_end = i + c.len_utf8();
+        } else if num_end > 0 && !c.is_whitespace() {
+            break;
+        }
+    }
+    if num_end == 0 {
+        return 0.0;
+    }
+    let num = clean[..num_end].trim().parse::<f32>().unwrap_or(0.0);
+    let unit = clean[num_end..].trim().to_lowercase();
+    if unit.contains("psi") {
+        num / 0.14503774
+    } else if unit.contains("bar") {
+        num * 100.0
+    } else {
+        num
+    }
+}
+
+pub fn parse_three_floats(raw: &str) -> Option<[f32; 3]> {
+    let mut vals = Vec::new();
+    for token in raw.split(|c: char| c == ',' || c == ';' || c == '/' || c == '·' || c.is_whitespace()) {
+        let clean = token.trim()
+            .trim_end_matches('%')
+            .trim_end_matches('F')
+            .trim_end_matches('f')
+            .trim_end_matches('C')
+            .trim_end_matches('c')
+            .trim_end_matches('°');
+        if !clean.is_empty() {
+            if let Ok(v) = clean.parse::<f32>() {
+                vals.push(v);
+            }
+        }
+    }
+    if vals.len() == 3 {
+        Some([vals[0], vals[1], vals[2]])
+    } else {
+        None
+    }
+}
+
+fn find_setup_corner<'a>(root: &'a serde_yaml::Value, corner_keys: &[&str]) -> Option<&'a serde_yaml::Value> {
+    for parent in &["Tires", "TiresAero", "Chassis", "Suspension"] {
+        if let Some(p) = root.get(*parent) {
+            for key in corner_keys {
+                if let Some(c) = p.get(*key) {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    for key in corner_keys {
+        if let Some(c) = root.get(*key) {
+            return Some(c);
+        }
+    }
+    if let Some(map) = root.as_mapping() {
+        for (_k, v) in map {
+            for key in corner_keys {
+                if let Some(c) = v.get(*key) {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_corner_yaml(corner_val: &serde_yaml::Value, is_left: bool) -> Option<TireCornerData> {
+    if !corner_val.is_mapping() {
+        return None;
+    }
+
+    let p_str = corner_val.get("LastHotPressure").and_then(|v| v.as_str())
+        .or_else(|| corner_val.get("Last Hot Pressure").and_then(|v| v.as_str()))
+        .or_else(|| corner_val.get("LastPressure").and_then(|v| v.as_str()))
+        .or_else(|| corner_val.get("HotPressure").and_then(|v| v.as_str()))
+        .or_else(|| corner_val.get("Hot Pressure").and_then(|v| v.as_str()));
+    let pressure = p_str.map(parse_pressure_str_to_kpa).unwrap_or(0.0);
+
+    let temps_str = if is_left {
+        corner_val.get("LastTempsOMI").and_then(|v| v.as_str())
+            .or_else(|| corner_val.get("Last Temps OMI").and_then(|v| v.as_str()))
+            .or_else(|| corner_val.get("TempsOMI").and_then(|v| v.as_str()))
+            .or_else(|| corner_val.get("LastTemps").and_then(|v| v.as_str()))
+            .or_else(|| corner_val.get("Temps").and_then(|v| v.as_str()))
+    } else {
+        corner_val.get("LastTempsIMO").and_then(|v| v.as_str())
+            .or_else(|| corner_val.get("Last Temps IMO").and_then(|v| v.as_str()))
+            .or_else(|| corner_val.get("TempsIMO").and_then(|v| v.as_str()))
+            .or_else(|| corner_val.get("LastTemps").and_then(|v| v.as_str()))
+            .or_else(|| corner_val.get("Temps").and_then(|v| v.as_str()))
+    };
+
+    let is_fahrenheit = temps_str.map_or(false, |s| s.contains('F') || s.contains('f'));
+    let parsed_temps = temps_str.and_then(parse_three_floats);
+
+    let (temp_l, temp_m, temp_r) = if let Some(mut t) = parsed_temps {
+        if is_fahrenheit || t[0] > 120.0 || t[1] > 120.0 || t[2] > 120.0 {
+            t[0] = (t[0] - 32.0) / 1.8;
+            t[1] = (t[1] - 32.0) / 1.8;
+            t[2] = (t[2] - 32.0) / 1.8;
+        }
+        if is_left {
+            // OMI: t[0] is Outer (temp_r), t[1] is Middle (temp_m), t[2] is Inner (temp_l)
+            (t[2], t[1], t[0])
+        } else {
+            // IMO: t[0] is Inner (temp_l), t[1] is Middle (temp_m), t[2] is Outer (temp_r)
+            (t[0], t[1], t[2])
+        }
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    let tread_str = corner_val.get("TreadRemaining").and_then(|v| v.as_str())
+        .or_else(|| corner_val.get("Tread Remaining").and_then(|v| v.as_str()))
+        .or_else(|| corner_val.get("Wear").and_then(|v| v.as_str()));
+    let parsed_wear = tread_str.and_then(parse_three_floats);
+
+    let (wear_l, wear_m, wear_r) = if let Some(w) = parsed_wear {
+        if is_left {
+            // OMI: w[0] is Outer (wear_r), w[1] is Middle (wear_m), w[2] is Inner (wear_l)
+            (w[2], w[1], w[0])
+        } else {
+            // IMO: w[0] is Inner (wear_l), w[1] is Middle (wear_m), w[2] is Outer (wear_r)
+            (w[0], w[1], w[2])
+        }
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    Some(TireCornerData {
+        temp_l,
+        temp_m,
+        temp_r,
+        wear_l,
+        wear_m,
+        wear_r,
+        pressure,
+    })
+}
+
+pub fn parse_car_setup_tires(car_setup: &serde_yaml::Value) -> Option<StintTireSet> {
+    let lf_node = find_setup_corner(car_setup, &["LeftFront", "Left Front", "LF"])?;
+    let rf_node = find_setup_corner(car_setup, &["RightFront", "Right Front", "RF"])?;
+    let lr_node = find_setup_corner(car_setup, &["LeftRear", "Left Rear", "LR"])?;
+    let rr_node = find_setup_corner(car_setup, &["RightRear", "Right Rear", "RR"])?;
+
+    let lf = parse_corner_yaml(lf_node, true)?;
+    let rf = parse_corner_yaml(rf_node, false)?;
+    let lr = parse_corner_yaml(lr_node, true)?;
+    let rr = parse_corner_yaml(rr_node, false)?;
+
+    let has_data = lf.temp_m > 5.0 || rf.temp_m > 5.0 || lf.wear_m > 0.1 || rf.wear_m > 0.1 || lf.pressure > 1.0;
+    Some(StintTireSet {
+        lf,
+        rf,
+        lr,
+        rr,
+        has_data,
+    })
 }
 
 fn convert_unit(val: &str, to_metric: bool) -> String {
@@ -2243,32 +2417,14 @@ fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option<&St
         if w > 0.0 && w <= 1.0 { w * 100.0 } else { w.max(0.0) }
     };
 
-    let calc_hot_pressure = |p_live: f32, p_cold: f32, t_l: f32, t_m: f32, t_r: f32, prev_p: f32, k_factor: f32| -> f32 {
-        if prev_p > 1.0 {
-            return prev_p;
-        }
+    let resolve_pressure = |p_live: f32, prev_p: f32| -> f32 {
         if p_live > 1.0 {
-            return p_live;
+            p_live
+        } else if prev_p > 1.0 {
+            prev_p
+        } else {
+            0.0
         }
-        if p_cold > 1.0 {
-            let avg_t = if t_m > 1.0 { (t_l + t_m + t_r) / 3.0 } else { 21.1 };
-            if avg_t > 22.0 {
-                // iRacing tire physics: Pressure is gauge pressure (P_abs = P_gauge + P_atm).
-                // Atmospheric pressure = 101.325 kPa (~14.696 PSI).
-                // Internal cavity gas temp delta: ~46% on low-load left side, ~53.5% on high-load right side.
-                let p_atm = 101.325; // kPa
-                let t_cold_k = 21.1 + 273.15; // 294.25 K
-                let delta_t_air = k_factor * (avg_t - 21.1);
-                let t_hot_k = 21.1 + delta_t_air + 273.15;
-                
-                let p_cold_abs = p_cold + p_atm;
-                let p_hot_abs = p_cold_abs * (t_hot_k / t_cold_k);
-                let p_hot_gauge = (p_hot_abs - p_atm).max(p_cold);
-                return p_hot_gauge;
-            }
-            return p_cold;
-        }
-        0.0
     };
 
     let prev_lf = previous_hot.map(|p| p.lf.pressure).unwrap_or(0.0);
@@ -2276,72 +2432,44 @@ fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option<&St
     let prev_lr = previous_hot.map(|p| p.lr.pressure).unwrap_or(0.0);
     let prev_rr = previous_hot.map(|p| p.rr.pressure).unwrap_or(0.0);
 
-    let lf_tl = get_sample_f32(live, "LFtempCL");
-    let lf_tm = get_sample_f32(live, "LFtempCM");
-    let lf_tr = get_sample_f32(live, "LFtempCR");
-    let lf_p_live = get_sample_f32(live, "LFpressure");
-    let lf_p_cold = get_sample_f32(live, "LFcoldPressure");
-    let lf_p = calc_hot_pressure(lf_p_live, lf_p_cold, lf_tl, lf_tm, lf_tr, prev_lf, 0.460);
-
     let lf = TireCornerData {
-        temp_l: lf_tl,
-        temp_m: lf_tm,
-        temp_r: lf_tr,
+        temp_l: get_sample_f32(live, "LFtempCL"),
+        temp_m: get_sample_f32(live, "LFtempCM"),
+        temp_r: get_sample_f32(live, "LFtempCR"),
         wear_l: to_wear(get_sample_f32(live, "LFwearL")),
         wear_m: to_wear(get_sample_f32(live, "LFwearM")),
         wear_r: to_wear(get_sample_f32(live, "LFwearR")),
-        pressure: lf_p,
+        pressure: resolve_pressure(get_sample_f32(live, "LFpressure"), prev_lf),
     };
 
-    let rf_tl = get_sample_f32(live, "RFtempCL");
-    let rf_tm = get_sample_f32(live, "RFtempCM");
-    let rf_tr = get_sample_f32(live, "RFtempCR");
-    let rf_p_live = get_sample_f32(live, "RFpressure");
-    let rf_p_cold = get_sample_f32(live, "RFcoldPressure");
-    let rf_p = calc_hot_pressure(rf_p_live, rf_p_cold, rf_tl, rf_tm, rf_tr, prev_rf, 0.515);
-
     let rf = TireCornerData {
-        temp_l: rf_tl,
-        temp_m: rf_tm,
-        temp_r: rf_tr,
+        temp_l: get_sample_f32(live, "RFtempCL"),
+        temp_m: get_sample_f32(live, "RFtempCM"),
+        temp_r: get_sample_f32(live, "RFtempCR"),
         wear_l: to_wear(get_sample_f32(live, "RFwearL")),
         wear_m: to_wear(get_sample_f32(live, "RFwearM")),
         wear_r: to_wear(get_sample_f32(live, "RFwearR")),
-        pressure: rf_p,
+        pressure: resolve_pressure(get_sample_f32(live, "RFpressure"), prev_rf),
     };
 
-    let lr_tl = get_sample_f32(live, "LRtempCL");
-    let lr_tm = get_sample_f32(live, "LRtempCM");
-    let lr_tr = get_sample_f32(live, "LRtempCR");
-    let lr_p_live = get_sample_f32(live, "LRpressure");
-    let lr_p_cold = get_sample_f32(live, "LRcoldPressure");
-    let lr_p = calc_hot_pressure(lr_p_live, lr_p_cold, lr_tl, lr_tm, lr_tr, prev_lr, 0.470);
-
     let lr = TireCornerData {
-        temp_l: lr_tl,
-        temp_m: lr_tm,
-        temp_r: lr_tr,
+        temp_l: get_sample_f32(live, "LRtempCL"),
+        temp_m: get_sample_f32(live, "LRtempCM"),
+        temp_r: get_sample_f32(live, "LRtempCR"),
         wear_l: to_wear(get_sample_f32(live, "LRwearL")),
         wear_m: to_wear(get_sample_f32(live, "LRwearM")),
         wear_r: to_wear(get_sample_f32(live, "LRwearR")),
-        pressure: lr_p,
+        pressure: resolve_pressure(get_sample_f32(live, "LRpressure"), prev_lr),
     };
 
-    let rr_tl = get_sample_f32(live, "RRtempCL");
-    let rr_tm = get_sample_f32(live, "RRtempCM");
-    let rr_tr = get_sample_f32(live, "RRtempCR");
-    let rr_p_live = get_sample_f32(live, "RRpressure");
-    let rr_p_cold = get_sample_f32(live, "RRcoldPressure");
-    let rr_p = calc_hot_pressure(rr_p_live, rr_p_cold, rr_tl, rr_tm, rr_tr, prev_rr, 0.510);
-
     let rr = TireCornerData {
-        temp_l: rr_tl,
-        temp_m: rr_tm,
-        temp_r: rr_tr,
+        temp_l: get_sample_f32(live, "RRtempCL"),
+        temp_m: get_sample_f32(live, "RRtempCM"),
+        temp_r: get_sample_f32(live, "RRtempCR"),
         wear_l: to_wear(get_sample_f32(live, "RRwearL")),
         wear_m: to_wear(get_sample_f32(live, "RRwearM")),
         wear_r: to_wear(get_sample_f32(live, "RRwearR")),
-        pressure: rr_p,
+        pressure: resolve_pressure(get_sample_f32(live, "RRpressure"), prev_rr),
     };
 
     let has_data = lf.temp_m > 5.0 || rf.temp_m > 5.0 || lf.wear_m > 0.1 || rf.wear_m > 0.1 || lf.pressure > 1.0;
@@ -2385,22 +2513,33 @@ fn format_stint_laps_tsv(stint: &StintData) -> String {
 }
 
 fn format_single_tire_tsv(corner: &str, tire: &TireCornerData, use_metric: bool) -> String {
+    let is_left = corner.contains("Left") || corner.starts_with("LF") || corner.starts_with("LR");
     let press_str = if tire.pressure > 0.1 {
         if use_metric { format!("{:.2} bar", tire.pressure / 100.0) } else { format!("{:.1} PSI", tire.pressure * 0.145038) }
     } else {
         "—".to_string()
     };
+    let (t1, t2, t3) = if is_left {
+        (tire.temp_r, tire.temp_m, tire.temp_l)
+    } else {
+        (tire.temp_l, tire.temp_m, tire.temp_r)
+    };
     let temp_str = if tire.temp_m > 1.0 {
         if use_metric {
-            format!("{:.0}°·{:.0}°·{:.0}°C", tire.temp_l, tire.temp_m, tire.temp_r)
+            format!("{:.0}°·{:.0}°·{:.0}°C", t1, t2, t3)
         } else {
-            format!("{:.0}°·{:.0}°·{:.0}°F", tire.temp_l * 1.8 + 32.0, tire.temp_m * 1.8 + 32.0, tire.temp_r * 1.8 + 32.0)
+            format!("{:.0}°·{:.0}°·{:.0}°F", t1 * 1.8 + 32.0, t2 * 1.8 + 32.0, t3 * 1.8 + 32.0)
         }
     } else {
         "—".to_string()
     };
+    let (w1, w2, w3) = if is_left {
+        (tire.wear_r, tire.wear_m, tire.wear_l)
+    } else {
+        (tire.wear_l, tire.wear_m, tire.wear_r)
+    };
     let wear_str = if tire.wear_m > 0.01 {
-        format!("{:.0}%·{:.0}%·{:.0}%", tire.wear_l, tire.wear_m, tire.wear_r)
+        format!("{:.0}%·{:.0}%·{:.0}%", w1, w2, w3)
     } else {
         "—".to_string()
     };
@@ -2408,21 +2547,31 @@ fn format_single_tire_tsv(corner: &str, tire: &TireCornerData, use_metric: bool)
     format!("{}\t{}\t{}\t{}", corner, press_str, temp_str, wear_str)
 }
 
-fn format_single_tire_temps_tsv(tire: &TireCornerData, use_metric: bool) -> String {
+fn format_single_tire_temps_tsv(tire: &TireCornerData, is_left: bool, use_metric: bool) -> String {
     if tire.temp_m > 1.0 {
-        if use_metric {
-            format!("{:.0}\t{:.0}\t{:.0}", tire.temp_l, tire.temp_m, tire.temp_r)
+        let (t1, t2, t3) = if is_left {
+            (tire.temp_r, tire.temp_m, tire.temp_l)
         } else {
-            format!("{:.0}\t{:.0}\t{:.0}", tire.temp_l * 1.8 + 32.0, tire.temp_m * 1.8 + 32.0, tire.temp_r * 1.8 + 32.0)
+            (tire.temp_l, tire.temp_m, tire.temp_r)
+        };
+        if use_metric {
+            format!("{:.0}\t{:.0}\t{:.0}", t1, t2, t3)
+        } else {
+            format!("{:.0}\t{:.0}\t{:.0}", t1 * 1.8 + 32.0, t2 * 1.8 + 32.0, t3 * 1.8 + 32.0)
         }
     } else {
         "—\t—\t—".to_string()
     }
 }
 
-fn format_single_tire_wear_tsv(tire: &TireCornerData) -> String {
+fn format_single_tire_wear_tsv(tire: &TireCornerData, is_left: bool) -> String {
     if tire.wear_m > 0.01 {
-        format!("{:.0}%\t{:.0}%\t{:.0}%", tire.wear_l, tire.wear_m, tire.wear_r)
+        let (w1, w2, w3) = if is_left {
+            (tire.wear_r, tire.wear_m, tire.wear_l)
+        } else {
+            (tire.wear_l, tire.wear_m, tire.wear_r)
+        };
+        format!("{:.0}%\t{:.0}%\t{:.0}%", w1, w2, w3)
     } else {
         "—\t—\t—".to_string()
     }
@@ -2431,21 +2580,21 @@ fn format_single_tire_wear_tsv(tire: &TireCornerData) -> String {
 fn format_temps_excel_tsv(tires: &StintTireSet, use_metric: bool) -> String {
     let unit = if use_metric { "°C" } else { "°F" };
     let mut out = String::new();
-    out.push_str(&format!("Corner\tLeft ({})\tMiddle ({})\tRight ({})\n", unit, unit, unit));
-    out.push_str(&format!("Left Front (LF)\t{}\n", format_single_tire_temps_tsv(&tires.lf, use_metric)));
-    out.push_str(&format!("Right Front (RF)\t{}\n", format_single_tire_temps_tsv(&tires.rf, use_metric)));
-    out.push_str(&format!("Left Rear (LR)\t{}\n", format_single_tire_temps_tsv(&tires.lr, use_metric)));
-    out.push_str(&format!("Right Rear (RR)\t{}\n", format_single_tire_temps_tsv(&tires.rr, use_metric)));
+    out.push_str(&format!("Corner (OMI / IMO)\tZone 1 ({})\tZone 2 ({})\tZone 3 ({})\n", unit, unit, unit));
+    out.push_str(&format!("Left Front (LF · OMI)\t{}\n", format_single_tire_temps_tsv(&tires.lf, true, use_metric)));
+    out.push_str(&format!("Right Front (RF · IMO)\t{}\n", format_single_tire_temps_tsv(&tires.rf, false, use_metric)));
+    out.push_str(&format!("Left Rear (LR · OMI)\t{}\n", format_single_tire_temps_tsv(&tires.lr, true, use_metric)));
+    out.push_str(&format!("Right Rear (RR · IMO)\t{}\n", format_single_tire_temps_tsv(&tires.rr, false, use_metric)));
     out
 }
 
 fn format_wear_excel_tsv(tires: &StintTireSet) -> String {
     let mut out = String::new();
-    out.push_str("Corner\tLeft Wear\tMiddle Wear\tRight Wear\n");
-    out.push_str(&format!("Left Front (LF)\t{}\n", format_single_tire_wear_tsv(&tires.lf)));
-    out.push_str(&format!("Right Front (RF)\t{}\n", format_single_tire_wear_tsv(&tires.rf)));
-    out.push_str(&format!("Left Rear (LR)\t{}\n", format_single_tire_wear_tsv(&tires.lr)));
-    out.push_str(&format!("Right Rear (RR)\t{}\n", format_single_tire_wear_tsv(&tires.rr)));
+    out.push_str("Corner (OMI / IMO)\tZone 1 Wear\tZone 2 Wear\tZone 3 Wear\n");
+    out.push_str(&format!("Left Front (LF · OMI)\t{}\n", format_single_tire_wear_tsv(&tires.lf, true)));
+    out.push_str(&format!("Right Front (RF · IMO)\t{}\n", format_single_tire_wear_tsv(&tires.rf, false)));
+    out.push_str(&format!("Left Rear (LR · OMI)\t{}\n", format_single_tire_wear_tsv(&tires.lr, true)));
+    out.push_str(&format!("Right Rear (RR · IMO)\t{}\n", format_single_tire_wear_tsv(&tires.rr, false)));
     out
 }
 
@@ -3556,26 +3705,38 @@ fn render_tire_corner_card(
         "— psi".to_string()
     };
 
+    let is_left = corner_title.contains("LEFT") || corner_title.starts_with("LF") || corner_title.starts_with("LR");
+
+    let zone_label = if is_left {
+        "O·M·I"
+    } else {
+        "I·M·O"
+    };
+
     let temp_str = if data.temp_m > 1.0 {
-        if use_metric {
-            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°C", data.temp_l, data.temp_m, data.temp_r)
+        let (t1, t2, t3) = if is_left {
+            (data.temp_r, data.temp_m, data.temp_l)
         } else {
-            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°F", data.temp_l * 1.8 + 32.0, data.temp_m * 1.8 + 32.0, data.temp_r * 1.8 + 32.0)
+            (data.temp_l, data.temp_m, data.temp_r)
+        };
+        if use_metric {
+            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°C", t1, t2, t3)
+        } else {
+            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°F", t1 * 1.8 + 32.0, t2 * 1.8 + 32.0, t3 * 1.8 + 32.0)
         }
     } else {
         "—\u{00A0}·\u{00A0}—\u{00A0}·\u{00A0}—".to_string()
     };
 
     let wear_str = if data.wear_m > 0.01 {
-        format!("{:.0}%\u{00A0}·\u{00A0}{:.0}%\u{00A0}·\u{00A0}{:.0}%", data.wear_l, data.wear_m, data.wear_r)
+        let (w1, w2, w3) = if is_left {
+            (data.wear_r, data.wear_m, data.wear_l)
+        } else {
+            (data.wear_l, data.wear_m, data.wear_r)
+        };
+        format!("{:.0}%\u{00A0}·\u{00A0}{:.0}%\u{00A0}·\u{00A0}{:.0}%", w1, w2, w3)
     } else {
         "—%\u{00A0}·\u{00A0}—%\u{00A0}·\u{00A0}—%".to_string()
-    };
-
-    let zone_label = if corner_title.contains("LEFT") || corner_title.starts_with("LF") || corner_title.starts_with("LR") {
-        "O·M·I"
-    } else {
-        "I·M·O"
     };
 
     let card_border = if avg_wear > 0.0 {
@@ -3611,7 +3772,7 @@ fn render_tire_corner_card(
                     .wrap(false)
             );
             if temp_resp.clicked() && data.temp_m > 1.0 {
-                let tsv = format_single_tire_temps_tsv(data, use_metric);
+                let tsv = format_single_tire_temps_tsv(data, is_left, use_metric);
                 ui.output_mut(|o| o.copied_text = tsv);
             }
             temp_resp.on_hover_text("Click to copy temperatures for Excel");
@@ -3626,7 +3787,7 @@ fn render_tire_corner_card(
                     .wrap(false)
             );
             if wear_resp.clicked() && data.wear_m > 0.01 {
-                let tsv = format_single_tire_wear_tsv(data);
+                let tsv = format_single_tire_wear_tsv(data, is_left);
                 ui.output_mut(|o| o.copied_text = tsv);
             }
             wear_resp.on_hover_text("Click to copy wear for Excel");
@@ -4053,36 +4214,43 @@ impl WarRoomApp {
 
                     // --- SECTION: 4-CORNER POST-STINT TIRE DATA ---
                     let empty_tires = StintTireSet::default();
-                    let stint_tires = if stint.tires.has_data {
+                    let stint_has_tires = stint.tires.has_data && stint.laps_completed > 0;
+                    let stint_tires = if stint_has_tires {
                         &stint.tires
-                    } else if target_car_idx == s.player_car_idx {
-                        &s.latest_tire_data
                     } else {
                         &empty_tires
                     };
 
+                    let header_lbl = if stint_has_tires {
+                        "POST-STINT TIRES & EXPORT"
+                    } else {
+                        "POST-STINT TIRES · NO PIT SERVICE"
+                    };
+
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("POST-STINT TIRES & EXPORT").color(muted).size(11.0).extra_letter_spacing(0.8));
+                        ui.label(egui::RichText::new(header_lbl).color(muted).size(11.0).extra_letter_spacing(0.8));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.add(egui::Button::new(egui::RichText::new("Copy Full Stint").color(white).size(11.0)).fill(elevated)).clicked() {
                                 let tsv = format_full_stint_excel_tsv(stint, &self.settings.active_avg_buckets, is_metric);
                                 ui.output_mut(|o| o.copied_text = tsv);
                                 self.toast_message = Some((format!("Copied Stint S{} Full Log for Excel", stint.stint_number), std::time::Instant::now()));
                             }
-                            if ui.add(egui::Button::new(egui::RichText::new("Copy 4-Tire Table").color(white).size(11.0)).fill(elevated)).clicked() {
-                                let tsv = format_tires_excel_tsv(stint_tires, is_metric);
-                                ui.output_mut(|o| o.copied_text = tsv);
-                                self.toast_message = Some(("Copied 4-Corner Tires Table for Excel".to_string(), std::time::Instant::now()));
-                            }
-                            if ui.add(egui::Button::new(egui::RichText::new("Copy Wear").color(white).size(11.0)).fill(elevated)).clicked() {
-                                let tsv = format_wear_excel_tsv(stint_tires);
-                                ui.output_mut(|o| o.copied_text = tsv);
-                                self.toast_message = Some(("Copied 4-Corner Wear for Excel".to_string(), std::time::Instant::now()));
-                            }
-                            if ui.add(egui::Button::new(egui::RichText::new("Copy Temps").color(white).size(11.0)).fill(elevated)).clicked() {
-                                let tsv = format_temps_excel_tsv(stint_tires, is_metric);
-                                ui.output_mut(|o| o.copied_text = tsv);
-                                self.toast_message = Some(("Copied 4-Corner Temps for Excel".to_string(), std::time::Instant::now()));
+                            if stint_has_tires {
+                                if ui.add(egui::Button::new(egui::RichText::new("Copy 4-Tire Table").color(white).size(11.0)).fill(elevated)).clicked() {
+                                    let tsv = format_tires_excel_tsv(stint_tires, is_metric);
+                                    ui.output_mut(|o| o.copied_text = tsv);
+                                    self.toast_message = Some(("Copied 4-Corner Tires Table for Excel".to_string(), std::time::Instant::now()));
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("Copy Wear").color(white).size(11.0)).fill(elevated)).clicked() {
+                                    let tsv = format_wear_excel_tsv(stint_tires);
+                                    ui.output_mut(|o| o.copied_text = tsv);
+                                    self.toast_message = Some(("Copied 4-Corner Wear for Excel".to_string(), std::time::Instant::now()));
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("Copy Temps").color(white).size(11.0)).fill(elevated)).clicked() {
+                                    let tsv = format_temps_excel_tsv(stint_tires, is_metric);
+                                    ui.output_mut(|o| o.copied_text = tsv);
+                                    self.toast_message = Some(("Copied 4-Corner Temps for Excel".to_string(), std::time::Instant::now()));
+                                }
                             }
                         });
                     });
@@ -6985,6 +7153,199 @@ DriverInfo:
         assert!(!roundtrip.show_pace_card);
         assert!(roundtrip.show_fuel_card);
         assert!((roundtrip.hud_scale - 1.20).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_car_setup_tires_exact_iracing_garage_values() {
+        let sample_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Phoenix Raceway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Practice"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "Test Driver"
+CarSetup:
+  UpdateCount: 3
+  Tires:
+    LeftFront:
+      ColdPressure: "10.0 psi"
+      LastHotPressure: "12.1 psi"
+      LastTempsOMI: "164F, 187F, 194F"
+      TreadRemaining: "100%, 86%, 86%"
+    RightFront:
+      ColdPressure: "20.0 psi"
+      LastHotPressure: "38.5 psi"
+      LastTempsIMO: "259F, 246F, 255F"
+      TreadRemaining: "38%, 36%, 44%"
+    LeftRear:
+      ColdPressure: "10.0 psi"
+      LastHotPressure: "12.9 psi"
+      LastTempsOMI: "206F, 212F, 217F"
+      TreadRemaining: "87%, 84%, 84%"
+    RightRear:
+      ColdPressure: "20.0 psi"
+      LastHotPressure: "37.8 psi"
+      LastTempsIMO: "241F, 235F, 240F"
+      TreadRemaining: "24%, 22%, 30%"
+"#;
+        let mut state = WarRoomState::default();
+        let success = parse_iracing_session_yaml(sample_yaml, &mut state);
+        assert!(success);
+
+        let tires = &state.latest_tire_data;
+        assert!(tires.has_data);
+
+        // Check LF (Left tire: O·M·I order)
+        // Outer = 164F (73.33C), Middle = 187F (86.11C), Inner = 194F (90.00C)
+        assert!((tires.lf.pressure * 0.145038 - 12.1).abs() < 0.15, "LF pressure should be 12.1 psi");
+        assert!((tires.lf.temp_r * 1.8 + 32.0 - 164.0).abs() < 0.5, "LF Outer temp should be 164 F");
+        assert!((tires.lf.temp_m * 1.8 + 32.0 - 187.0).abs() < 0.5, "LF Middle temp should be 187 F");
+        assert!((tires.lf.temp_l * 1.8 + 32.0 - 194.0).abs() < 0.5, "LF Inner temp should be 194 F");
+        assert_eq!(tires.lf.wear_r, 100.0, "LF Outer wear should be 100%");
+        assert_eq!(tires.lf.wear_m, 86.0, "LF Middle wear should be 86%");
+        assert_eq!(tires.lf.wear_l, 86.0, "LF Inner wear should be 86%");
+
+        // Check RF (Right tire: I·M·O order)
+        // Inner = 259F (126.11C), Middle = 246F (118.89C), Outer = 255F (123.89C)
+        assert!((tires.rf.pressure * 0.145038 - 38.5).abs() < 0.15, "RF pressure should be 38.5 psi");
+        assert!((tires.rf.temp_l * 1.8 + 32.0 - 259.0).abs() < 0.5, "RF Inner temp should be 259 F");
+        assert!((tires.rf.temp_m * 1.8 + 32.0 - 246.0).abs() < 0.5, "RF Middle temp should be 246 F");
+        assert!((tires.rf.temp_r * 1.8 + 32.0 - 255.0).abs() < 0.5, "RF Outer temp should be 255 F");
+        assert_eq!(tires.rf.wear_l, 38.0, "RF Inner wear should be 38%");
+        assert_eq!(tires.rf.wear_m, 36.0, "RF Middle wear should be 36%");
+        assert_eq!(tires.rf.wear_r, 44.0, "RF Outer wear should be 44%");
+
+        // Check LR (Left tire: O·M·I order)
+        assert!((tires.lr.pressure * 0.145038 - 12.9).abs() < 0.15, "LR pressure should be 12.9 psi");
+        assert!((tires.lr.temp_r * 1.8 + 32.0 - 206.0).abs() < 0.5, "LR Outer temp should be 206 F");
+        assert_eq!(tires.lr.wear_r, 87.0, "LR Outer wear should be 87%");
+
+        // Check RR (Right tire: I·M·O order)
+        assert!((tires.rr.pressure * 0.145038 - 37.8).abs() < 0.15, "RR pressure should be 37.8 psi");
+        assert!((tires.rr.temp_l * 1.8 + 32.0 - 241.0).abs() < 0.5, "RR Inner temp should be 241 F");
+        assert_eq!(tires.rr.wear_l, 24.0, "RR Inner wear should be 24%");
+
+        // Verify TSV export matches iRacing display
+        let lf_tsv = format_single_tire_tsv("Left Front (LF)", &tires.lf, false);
+        assert!(lf_tsv.contains("12.1 PSI"), "LF TSV contains pressure: {}", lf_tsv);
+        assert!(lf_tsv.contains("164°·187°·194°F"), "LF TSV should be Outer-Middle-Inner: {}", lf_tsv);
+        assert!(lf_tsv.contains("100%·86%·86%"), "LF TSV should be Outer-Middle-Inner: {}", lf_tsv);
+
+        let rf_tsv = format_single_tire_tsv("Right Front (RF)", &tires.rf, false);
+        assert!(rf_tsv.contains("38.5 PSI"), "RF TSV contains pressure: {}", rf_tsv);
+        assert!(rf_tsv.contains("259°·246°·255°F"), "RF TSV should be Inner-Middle-Outer: {}", rf_tsv);
+        assert!(rf_tsv.contains("38%·36%·44%"), "RF TSV should be Inner-Middle-Outer: {}", rf_tsv);
+    }
+
+    #[test]
+    fn test_stint_tires_isolation_and_no_premature_pit_entry_latch() {
+        let mut state = WarRoomState::default();
+        state.session_type = "RACE".to_string();
+        state.is_oval = true;
+        state.player_car_idx = 0;
+
+        let race_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Phoenix Raceway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Race"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "Test Driver"
+"#;
+        assert!(parse_iracing_session_yaml(race_yaml, &mut state));
+        let _ = state.check_session_transition(0, 0, STATE_RACING, 10.0, false);
+
+        // Frame 0: Green flag start on Lap 0
+        let mut pit_road = vec![false; 1];
+        let mut laps_comp = vec![0; 1];
+        let mut last_laps = vec![0.0; 1];
+        let fast_laps = vec![0.0; 1];
+        let positions = vec![1; 1];
+        let mut surfaces = vec![4; 1]; // OnTrack
+        let mut lap_dist_pcts = vec![0.02; 1];
+
+        let frame_start = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 10.0,
+            current_fuel_sample: 65.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_start, None, false);
+
+        // Frame 1: Driver completes lap 1 out on track
+        laps_comp[0] = 1;
+        last_laps[0] = 28.5;
+        lap_dist_pcts[0] = 0.05;
+
+        let frame_lap1 = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 40.0,
+            current_fuel_sample: 64.5,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_lap1, None, false);
+
+        let driver = state.drivers.get(&0).unwrap();
+        assert_eq!(driver.stints.len(), 1);
+        assert_eq!(driver.stints[0].laps_completed, 1);
+        assert!(!driver.stints[0].tires.has_data, "Active stint on track has no pit tire data");
+
+        // Frame 2: Car enters pit road (pit entry line at speed).
+        pit_road[0] = true;
+        surfaces[0] = 3; // ApproachingPits (moving at pit speed, not stopped in stall)
+        let frame_pit_entry = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 70.0,
+            current_fuel_sample: 64.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_pit_entry, None, false);
+
+        let driver = state.drivers.get(&0).unwrap();
+        assert_eq!(driver.stints.len(), 1);
+        let s1 = &driver.stints[0];
+        assert!(!s1.is_active, "Stint S1 is closed at pit entry");
+        assert!(!s1.tires.has_data, "Stint S1 must NOT latch tire data at pit entry before stopping in stall");
     }
 }
 
