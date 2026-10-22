@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+pub mod ibt;
+pub mod ibt_ui;
 mod settings;
 mod updater;
 
@@ -2166,31 +2168,72 @@ pub fn parse_three_floats(raw: &str) -> Option<[f32; 3]> {
     }
 }
 
+fn node_has_tire_fields(node: &serde_yaml::Value) -> bool {
+    let tire_keys = [
+        "LastHotPressure",
+        "Last Hot Pressure",
+        "LastPressure",
+        "HotPressure",
+        "Hot Pressure",
+        "LastTempsOMI",
+        "Last Temps OMI",
+        "TempsOMI",
+        "LastTempsIMO",
+        "Last Temps IMO",
+        "TempsIMO",
+        "LastTemps",
+        "Temps",
+        "TreadRemaining",
+        "Tread Remaining",
+        "Wear",
+        "StartingPressure",
+        "ColdPressure",
+    ];
+    tire_keys.iter().any(|k| node.get(*k).is_some())
+}
+
 fn find_setup_corner<'a>(root: &'a serde_yaml::Value, corner_keys: &[&str]) -> Option<&'a serde_yaml::Value> {
-    for parent in &["Tires", "TiresAero", "Chassis", "Suspension"] {
+    let mut fallback: Option<&'a serde_yaml::Value> = None;
+
+    for parent in &["Tires", "TiresAero", "Tire", "Chassis", "Suspension"] {
         if let Some(p) = root.get(*parent) {
             for key in corner_keys {
                 if let Some(c) = p.get(*key) {
-                    return Some(c);
+                    if node_has_tire_fields(c) {
+                        return Some(c);
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(c);
+                    }
                 }
             }
         }
     }
     for key in corner_keys {
         if let Some(c) = root.get(*key) {
-            return Some(c);
+            if node_has_tire_fields(c) {
+                return Some(c);
+            }
+            if fallback.is_none() {
+                fallback = Some(c);
+            }
         }
     }
     if let Some(map) = root.as_mapping() {
         for (_k, v) in map {
             for key in corner_keys {
                 if let Some(c) = v.get(*key) {
-                    return Some(c);
+                    if node_has_tire_fields(c) {
+                        return Some(c);
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(c);
+                    }
                 }
             }
         }
     }
-    None
+    fallback
 }
 
 fn parse_corner_yaml(corner_val: &serde_yaml::Value, is_left: bool) -> Option<TireCornerData> {
@@ -2256,10 +2299,10 @@ fn parse_corner_yaml(corner_val: &serde_yaml::Value, is_left: bool) -> Option<Ti
 }
 
 pub fn parse_car_setup_tires(car_setup: &serde_yaml::Value) -> Option<StintTireSet> {
-    let lf_node = find_setup_corner(car_setup, &["LeftFront", "Left Front", "LF"])?;
-    let rf_node = find_setup_corner(car_setup, &["RightFront", "Right Front", "RF"])?;
-    let lr_node = find_setup_corner(car_setup, &["LeftRear", "Left Rear", "LR"])?;
-    let rr_node = find_setup_corner(car_setup, &["RightRear", "Right Rear", "RR"])?;
+    let lf_node = find_setup_corner(car_setup, &["LeftFrontTire", "Left Front Tire", "LeftFront", "Left Front", "LF"])?;
+    let rf_node = find_setup_corner(car_setup, &["RightFrontTire", "Right Front Tire", "RightFront", "Right Front", "RF"])?;
+    let lr_node = find_setup_corner(car_setup, &["LeftRearTire", "Left Rear Tire", "LeftRear", "Left Rear", "LR"])?;
+    let rr_node = find_setup_corner(car_setup, &["RightRearTire", "Right Rear Tire", "RightRear", "Right Rear", "RR"])?;
 
     let lf = parse_corner_yaml(lf_node, true)?;
     let rf = parse_corner_yaml(rf_node, false)?;
@@ -2276,7 +2319,35 @@ pub fn parse_car_setup_tires(car_setup: &serde_yaml::Value) -> Option<StintTireS
     })
 }
 
-fn convert_unit(val: &str, to_metric: bool) -> String {
+pub fn parse_car_setup_cold_pressures_kpa(car_setup: &serde_yaml::Value) -> Option<[f32; 4]> {
+    let lf_node = find_setup_corner(car_setup, &["LeftFrontTire", "Left Front Tire", "LeftFront", "Left Front", "LF"])?;
+    let rf_node = find_setup_corner(car_setup, &["RightFrontTire", "Right Front Tire", "RightFront", "Right Front", "RF"])?;
+    let lr_node = find_setup_corner(car_setup, &["LeftRearTire", "Left Rear Tire", "LeftRear", "Left Rear", "LR"])?;
+    let rr_node = find_setup_corner(car_setup, &["RightRearTire", "Right Rear Tire", "RightRear", "Right Rear", "RR"])?;
+
+    let extract_cold = |node: &serde_yaml::Value| -> f32 {
+        node.get("StartingPressure")
+            .and_then(|v| v.as_str())
+            .or_else(|| node.get("Starting Pressure").and_then(|v| v.as_str()))
+            .or_else(|| node.get("ColdPressure").and_then(|v| v.as_str()))
+            .or_else(|| node.get("Cold Pressure").and_then(|v| v.as_str()))
+            .map(parse_pressure_str_to_kpa)
+            .unwrap_or(0.0)
+    };
+
+    let c_lf = extract_cold(lf_node);
+    let c_rf = extract_cold(rf_node);
+    let c_lr = extract_cold(lr_node);
+    let c_rr = extract_cold(rr_node);
+
+    if c_lf > 1.0 || c_rf > 1.0 || c_lr > 1.0 || c_rr > 1.0 {
+        Some([c_lf, c_rf, c_lr, c_rr])
+    } else {
+        None
+    }
+}
+
+pub fn convert_unit(val: &str, to_metric: bool) -> String {
     let clean = val.trim();
     if clean.is_empty() || clean == "—" || clean == "..." { return clean.to_string(); }
 
@@ -2345,7 +2416,7 @@ fn convert_unit(val: &str, to_metric: bool) -> String {
     }
 }
 
-fn format_wind_dir(raw: &str) -> String {
+pub fn format_wind_dir(raw: &str) -> String {
     let clean = raw.trim();
     if clean.is_empty() || clean == "..." || clean == "—" {
         return String::new();
@@ -3132,6 +3203,7 @@ struct WarRoomApp {
     show_release_notes_modal: bool,
     release_notes_custom_content: Option<String>,
     preview_overlay_hud: bool,
+    ibt_lab: ibt_ui::IbtTelemetryLabState,
 }
 
 fn load_logo_texture(ctx: &egui::Context, is_dark: bool) -> Option<egui::TextureHandle> {
@@ -3499,6 +3571,7 @@ impl WarRoomApp {
             show_release_notes_modal: false,
             release_notes_custom_content: None,
             preview_overlay_hud: false,
+            ibt_lab: ibt_ui::IbtTelemetryLabState::default(),
         }
     }
 
@@ -3525,6 +3598,7 @@ impl WarRoomApp {
             show_release_notes_modal: false,
             release_notes_custom_content: None,
             preview_overlay_hud: false,
+            ibt_lab: ibt_ui::IbtTelemetryLabState::default(),
         }
     }
 
@@ -3806,6 +3880,10 @@ impl WarRoomApp {
                     }
                     if ui.selectable_label(self.settings.view_mode == ActiveViewMode::GridTable, "Multi-Driver Stint Grid").clicked() {
                         self.settings.view_mode = ActiveViewMode::GridTable;
+                        self.settings.save();
+                    }
+                    if ui.selectable_label(self.settings.view_mode == ActiveViewMode::IbtTelemetry, "Offline .IBT Telemetry Lab").clicked() {
+                        self.settings.view_mode = ActiveViewMode::IbtTelemetry;
                         self.settings.save();
                     }
                 });
@@ -7587,8 +7665,10 @@ impl eframe::App for WarRoomApp {
                 }
                 ui.add_space(10.0);
 
-                // Segmented View Switcher (Cockpit | Grid)
+                // Segmented View Switcher (Live Stints: Cockpit | Grid) + Prominent Standalone (.IBT Telemetry Lab)
                 let is_cockpit = self.settings.view_mode == ActiveViewMode::CockpitEngineer;
+                let is_grid = self.settings.view_mode == ActiveViewMode::GridTable;
+                let is_ibt = self.settings.view_mode == ActiveViewMode::IbtTelemetry;
                 egui::Frame::none()
                     .fill(elevated)
                     .rounding(egui::Rounding::same(8.0))
@@ -7610,15 +7690,44 @@ impl eframe::App for WarRoomApp {
                         let g_btn = egui::Button::new(
                             egui::RichText::new("Grid")
                                 .size(12.5)
-                                .color(if !is_cockpit { white } else { muted })
+                                .color(if is_grid { white } else { muted })
                         )
-                        .fill(if !is_cockpit { self.settings.panel_color() } else { egui::Color32::TRANSPARENT })
+                        .fill(if is_grid { self.settings.panel_color() } else { egui::Color32::TRANSPARENT })
                         .rounding(egui::Rounding::same(6.0));
                         if ui.add(g_btn).clicked() {
                             self.settings.view_mode = ActiveViewMode::GridTable;
                             self.settings.save();
                         }
                     });
+
+                // Prominent Separate Mode Button for Offline .IBT Telemetry Lab (distinct from Live Stint Views)
+                let ibt_stroke = if is_ibt {
+                    egui::Stroke::new(1.5, primary)
+                } else {
+                    egui::Stroke::new(1.0, with_alpha(self.settings.secondary_accent(), 140))
+                };
+                let ibt_fill = if is_ibt {
+                    with_alpha(primary, 32)
+                } else {
+                    with_alpha(self.settings.secondary_accent(), 28)
+                };
+                let ibt_btn = egui::Button::new(
+                    egui::RichText::new("📊 .IBT Telemetry Lab")
+                        .size(12.5)
+                        .color(if is_ibt { primary } else { white })
+                        .strong(),
+                )
+                .fill(ibt_fill)
+                .stroke(ibt_stroke)
+                .rounding(egui::Rounding::same(8.0));
+                if ui
+                    .add(ibt_btn)
+                    .on_hover_text("Open Standalone Offline .IBT Telemetry Analysis Lab (60Hz Traces, Ride Height & Rake, Shock Histograms, Tire Spreads)")
+                    .clicked()
+                {
+                    self.settings.view_mode = ActiveViewMode::IbtTelemetry;
+                    self.settings.save();
+                }
 
                 ui.add_space(4.0);
 
@@ -7694,6 +7803,11 @@ impl eframe::App for WarRoomApp {
                             self.ensure_compare_slots_populated(&current_state);
                             self.stint_analyzer_tab = StintAnalyzerTab::Compare;
                             self.show_stint_analyzer_modal = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("📊 Offline .IBT Telemetry Lab").clicked() {
+                            self.settings.view_mode = ActiveViewMode::IbtTelemetry;
+                            self.settings.save();
                             ui.close_menu();
                         }
                         let dbg_label = if self.show_telemetry_debugger { "✓ Live Telemetry Debugger" } else { "Live Telemetry Debugger" };
@@ -7864,6 +7978,9 @@ impl eframe::App for WarRoomApp {
                     }
                     ActiveViewMode::GridTable => {
                         self.render_grid_table_view(ui, &current_state);
+                    }
+                    ActiveViewMode::IbtTelemetry => {
+                        self.ibt_lab.render(ctx, ui, &self.settings, &mut self.toast_message);
                     }
                 }
             });

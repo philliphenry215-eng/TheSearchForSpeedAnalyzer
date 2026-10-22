@@ -27,6 +27,7 @@ pub fn get_settings_file() -> &'static str {
 pub enum ActiveViewMode {
     CockpitEngineer, // 3-Column Boxy High-End Stint & Fuel Analyzer
     GridTable,       // Full Multi-Driver Stint Grid
+    IbtTelemetry,    // Offline .ibt Telemetry Ingestion & Engineering Lab
 }
 
 impl Default for ActiveViewMode {

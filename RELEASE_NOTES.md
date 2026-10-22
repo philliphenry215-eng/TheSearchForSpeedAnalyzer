@@ -1,3 +1,21 @@
+# The Search For Speed Analyzer — v0.3.0
+
+### 📊 Offline iRacing `.IBT` Telemetry Analysis Engine & Lab View:
+* **Dedicated `.IBT` Telemetry Lab:** Added a full offline `.ibt` binary telemetry ingestion engine and interactive analysis view (`📊 .IBT Telemetry Lab`), automatically scanning `%USERPROFILE%\Documents\iRacing\telemetry\` on a background worker thread without requiring an active iRacing session.
+* **Lap Slicing, Classification & Lap-to-Lap Overlay (`Lap A vs. Lap B`):** Automatically indexes all session laps, flags Out-Laps, In-Laps, Off-Track/Incomplete laps, and Valid flying laps (`PB ★`), and normalizes `LapDistPct` (`0–100%`) across a 1,000-point grid for direct `Lap A vs. Lap B` trace comparison and time delta ($\Delta t$) analysis.
+* **🏎️ Driver Inputs & Vehicle Dynamics Tab:** Synchronized 4-trace telemetry charts for **Speed**, **Throttle % & Brake %**, **Steering Wheel Angle (°)**, and **Gear / RPM**, complete with interactive cursor scrubbing and Lap A vs. Lap B comparison table.
+* **📐 Ride Height & Rake Tab (5 Dedicated Scrollable Charts):**
+  * **Front Ride Heights & Center Splitter:** Dedicated trace panel for `LF`, `RF`, and `CFSR` (Center Front Splitter) ride heights with bottoming/ground-strike warning lines.
+  * **Rear Ride Heights:** Dedicated trace panel for `LR` and `RR` ride heights.
+  * **Dynamic Longitudinal Pitch Rake:** Vectorized trace for $\text{Rear RH} - \text{Front RH}$ (nose-down compression vs. rebound).
+  * **Dynamic Roll / Side Rake:** Vectorized trace for $\text{Left RH} - \text{Right RH}$ lateral roll attitude.
+  * **Lateral Corner Splits:** Dedicated trace panel comparing Front Split ($\text{LF} - \text{RF}$) and Rear Split ($\text{LR} - \text{RR}$).
+* **📉 Shock Velocity Histograms Tab:** 4-corner (`LF`, `RF`, `LR`, `RR`) damper velocity distribution histograms with native `*shockVel` extraction or Savitzky-Golay / moving-average smoothed numerical differentiation ($\Delta \text{Defl} / \Delta t$), low/high-speed compression & rebound breakdowns, and asymmetry diagnostics.
+* **🛞 Tires & Pressures Tab:** 4-corner tire analysis cards pulling definitive hot tire surface/carcass temperatures (`O · M · I` for Left tires, `I · M · O` for Right tires), 3-zone tread wear percentages, and Cold $\rightarrow$ Hot pressure build from `CarSetup` YAML, pit-stall latches, and `.ibt` channels, plus inside-to-outside spread ($\Delta T_{\text{I-O}}$) and crown bias diagnostics.
+* **Session YAML Header & 1-Click TSV Export:** Displays full session metadata (Track, Car, Driver, Weather, Air/Track Temp, Wind Speed/Direction, Setup Name) respecting Imperial (`°F`, `mph`, `mi`, `in`, `PSI`) and Metric (`°C`, `km/h`, `km`, `mm`, `kPa`) settings, plus 1-click clipboard TSV export for Excel/Google Sheets.
+
+---
+
 # The Search For Speed Analyzer — v0.2.6
 
 ### ⚖️ Side-by-Side Stint Telemetry Comparison:
