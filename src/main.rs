@@ -2225,13 +2225,7 @@ fn parse_corner_yaml(corner_val: &serde_yaml::Value, is_left: bool) -> Option<Ti
             t[1] = (t[1] - 32.0) / 1.8;
             t[2] = (t[2] - 32.0) / 1.8;
         }
-        if is_left {
-            // OMI: t[0] is Outer (temp_r), t[1] is Middle (temp_m), t[2] is Inner (temp_l)
-            (t[2], t[1], t[0])
-        } else {
-            // IMO: t[0] is Inner (temp_l), t[1] is Middle (temp_m), t[2] is Outer (temp_r)
-            (t[0], t[1], t[2])
-        }
+        (t[0], t[1], t[2])
     } else {
         (0.0, 0.0, 0.0)
     };
@@ -2242,13 +2236,7 @@ fn parse_corner_yaml(corner_val: &serde_yaml::Value, is_left: bool) -> Option<Ti
     let parsed_wear = tread_str.and_then(parse_three_floats);
 
     let (wear_l, wear_m, wear_r) = if let Some(w) = parsed_wear {
-        if is_left {
-            // OMI: w[0] is Outer (wear_r), w[1] is Middle (wear_m), w[2] is Inner (wear_l)
-            (w[2], w[1], w[0])
-        } else {
-            // IMO: w[0] is Inner (wear_l), w[1] is Middle (wear_m), w[2] is Outer (wear_r)
-            (w[0], w[1], w[2])
-        }
+        (w[0], w[1], w[2])
     } else {
         (0.0, 0.0, 0.0)
     };
@@ -2513,33 +2501,22 @@ fn format_stint_laps_tsv(stint: &StintData) -> String {
 }
 
 fn format_single_tire_tsv(corner: &str, tire: &TireCornerData, use_metric: bool) -> String {
-    let is_left = corner.contains("Left") || corner.starts_with("LF") || corner.starts_with("LR");
     let press_str = if tire.pressure > 0.1 {
         if use_metric { format!("{:.2} bar", tire.pressure / 100.0) } else { format!("{:.1} PSI", tire.pressure * 0.145038) }
     } else {
         "—".to_string()
     };
-    let (t1, t2, t3) = if is_left {
-        (tire.temp_r, tire.temp_m, tire.temp_l)
-    } else {
-        (tire.temp_l, tire.temp_m, tire.temp_r)
-    };
     let temp_str = if tire.temp_m > 1.0 {
         if use_metric {
-            format!("{:.0}°·{:.0}°·{:.0}°C", t1, t2, t3)
+            format!("{:.0}°·{:.0}°·{:.0}°C", tire.temp_l, tire.temp_m, tire.temp_r)
         } else {
-            format!("{:.0}°·{:.0}°·{:.0}°F", t1 * 1.8 + 32.0, t2 * 1.8 + 32.0, t3 * 1.8 + 32.0)
+            format!("{:.0}°·{:.0}°·{:.0}°F", tire.temp_l * 1.8 + 32.0, tire.temp_m * 1.8 + 32.0, tire.temp_r * 1.8 + 32.0)
         }
     } else {
         "—".to_string()
     };
-    let (w1, w2, w3) = if is_left {
-        (tire.wear_r, tire.wear_m, tire.wear_l)
-    } else {
-        (tire.wear_l, tire.wear_m, tire.wear_r)
-    };
     let wear_str = if tire.wear_m > 0.01 {
-        format!("{:.0}%·{:.0}%·{:.0}%", w1, w2, w3)
+        format!("{:.0}%·{:.0}%·{:.0}%", tire.wear_l, tire.wear_m, tire.wear_r)
     } else {
         "—".to_string()
     };
@@ -2547,31 +2524,21 @@ fn format_single_tire_tsv(corner: &str, tire: &TireCornerData, use_metric: bool)
     format!("{}\t{}\t{}\t{}", corner, press_str, temp_str, wear_str)
 }
 
-fn format_single_tire_temps_tsv(tire: &TireCornerData, is_left: bool, use_metric: bool) -> String {
+fn format_single_tire_temps_tsv(tire: &TireCornerData, use_metric: bool) -> String {
     if tire.temp_m > 1.0 {
-        let (t1, t2, t3) = if is_left {
-            (tire.temp_r, tire.temp_m, tire.temp_l)
-        } else {
-            (tire.temp_l, tire.temp_m, tire.temp_r)
-        };
         if use_metric {
-            format!("{:.0}\t{:.0}\t{:.0}", t1, t2, t3)
+            format!("{:.0}\t{:.0}\t{:.0}", tire.temp_l, tire.temp_m, tire.temp_r)
         } else {
-            format!("{:.0}\t{:.0}\t{:.0}", t1 * 1.8 + 32.0, t2 * 1.8 + 32.0, t3 * 1.8 + 32.0)
+            format!("{:.0}\t{:.0}\t{:.0}", tire.temp_l * 1.8 + 32.0, tire.temp_m * 1.8 + 32.0, tire.temp_r * 1.8 + 32.0)
         }
     } else {
         "—\t—\t—".to_string()
     }
 }
 
-fn format_single_tire_wear_tsv(tire: &TireCornerData, is_left: bool) -> String {
+fn format_single_tire_wear_tsv(tire: &TireCornerData) -> String {
     if tire.wear_m > 0.01 {
-        let (w1, w2, w3) = if is_left {
-            (tire.wear_r, tire.wear_m, tire.wear_l)
-        } else {
-            (tire.wear_l, tire.wear_m, tire.wear_r)
-        };
-        format!("{:.0}%\t{:.0}%\t{:.0}%", w1, w2, w3)
+        format!("{:.0}%\t{:.0}%\t{:.0}%", tire.wear_l, tire.wear_m, tire.wear_r)
     } else {
         "—\t—\t—".to_string()
     }
@@ -2581,20 +2548,20 @@ fn format_temps_excel_tsv(tires: &StintTireSet, use_metric: bool) -> String {
     let unit = if use_metric { "°C" } else { "°F" };
     let mut out = String::new();
     out.push_str(&format!("Corner (OMI / IMO)\tZone 1 ({})\tZone 2 ({})\tZone 3 ({})\n", unit, unit, unit));
-    out.push_str(&format!("Left Front (LF · OMI)\t{}\n", format_single_tire_temps_tsv(&tires.lf, true, use_metric)));
-    out.push_str(&format!("Right Front (RF · IMO)\t{}\n", format_single_tire_temps_tsv(&tires.rf, false, use_metric)));
-    out.push_str(&format!("Left Rear (LR · OMI)\t{}\n", format_single_tire_temps_tsv(&tires.lr, true, use_metric)));
-    out.push_str(&format!("Right Rear (RR · IMO)\t{}\n", format_single_tire_temps_tsv(&tires.rr, false, use_metric)));
+    out.push_str(&format!("Left Front (LF · OMI)\t{}\n", format_single_tire_temps_tsv(&tires.lf, use_metric)));
+    out.push_str(&format!("Right Front (RF · IMO)\t{}\n", format_single_tire_temps_tsv(&tires.rf, use_metric)));
+    out.push_str(&format!("Left Rear (LR · OMI)\t{}\n", format_single_tire_temps_tsv(&tires.lr, use_metric)));
+    out.push_str(&format!("Right Rear (RR · IMO)\t{}\n", format_single_tire_temps_tsv(&tires.rr, use_metric)));
     out
 }
 
 fn format_wear_excel_tsv(tires: &StintTireSet) -> String {
     let mut out = String::new();
     out.push_str("Corner (OMI / IMO)\tZone 1 Wear\tZone 2 Wear\tZone 3 Wear\n");
-    out.push_str(&format!("Left Front (LF · OMI)\t{}\n", format_single_tire_wear_tsv(&tires.lf, true)));
-    out.push_str(&format!("Right Front (RF · IMO)\t{}\n", format_single_tire_wear_tsv(&tires.rf, false)));
-    out.push_str(&format!("Left Rear (LR · OMI)\t{}\n", format_single_tire_wear_tsv(&tires.lr, true)));
-    out.push_str(&format!("Right Rear (RR · IMO)\t{}\n", format_single_tire_wear_tsv(&tires.rr, false)));
+    out.push_str(&format!("Left Front (LF · OMI)\t{}\n", format_single_tire_wear_tsv(&tires.lf)));
+    out.push_str(&format!("Right Front (RF · IMO)\t{}\n", format_single_tire_wear_tsv(&tires.rf)));
+    out.push_str(&format!("Left Rear (LR · OMI)\t{}\n", format_single_tire_wear_tsv(&tires.lr)));
+    out.push_str(&format!("Right Rear (RR · IMO)\t{}\n", format_single_tire_wear_tsv(&tires.rr)));
     out
 }
 
@@ -3714,27 +3681,17 @@ fn render_tire_corner_card(
     };
 
     let temp_str = if data.temp_m > 1.0 {
-        let (t1, t2, t3) = if is_left {
-            (data.temp_r, data.temp_m, data.temp_l)
-        } else {
-            (data.temp_l, data.temp_m, data.temp_r)
-        };
         if use_metric {
-            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°C", t1, t2, t3)
+            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°C", data.temp_l, data.temp_m, data.temp_r)
         } else {
-            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°F", t1 * 1.8 + 32.0, t2 * 1.8 + 32.0, t3 * 1.8 + 32.0)
+            format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°F", data.temp_l * 1.8 + 32.0, data.temp_m * 1.8 + 32.0, data.temp_r * 1.8 + 32.0)
         }
     } else {
         "—\u{00A0}·\u{00A0}—\u{00A0}·\u{00A0}—".to_string()
     };
 
     let wear_str = if data.wear_m > 0.01 {
-        let (w1, w2, w3) = if is_left {
-            (data.wear_r, data.wear_m, data.wear_l)
-        } else {
-            (data.wear_l, data.wear_m, data.wear_r)
-        };
-        format!("{:.0}%\u{00A0}·\u{00A0}{:.0}%\u{00A0}·\u{00A0}{:.0}%", w1, w2, w3)
+        format!("{:.0}%\u{00A0}·\u{00A0}{:.0}%\u{00A0}·\u{00A0}{:.0}%", data.wear_l, data.wear_m, data.wear_r)
     } else {
         "—%\u{00A0}·\u{00A0}—%\u{00A0}·\u{00A0}—%".to_string()
     };
@@ -3772,7 +3729,7 @@ fn render_tire_corner_card(
                     .wrap(false)
             );
             if temp_resp.clicked() && data.temp_m > 1.0 {
-                let tsv = format_single_tire_temps_tsv(data, is_left, use_metric);
+                let tsv = format_single_tire_temps_tsv(data, use_metric);
                 ui.output_mut(|o| o.copied_text = tsv);
             }
             temp_resp.on_hover_text("Click to copy temperatures for Excel");
@@ -3787,7 +3744,7 @@ fn render_tire_corner_card(
                     .wrap(false)
             );
             if wear_resp.clicked() && data.wear_m > 0.01 {
-                let tsv = format_single_tire_wear_tsv(data, is_left);
+                let tsv = format_single_tire_wear_tsv(data);
                 ui.output_mut(|o| o.copied_text = tsv);
             }
             wear_resp.on_hover_text("Click to copy wear for Excel");
@@ -7175,8 +7132,8 @@ CarSetup:
     LeftFront:
       ColdPressure: "10.0 psi"
       LastHotPressure: "12.1 psi"
-      LastTempsOMI: "164F, 187F, 194F"
-      TreadRemaining: "100%, 86%, 86%"
+      LastTempsOMI: "194F, 187F, 164F"
+      TreadRemaining: "86%, 86%, 100%"
     RightFront:
       ColdPressure: "20.0 psi"
       LastHotPressure: "38.5 psi"
@@ -7185,8 +7142,8 @@ CarSetup:
     LeftRear:
       ColdPressure: "10.0 psi"
       LastHotPressure: "12.9 psi"
-      LastTempsOMI: "206F, 212F, 217F"
-      TreadRemaining: "87%, 84%, 84%"
+      LastTempsOMI: "216F, 210F, 205F"
+      TreadRemaining: "84%, 84%, 88%"
     RightRear:
       ColdPressure: "20.0 psi"
       LastHotPressure: "37.8 psi"
@@ -7200,18 +7157,16 @@ CarSetup:
         let tires = &state.latest_tire_data;
         assert!(tires.has_data);
 
-        // Check LF (Left tire: O·M·I order)
-        // Outer = 164F (73.33C), Middle = 187F (86.11C), Inner = 194F (90.00C)
+        // Check LF (Left tire: 194 · 187 · 164 F, 86% · 86% · 100%)
         assert!((tires.lf.pressure * 0.145038 - 12.1).abs() < 0.15, "LF pressure should be 12.1 psi");
-        assert!((tires.lf.temp_r * 1.8 + 32.0 - 164.0).abs() < 0.5, "LF Outer temp should be 164 F");
+        assert!((tires.lf.temp_l * 1.8 + 32.0 - 194.0).abs() < 0.5, "LF Outer temp should be 194 F");
         assert!((tires.lf.temp_m * 1.8 + 32.0 - 187.0).abs() < 0.5, "LF Middle temp should be 187 F");
-        assert!((tires.lf.temp_l * 1.8 + 32.0 - 194.0).abs() < 0.5, "LF Inner temp should be 194 F");
-        assert_eq!(tires.lf.wear_r, 100.0, "LF Outer wear should be 100%");
+        assert!((tires.lf.temp_r * 1.8 + 32.0 - 164.0).abs() < 0.5, "LF Inner temp should be 164 F");
+        assert_eq!(tires.lf.wear_l, 86.0, "LF Outer wear should be 86%");
         assert_eq!(tires.lf.wear_m, 86.0, "LF Middle wear should be 86%");
-        assert_eq!(tires.lf.wear_l, 86.0, "LF Inner wear should be 86%");
+        assert_eq!(tires.lf.wear_r, 100.0, "LF Inner wear should be 100%");
 
-        // Check RF (Right tire: I·M·O order)
-        // Inner = 259F (126.11C), Middle = 246F (118.89C), Outer = 255F (123.89C)
+        // Check RF (Right tire: I·M·O order: 259 · 246 · 255 F, 38% · 36% · 44%)
         assert!((tires.rf.pressure * 0.145038 - 38.5).abs() < 0.15, "RF pressure should be 38.5 psi");
         assert!((tires.rf.temp_l * 1.8 + 32.0 - 259.0).abs() < 0.5, "RF Inner temp should be 259 F");
         assert!((tires.rf.temp_m * 1.8 + 32.0 - 246.0).abs() < 0.5, "RF Middle temp should be 246 F");
@@ -7220,12 +7175,12 @@ CarSetup:
         assert_eq!(tires.rf.wear_m, 36.0, "RF Middle wear should be 36%");
         assert_eq!(tires.rf.wear_r, 44.0, "RF Outer wear should be 44%");
 
-        // Check LR (Left tire: O·M·I order)
+        // Check LR (Left tire: 216 · 210 · 205 F, 84% · 84% · 88%)
         assert!((tires.lr.pressure * 0.145038 - 12.9).abs() < 0.15, "LR pressure should be 12.9 psi");
-        assert!((tires.lr.temp_r * 1.8 + 32.0 - 206.0).abs() < 0.5, "LR Outer temp should be 206 F");
-        assert_eq!(tires.lr.wear_r, 87.0, "LR Outer wear should be 87%");
+        assert!((tires.lr.temp_l * 1.8 + 32.0 - 216.0).abs() < 0.5, "LR Outer temp should be 216 F");
+        assert_eq!(tires.lr.wear_l, 84.0, "LR Outer wear should be 84%");
 
-        // Check RR (Right tire: I·M·O order)
+        // Check RR (Right tire: I·M·O order: 241 · 235 · 240 F, 24% · 22% · 30%)
         assert!((tires.rr.pressure * 0.145038 - 37.8).abs() < 0.15, "RR pressure should be 37.8 psi");
         assert!((tires.rr.temp_l * 1.8 + 32.0 - 241.0).abs() < 0.5, "RR Inner temp should be 241 F");
         assert_eq!(tires.rr.wear_l, 24.0, "RR Inner wear should be 24%");
@@ -7233,13 +7188,13 @@ CarSetup:
         // Verify TSV export matches iRacing display
         let lf_tsv = format_single_tire_tsv("Left Front (LF)", &tires.lf, false);
         assert!(lf_tsv.contains("12.1 PSI"), "LF TSV contains pressure: {}", lf_tsv);
-        assert!(lf_tsv.contains("164°·187°·194°F"), "LF TSV should be Outer-Middle-Inner: {}", lf_tsv);
-        assert!(lf_tsv.contains("100%·86%·86%"), "LF TSV should be Outer-Middle-Inner: {}", lf_tsv);
+        assert!(lf_tsv.contains("194°·187°·164°F"), "LF TSV should match garage order: {}", lf_tsv);
+        assert!(lf_tsv.contains("86%·86%·100%"), "LF TSV should match garage order: {}", lf_tsv);
 
         let rf_tsv = format_single_tire_tsv("Right Front (RF)", &tires.rf, false);
         assert!(rf_tsv.contains("38.5 PSI"), "RF TSV contains pressure: {}", rf_tsv);
-        assert!(rf_tsv.contains("259°·246°·255°F"), "RF TSV should be Inner-Middle-Outer: {}", rf_tsv);
-        assert!(rf_tsv.contains("38%·36%·44%"), "RF TSV should be Inner-Middle-Outer: {}", rf_tsv);
+        assert!(rf_tsv.contains("259°·246°·255°F"), "RF TSV should match garage order: {}", rf_tsv);
+        assert!(rf_tsv.contains("38%·36%·44%"), "RF TSV should match garage order: {}", rf_tsv);
     }
 
     #[test]
