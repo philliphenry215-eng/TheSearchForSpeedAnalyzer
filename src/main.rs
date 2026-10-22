@@ -2378,6 +2378,214 @@ fn format_wind_dir(raw: &str) -> String {
     clean.to_string()
 }
 
+fn parse_temp_num(raw: &str, to_metric: bool) -> Option<i32> {
+    let clean = raw.trim();
+    if clean.is_empty() || clean == "-" || clean == "..." || clean == "—" {
+        return None;
+    }
+    let mut split_idx = 0;
+    let mut has_digit = false;
+    for (i, c) in clean.char_indices() {
+        if c.is_ascii_digit() || c == '.' || c == '-' || c == '+' {
+            has_digit = true;
+            split_idx = i + c.len_utf8();
+        } else if has_digit && !c.is_whitespace() {
+            break;
+        }
+    }
+    if !has_digit {
+        return None;
+    }
+    let num_str = clean[..split_idx].trim();
+    let unit_str = clean[split_idx..].trim().to_uppercase();
+    let num = num_str.parse::<f32>().ok()?;
+
+    let final_val = match unit_str.as_str() {
+        "C" | "°C" | "DEG C" | "DEGC" | "DEG" | "°" | "" => {
+            if to_metric { num } else { num * 1.8 + 32.0 }
+        }
+        "F" | "°F" | "DEG F" | "DEGF" => {
+            if to_metric { (num - 32.0) / 1.8 } else { num }
+        }
+        _ => num,
+    };
+    Some(final_val.round() as i32)
+}
+
+fn parse_wind_speed(raw: &str, to_metric: bool) -> (Option<i32>, &'static str) {
+    let default_unit = if to_metric { "km/h" } else { "mph" };
+    let clean = raw.trim();
+    if clean.is_empty() || clean == "-" || clean == "..." || clean == "—" {
+        return (None, default_unit);
+    }
+    let mut split_idx = 0;
+    let mut has_digit = false;
+    for (i, c) in clean.char_indices() {
+        if c.is_ascii_digit() || c == '.' || c == '-' || c == '+' {
+            has_digit = true;
+            split_idx = i + c.len_utf8();
+        } else if has_digit && !c.is_whitespace() {
+            break;
+        }
+    }
+    if !has_digit {
+        return (None, default_unit);
+    }
+    let num_str = clean[..split_idx].trim();
+    let unit_str = clean[split_idx..].trim().to_uppercase();
+    let num = match num_str.parse::<f32>() {
+        Ok(n) => n,
+        Err(_) => return (None, default_unit),
+    };
+
+    let (converted_val, unit) = match unit_str.as_str() {
+        "M/S" | "M\\S" | "MPS" => {
+            if to_metric { (num * 3.6, "km/h") } else { (num * 2.23694, "mph") }
+        }
+        "KPH" | "KM/H" | "KMH" => {
+            if to_metric { (num, "km/h") } else { (num * 0.621371, "mph") }
+        }
+        "MPH" => {
+            if to_metric { (num * 1.60934, "km/h") } else { (num, "mph") }
+        }
+        _ => {
+            if to_metric { (num, "km/h") } else { (num, "mph") }
+        }
+    };
+    (Some(converted_val.round().max(0.0) as i32), unit)
+}
+
+fn parse_wind_direction_rad(raw: &str) -> Option<f32> {
+    let clean = raw.trim();
+    if clean.is_empty() || clean == "..." || clean == "—" || clean == "-" {
+        return None;
+    }
+    let upper = clean.to_uppercase();
+    let named_rad = match upper.as_str() {
+        "N" => Some(0.0),
+        "NNE" => Some(22.5_f32.to_radians()),
+        "NE" => Some(45.0_f32.to_radians()),
+        "ENE" => Some(67.5_f32.to_radians()),
+        "E" => Some(90.0_f32.to_radians()),
+        "ESE" => Some(112.5_f32.to_radians()),
+        "SE" => Some(135.0_f32.to_radians()),
+        "SSE" => Some(157.5_f32.to_radians()),
+        "S" => Some(180.0_f32.to_radians()),
+        "SSW" => Some(202.5_f32.to_radians()),
+        "SW" => Some(225.0_f32.to_radians()),
+        "WSW" => Some(247.5_f32.to_radians()),
+        "W" => Some(270.0_f32.to_radians()),
+        "WNW" => Some(292.5_f32.to_radians()),
+        "NW" => Some(315.0_f32.to_radians()),
+        "NNW" => Some(337.5_f32.to_radians()),
+        _ => None,
+    };
+    if let Some(rad) = named_rad {
+        return Some(rad);
+    }
+
+    let mut num_end = 0;
+    for (i, c) in clean.char_indices() {
+        if c.is_ascii_digit() || c == '.' || c == '-' || c == '+' {
+            num_end = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if num_end > 0 {
+        if let Ok(val) = clean[..num_end].parse::<f32>() {
+            let unit = clean[num_end..].trim().to_lowercase();
+            let rad = if unit.contains("deg") || unit.contains("°") {
+                val.to_radians()
+            } else {
+                val
+            };
+            return Some(rad.rem_euclid(2.0 * std::f32::consts::PI));
+        }
+    }
+    None
+}
+
+fn draw_wind_indicator(
+    ui: &mut egui::Ui,
+    speed_num: Option<i32>,
+    speed_unit: &str,
+    wind_rad: Option<f32>,
+    compass_str: &str,
+    scale: f32,
+) -> egui::Response {
+    let widget_size = (24.0 * scale).round().max(18.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(widget_size, widget_size), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    let center = rect.center();
+    let r = widget_size * 0.44;
+
+    let cyan_bright = egui::Color32::from_rgb(0, 229, 200);      // #00E5C8 vibrant motorsport teal
+    let cyan_dim = egui::Color32::from_rgba_unmultiplied(0, 229, 200, 75);
+    let bg_circle = egui::Color32::from_rgba_unmultiplied(12, 17, 23, 160);
+
+    // Subtle dark circular background
+    painter.circle_filled(center, r + 1.0 * scale, bg_circle);
+
+    let has_wind = speed_num.unwrap_or(0) > 0;
+
+    // Draw circular ring
+    let ring_stroke = if has_wind {
+        egui::Stroke::new(1.8 * scale, cyan_bright)
+    } else {
+        egui::Stroke::new(1.2 * scale, cyan_dim)
+    };
+    painter.circle_stroke(center, r, ring_stroke);
+
+    // If there is wind direction, draw the directional pointer arrowhead
+    if let (true, Some(rad)) = (has_wind, wind_rad) {
+        // rad: 0 is North (UP), PI/2 is East (RIGHT)
+        let dir_vec = egui::vec2(rad.sin(), -rad.cos());
+        let tip = center + dir_vec * (r + 2.5 * scale);
+
+        let base_center = center + dir_vec * (r - 3.5 * scale);
+        let normal = egui::vec2(-dir_vec.y, dir_vec.x);
+        let half_w = 3.6 * scale;
+
+        let left = base_center + normal * half_w;
+        let right = base_center - normal * half_w;
+
+        painter.add(egui::Shape::convex_polygon(
+            vec![tip, left, right],
+            cyan_bright,
+            egui::Stroke::NONE,
+        ));
+    }
+
+    // Center wind speed text
+    let spd_str = speed_num.map_or("—".to_string(), |s| s.to_string());
+    let font_size = (11.0 * scale).round().max(9.0);
+    painter.text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        spd_str,
+        egui::FontId::proportional(font_size),
+        egui::Color32::WHITE,
+    );
+
+    let tooltip_text = if let Some(spd) = speed_num {
+        let dir_info = if !compass_str.is_empty() {
+            format!(" {}", compass_str)
+        } else {
+            String::new()
+        };
+        let deg_info = wind_rad.map_or(String::new(), |r| {
+            format!(" ({:.0}°)", r.to_degrees().rem_euclid(360.0))
+        });
+        format!("Wind: {} {}{}{}", spd, speed_unit, dir_info, deg_info)
+    } else {
+        "Wind: Awaiting telemetry".to_string()
+    };
+
+    response.on_hover_text(tooltip_text)
+}
+
 fn format_time(t: f32) -> String {
     if t <= 0.0 { 
         "-".to_string() 
@@ -3453,6 +3661,9 @@ impl WarRoomApp {
                     if ui.checkbox(&mut self.settings.overlay.show_race_control_card, "Race Control & Flags").changed() {
                         self.settings.save();
                     }
+                    if ui.checkbox(&mut self.settings.overlay.show_weather, "Track Temp & Wind").changed() {
+                        self.settings.save();
+                    }
                 });
 
                 ui.add_space(3.0);
@@ -4352,6 +4563,22 @@ impl WarRoomApp {
                             ui.add_space(16.0);
 
                             let last_lap_time = active_stint.map_or(0.0, |st| st.last_lap);
+                            let best_lap_time = active_stint
+                                .map(|st| st.fast_lap)
+                                .filter(|&t| t > 0.0)
+                                .or_else(|| {
+                                    player.and_then(|p| {
+                                        p.stints.iter()
+                                            .map(|st| st.fast_lap)
+                                            .filter(|&t| t > 0.0)
+                                            .fold(None, |min, t| match min {
+                                                None => Some(t),
+                                                Some(m) if t < m => Some(t),
+                                                Some(m) => Some(m),
+                                            })
+                                    })
+                                })
+                                .unwrap_or(0.0);
                             let avg_5 = active_stint.map_or(0.0, |st| st.avg_5());
                             let full_avg = active_stint.map_or(0.0, |st| st.full_average());
                             let stint_laps = active_stint.map_or(0, |st| st.laps_completed);
@@ -4372,6 +4599,16 @@ impl WarRoomApp {
                                 ui.label(egui::RichText::new("Last lap").color(muted).size(13.0));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     ui.label(egui::RichText::new(format_time(last_lap_time)).color(primary).size(14.5).strong());
+                                });
+                                ui.end_row();
+
+                                ui.label(egui::RichText::new("Best lap").color(muted).size(13.0));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let best_color = if best_lap_time > 0.0 { green } else { muted };
+                                    let resp = ui.label(egui::RichText::new(format_time(best_lap_time)).color(best_color).size(14.5).strong());
+                                    if best_lap_time > 0.0 {
+                                        resp.on_hover_text("Fastest lap completed by driver in this session");
+                                    }
                                 });
                                 ui.end_row();
 
@@ -5365,12 +5602,13 @@ impl WarRoomApp {
         let show_pace = self.settings.overlay.show_pace_card;
         let show_fuel = self.settings.overlay.show_fuel_card;
         let show_rc = self.settings.overlay.show_race_control_card;
+        let show_weather = self.settings.overlay.show_weather;
 
         // If user unchecked everything, default back to showing all cards so window isn't empty
-        let (show_pace, show_fuel, show_rc) = if !show_pace && !show_fuel && !show_rc {
-            (true, true, true)
+        let (show_pace, show_fuel, show_rc, show_weather) = if !show_pace && !show_fuel && !show_rc && !show_weather {
+            (true, true, true, true)
         } else {
-            (show_pace, show_fuel, show_rc)
+            (show_pace, show_fuel, show_rc, show_weather)
         };
 
         let (stint_num, stint_lap_count, stint_avg, last_lap, fast_lap, comp_header, comp_last_lap, comp_sub, delta_opt, fuel_level_ltr, laps_of_fuel, pit_target_lap, laps_remain, player_lap, fuel_burn_rate_ltr, fuel_to_add_display, has_fuel_calc, inc_str, inc_color, caution_str, caution_color, flag_text, flag_color, player_pos) = if is_preview {
@@ -5497,6 +5735,38 @@ impl WarRoomApp {
             (stint_num, stint_lap_count, stint_avg, last_lap, fast_lap, comp_header, comp_last_lap, comp_sub, delta_opt, fuel_level_ltr, laps_of_fuel, pit_target_lap, laps_remain, player_lap, fuel_burn_rate_ltr, fuel_to_add_display, has_fuel_calc, inc_str, inc_color, caution_str, caution_color, flag_text, flag_color, player_pos)
         };
 
+        let (air_temp_val, track_temp_val, wind_spd_val, wind_spd_unit, wind_rad_val, wind_compass_str, air_str, track_str) = if is_preview {
+            if is_metric {
+                (Some(22), Some(28), Some(10), "km/h", Some(45.0_f32.to_radians()), "NE".to_string(), "22°C".to_string(), "28°C".to_string())
+            } else {
+                (Some(72), Some(82), Some(6), "mph", Some(45.0_f32.to_radians()), "NE".to_string(), "72°F".to_string(), "82°F".to_string())
+            }
+        } else {
+            let air_val = parse_temp_num(&state.air_temp_raw, is_metric);
+            let trk_val = parse_temp_num(&state.track_temp_raw, is_metric);
+            let (w_spd, w_unit) = parse_wind_speed(&state.wind_speed_raw, is_metric);
+            let w_rad = parse_wind_direction_rad(&state.wind_dir_raw);
+            let w_cmp = format_wind_dir(&state.wind_dir_raw);
+            let a_str = convert_unit(&state.air_temp_raw, is_metric);
+            let t_str = convert_unit(&state.track_temp_raw, is_metric);
+            (air_val, trk_val, w_spd, w_unit, w_rad, w_cmp, a_str, t_str)
+        };
+
+        let temp_display_str = match (air_temp_val, track_temp_val) {
+            (Some(a), Some(t)) => format!("{}/{}", a, t),
+            (Some(a), None) => format!("{}/—", a),
+            (None, Some(t)) => format!("—/{}", t),
+            (None, None) => "—/—".to_string(),
+        };
+
+        let temp_tooltip = format!(
+            "Air Temp: {}\nTrack Temp: {}",
+            if !air_str.is_empty() && air_str != "..." && air_str != "—" { &air_str } else { "Awaiting telemetry" },
+            if !track_str.is_empty() && track_str != "..." && track_str != "—" { &track_str } else { "Awaiting telemetry" }
+        );
+
+        let show_bottom_bar = show_rc || show_weather;
+
         let mut base_h = 16.0;
         let mut count = 0;
         if show_pace {
@@ -5507,8 +5777,8 @@ impl WarRoomApp {
             base_h += 77.0;
             count += 1;
         }
-        if show_rc {
-            base_h += 29.0;
+        if show_bottom_bar {
+            base_h += 34.0;
             count += 1;
         }
         if count > 1 {
@@ -5737,20 +6007,40 @@ impl WarRoomApp {
                             });
                     }
 
-                    // --- SECTION 3: RACE CONTROL, INCIDENTS & CAUTIONS BAR ---
-                    if show_rc {
+                    // --- SECTION 3: RACE CONTROL, INCIDENTS, CAUTIONS & WEATHER BAR ---
+                    if show_bottom_bar {
                         egui::Frame::none()
                             .fill(card_fill)
                             .rounding(8.0)
-                            .inner_margin(egui::Margin::symmetric(card_padding_x, (5.0 * scale).max(3.0)))
+                            .inner_margin(egui::Margin::symmetric(card_padding_x, (4.0 * scale).max(2.5)))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 8.0 * scale;
-                                    ui.label(egui::RichText::new(&inc_str).color(inc_color).size(rc_font_size).strong());
+                                    ui.spacing_mut().item_spacing.x = 6.0 * scale;
 
-                                    ui.add_space(10.0 * scale);
+                                    if show_rc {
+                                        ui.label(egui::RichText::new(&inc_str).color(inc_color).size(rc_font_size).strong());
 
-                                    ui.label(egui::RichText::new(&caution_str).color(caution_color).size(rc_font_size));
+                                        ui.add_space(6.0 * scale);
+                                        ui.label(egui::RichText::new(&caution_str).color(caution_color).size(rc_font_size));
+                                    }
+
+                                    if show_rc && show_weather {
+                                        ui.add_space(8.0 * scale);
+                                        ui.label(egui::RichText::new("·").color(muted).size(rc_font_size));
+                                        ui.add_space(8.0 * scale);
+                                    }
+
+                                    if show_weather {
+                                        let temp_resp = ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 4.0 * scale;
+                                            ui.label(egui::RichText::new("Air/Track Temp:").color(primary).size(rc_font_size).strong());
+                                            ui.label(egui::RichText::new(&temp_display_str).color(egui::Color32::from_rgb(56, 189, 248)).size(rc_font_size).strong());
+                                        }).response;
+                                        temp_resp.on_hover_text(&temp_tooltip);
+
+                                        ui.add_space(6.0 * scale);
+                                        draw_wind_indicator(ui, wind_spd_val, wind_spd_unit, wind_rad_val, &wind_compass_str, scale);
+                                    }
 
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         ui.label(egui::RichText::new(flag_text).color(flag_color).size(rc_font_size).strong());
@@ -5921,17 +6211,15 @@ impl eframe::App for WarRoomApp {
                         ui.label(egui::RichText::new(format!("P{} / {}", player_pos, total_drivers)).color(primary).strong().size(12.5));
                     });
 
-                let wind_full = if wind_dir_str.is_empty() {
-                    wind_spd_str
-                } else {
-                    format!("{} {}", wind_spd_str, wind_dir_str)
-                };
-                let cond_summary = format!(
-                    "☀ {} · Air {} · Track {} · Wind {} · RH {}",
-                    sky_str, air_str, track_str, wind_full, rh_str
-                );
+                let (header_wind_spd, header_wind_unit) = parse_wind_speed(&current_state.wind_speed_raw, current_metric);
+                let header_wind_rad = parse_wind_direction_rad(&current_state.wind_dir_raw);
                 egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
-                    ui.label(egui::RichText::new(cond_summary).color(muted).size(12.0));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.label(egui::RichText::new(format!("☀ {} · Air {} · Track {} · Wind {}", sky_str, air_str, track_str, wind_spd_str)).color(muted).size(12.0));
+                        draw_wind_indicator(ui, header_wind_spd, header_wind_unit, header_wind_rad, &wind_dir_str, 0.72);
+                        ui.label(egui::RichText::new(format!("· RH {}", rh_str)).color(muted).size(12.0));
+                    });
                 });
 
                 // Right-side controls: Live pill, Overlay, Overflow menu (⋯), Settings (⚙)
@@ -7095,6 +7383,7 @@ DriverInfo:
         assert!(parsed.show_pace_card, "show_pace_card should default to true");
         assert!(parsed.show_fuel_card, "show_fuel_card should default to true");
         assert!(parsed.show_race_control_card, "show_race_control_card should default to true");
+        assert!(parsed.show_weather, "show_weather should default to true");
         assert_eq!(parsed.fuel_hero_metric, FuelHeroMetric::FuelAmount);
         assert!((parsed.hud_scale - 1.0).abs() < 0.001);
 
@@ -7102,6 +7391,7 @@ DriverInfo:
         let mut custom = parsed;
         custom.fuel_hero_metric = FuelHeroMetric::LapsToEmpty;
         custom.show_pace_card = false;
+        custom.show_weather = true;
         custom.hud_scale = 1.20;
 
         let serialized = serde_json::to_string(&custom).expect("Must serialize");
@@ -7109,6 +7399,7 @@ DriverInfo:
         assert_eq!(roundtrip.fuel_hero_metric, FuelHeroMetric::LapsToEmpty);
         assert!(!roundtrip.show_pace_card);
         assert!(roundtrip.show_fuel_card);
+        assert!(roundtrip.show_weather);
         assert!((roundtrip.hud_scale - 1.20).abs() < 0.001);
     }
 
@@ -7301,6 +7592,54 @@ DriverInfo:
         let s1 = &driver.stints[0];
         assert!(!s1.is_active, "Stint S1 is closed at pit entry");
         assert!(!s1.tires.has_data, "Stint S1 must NOT latch tire data at pit entry before stopping in stall");
+    }
+
+    #[test]
+    fn test_weather_overlay_parsing_and_formatting() {
+        // 1. Temperature parsing
+        assert_eq!(parse_temp_num("72.4 F", false), Some(72));
+        assert_eq!(parse_temp_num("72.4 F", true), Some(22));
+        assert_eq!(parse_temp_num("82.0 F", false), Some(82));
+        assert_eq!(parse_temp_num("82.0 F", true), Some(28));
+        assert_eq!(parse_temp_num("22 C", false), Some(72));
+        assert_eq!(parse_temp_num("22 C", true), Some(22));
+        assert_eq!(parse_temp_num("28 C", true), Some(28));
+        assert_eq!(parse_temp_num("...", false), None);
+        assert_eq!(parse_temp_num("—", true), None);
+
+        // 2. Wind speed parsing
+        assert_eq!(parse_wind_speed("5.2 mph", false), (Some(5), "mph"));
+        assert_eq!(parse_wind_speed("6 mph", false), (Some(6), "mph"));
+        assert_eq!(parse_wind_speed("6 mph", true), (Some(10), "km/h"));
+        assert_eq!(parse_wind_speed("2.7 m/s", false), (Some(6), "mph"));
+        assert_eq!(parse_wind_speed("2.7 m/s", true), (Some(10), "km/h"));
+        assert_eq!(parse_wind_speed("10 km/h", true), (Some(10), "km/h"));
+        assert_eq!(parse_wind_speed("...", false), (None, "mph"));
+
+        // 3. Wind direction parsing
+        let ne_rad = parse_wind_direction_rad("NE").expect("NE must parse");
+        assert!((ne_rad - 45.0_f32.to_radians()).abs() < 0.001);
+
+        let nw_rad = parse_wind_direction_rad("NW").expect("NW must parse");
+        assert!((nw_rad - 315.0_f32.to_radians()).abs() < 0.001);
+
+        let n_rad = parse_wind_direction_rad("N").expect("N must parse");
+        assert!(n_rad.abs() < 0.001);
+
+        let rad_val = parse_wind_direction_rad("0.785 rad").expect("rad must parse");
+        assert!((rad_val - 0.785).abs() < 0.001);
+
+        let deg_val = parse_wind_direction_rad("90 deg").expect("deg must parse");
+        assert!((deg_val - 90.0_f32.to_radians()).abs() < 0.001);
+
+        assert_eq!(parse_wind_direction_rad("..."), None);
+        assert_eq!(parse_wind_direction_rad("—"), None);
+
+        // 4. Stint analyzer sample: 72/82 temp display format
+        let air = parse_temp_num("72 F", false);
+        let trk = parse_temp_num("82 F", false);
+        let formatted = format!("{}/{}", air.unwrap(), trk.unwrap());
+        assert_eq!(formatted, "72/82");
     }
 }
 

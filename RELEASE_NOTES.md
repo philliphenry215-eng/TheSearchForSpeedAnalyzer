@@ -1,3 +1,14 @@
+# The Search For Speed Analyzer — v0.2.3
+
+### 🌡️ Air/Track Temperature & Wind Direction Overlay:
+* **Air & Track Surface Temp Readout:** Integrated live environmental telemetry into the floating overlay HUD (`Air/Track Temp: 72/82` in Fahrenheit or `22/28` in Celsius) so drivers can monitor track grip loss and ambient conditions without leaving their driving line.
+* **Wind Direction Compass Gauge:** Custom-drawn circular vector compass widget with the live wind speed number centered inside and a sharp pointer arrowhead indicating exact wind heading.
+* **Modular HUD Toggle:** Added `"Track Temp & Wind"` toggle checkbox in Settings under *Visible HUD Sections*.
+* **Integrated HUD & Dashboard Polish:** Seamlessly fits into the in-car overlay status bar with generous hover tooltips detailing exact temperatures and angles (`Wind: 6 mph NE (45°)`), plus a live mini compass in the main application header.
+* **Cockpit Engineer Best / Fastest Lap Readout:** Added "Best lap" right beneath "Last lap" in Column 1's Fuel & Stint card, styled in high-visibility status green with live stint and session fallback.
+
+---
+
 # The Search For Speed Analyzer — v0.2.2
 
 ### 🛞 Definitive Tire Telemetry & Garage Sync:

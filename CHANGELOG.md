@@ -5,7 +5,15 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [0.2.2] — 2026-10-21
+## [0.2.3] — 2026-10-21
+
+### Added
+* **Live In-Car Air/Track Temperature & Wind Direction HUD Overlay:**
+  * **Compact Dual-Temp Readout:** Added `Air/Track Temp: 72/82` (or `22/28` in Celsius) directly into the overlay status bar, styled in high-contrast gold label and cyan temperature figures with rich hover tooltips.
+  * **Dynamic Wind Direction Compass:** Added a circular vector gauge widget featuring an outer ring, live wind velocity integer in the center (e.g. `6 mph` / `10 km/h`), and a directional pointer arrowhead oriented along the true telemetry heading.
+  * **Modular HUD Customization:** Configured an independent `"Track Temp & Wind"` visibility checkbox in Settings (`OverlaySettings.show_weather`) so racers can easily toggle the module.
+  * **Main Header Dashboard Compass:** Added the mini circular wind indicator to the main app header conditions pill for consistent environmental awareness across both desktop and overlay views.
+* **Cockpit Engineer Best / Fastest Lap Metric:** Added "Best lap" right beneath "Last lap" in Column 1's Fuel & Stint card, styled in high-visibility status green with live stint and session fallback.
 
 ### Fixed & Improved
 * **Tire Data Garage Synchronization:** Integrated direct extraction of iRacing's definitive garage tire data (`CarSetup`) from the session string, guaranteeing exact 1-to-1 matches with the in-game iRacing garage screen for last hot pressures, carcass temperatures, and tread wear percentages (LF: `12.1 psi` · `194° · 187° · 164°F` · `86% · 86% · 100%`).
