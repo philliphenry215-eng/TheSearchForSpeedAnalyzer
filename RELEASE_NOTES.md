@@ -1,3 +1,13 @@
+# The Search For Speed Analyzer — v0.2.4
+
+### 🧭 Car-Relative Dynamic Wind Heading & Prominent Vector Gauge:
+* **Cockpit-Relative Real-Time Wind Tracking:** Synchronized wind telemetry against vehicle yaw (`YawNorth` at 60 Hz). As you steer around the track, the wind arrow dynamically updates in conjunction with the direction the car is facing.
+* **Intuitive Wind Vectoring:** Crosswinds from left to right point directly right (3 o'clock), headwinds point directly into the car nose (6 o'clock), and tailwinds point forward (12 o'clock).
+* **High-Visibility Prominent Pointer:** Enlarged gauge diameter to `28px` with a bold cyan chevron, outlined vector shaft, and gold car-nose reference pip at 12 o'clock for instantaneous glanceability at race pace.
+* **Aerodynamic Tooltip Feedback:** Hovering over the gauge provides relative wind classification (e.g. `Crosswind (Left → Right) · True Compass: NE (45° rel)`).
+
+---
+
 # The Search For Speed Analyzer — v0.2.3
 
 ### 🌡️ Air/Track Temperature & Wind Direction Overlay:

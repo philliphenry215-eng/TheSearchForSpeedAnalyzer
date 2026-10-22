@@ -587,6 +587,7 @@ pub struct WarRoomState {
     pub player_lap_distance_pct: f32,
     pub latest_tire_data: StintTireSet,
     pub player_is_in_car: bool,
+    pub player_yaw_north: f32,
     pub player_incidents: i32,
     pub incident_limit: i32,
     pub caution_count: i32,
@@ -657,6 +658,7 @@ impl Default for WarRoomState {
             player_lap_distance_pct: 0.0,
             latest_tire_data: StintTireSet::default(),
             player_is_in_car: false,
+            player_yaw_north: 0.0,
             player_incidents: 0,
             incident_limit: 0,
             caution_count: 0,
@@ -735,6 +737,7 @@ impl WarRoomState {
         self.debug_lap_best_time = 0.0;
         self.debug_lap_best_lap_num = 0;
         self.latest_tire_data = StintTireSet::default();
+        self.player_yaw_north = 0.0;
 
         if manual {
             self.debug_event_logs.push(format!(
@@ -2506,15 +2509,46 @@ fn parse_wind_direction_rad(raw: &str) -> Option<f32> {
     None
 }
 
+fn calculate_relative_wind_rad(wind_dir_rad: f32, yaw_north: f32) -> f32 {
+    let two_pi = 2.0 * std::f32::consts::PI;
+    let rad = (wind_dir_rad + yaw_north + std::f32::consts::PI).rem_euclid(two_pi);
+    if (rad - two_pi).abs() < 0.0001 || rad >= two_pi {
+        0.0
+    } else {
+        rad
+    }
+}
+
+fn describe_relative_wind(rel_rad: f32) -> &'static str {
+    let deg = rel_rad.to_degrees().rem_euclid(360.0);
+    if deg <= 22.5 || deg >= 337.5 {
+        "Tailwind (Pushing from behind)"
+    } else if deg > 22.5 && deg < 67.5 {
+        "Quartering Tailwind (Left → Right)"
+    } else if deg >= 67.5 && deg <= 112.5 {
+        "Crosswind (Left → Right)"
+    } else if deg > 112.5 && deg < 157.5 {
+        "Quartering Headwind (Left → Right)"
+    } else if deg >= 157.5 && deg <= 202.5 {
+        "Headwind (Directly into front)"
+    } else if deg > 202.5 && deg < 247.5 {
+        "Quartering Headwind (Right → Left)"
+    } else if deg >= 247.5 && deg <= 292.5 {
+        "Crosswind (Right → Left)"
+    } else {
+        "Quartering Tailwind (Right → Left)"
+    }
+}
+
 fn draw_wind_indicator(
     ui: &mut egui::Ui,
     speed_num: Option<i32>,
     speed_unit: &str,
-    wind_rad: Option<f32>,
+    rel_wind_rad: Option<f32>,
     compass_str: &str,
     scale: f32,
 ) -> egui::Response {
-    let widget_size = (24.0 * scale).round().max(18.0);
+    let widget_size = (28.0 * scale).round().max(20.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(widget_size, widget_size), egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
@@ -2522,45 +2556,60 @@ fn draw_wind_indicator(
     let r = widget_size * 0.44;
 
     let cyan_bright = egui::Color32::from_rgb(0, 229, 200);      // #00E5C8 vibrant motorsport teal
+    let cyan_glow = egui::Color32::from_rgb(34, 211, 238);        // #22D3EE bright cyan
     let cyan_dim = egui::Color32::from_rgba_unmultiplied(0, 229, 200, 75);
-    let bg_circle = egui::Color32::from_rgba_unmultiplied(12, 17, 23, 160);
+    let bg_circle = egui::Color32::from_rgba_unmultiplied(12, 17, 23, 190);
+    let gold_nose = egui::Color32::from_rgb(250, 204, 21);       // Forward reference notch
 
     // Subtle dark circular background
-    painter.circle_filled(center, r + 1.0 * scale, bg_circle);
+    painter.circle_filled(center, r + 2.0 * scale, bg_circle);
 
     let has_wind = speed_num.unwrap_or(0) > 0;
 
     // Draw circular ring
     let ring_stroke = if has_wind {
-        egui::Stroke::new(1.8 * scale, cyan_bright)
+        egui::Stroke::new(2.0 * scale, cyan_bright)
     } else {
         egui::Stroke::new(1.2 * scale, cyan_dim)
     };
     painter.circle_stroke(center, r, ring_stroke);
 
-    // If there is wind direction, draw the directional pointer arrowhead
-    if let (true, Some(rad)) = (has_wind, wind_rad) {
-        // rad: 0 is North (UP), PI/2 is East (RIGHT)
-        let dir_vec = egui::vec2(rad.sin(), -rad.cos());
-        let tip = center + dir_vec * (r + 2.5 * scale);
+    // Forward car-nose reference pip at 12 o'clock (0° = straight ahead)
+    let nose_top = center + egui::vec2(0.0, -(r + 2.5 * scale));
+    let nose_bottom = center + egui::vec2(0.0, -(r - 1.5 * scale));
+    painter.line_segment([nose_top, nose_bottom], egui::Stroke::new(1.8 * scale, gold_nose));
 
-        let base_center = center + dir_vec * (r - 3.5 * scale);
+    // If there is wind direction, draw the prominent directional pointer arrowhead and vector line
+    if let (true, Some(rad)) = (has_wind, rel_wind_rad) {
+        // rad: 0 is Forward (UP), PI/2 is Right (RIGHT), PI is Backward (DOWN), 3PI/2 is Left (LEFT)
+        let dir_vec = egui::vec2(rad.sin(), -rad.cos());
+        let tip = center + dir_vec * (r + 4.5 * scale);
+
+        let base_center = center + dir_vec * (r - 5.5 * scale);
         let normal = egui::vec2(-dir_vec.y, dir_vec.x);
-        let half_w = 3.6 * scale;
+        let half_w = 4.8 * scale;
 
         let left = base_center + normal * half_w;
         let right = base_center - normal * half_w;
+        let notch = base_center + dir_vec * (1.8 * scale);
 
+        // Vector pointer line from near center to arrowhead
+        painter.line_segment(
+            [center + dir_vec * (r * 0.40), notch],
+            egui::Stroke::new(2.2 * scale, cyan_bright),
+        );
+
+        // Bold chevron polygon
         painter.add(egui::Shape::convex_polygon(
-            vec![tip, left, right],
-            cyan_bright,
-            egui::Stroke::NONE,
+            vec![tip, left, notch, right],
+            cyan_glow,
+            egui::Stroke::new(0.8 * scale, egui::Color32::WHITE),
         ));
     }
 
     // Center wind speed text
     let spd_str = speed_num.map_or("—".to_string(), |s| s.to_string());
-    let font_size = (11.0 * scale).round().max(9.0);
+    let font_size = (11.5 * scale).round().max(9.5);
     painter.text(
         center,
         egui::Align2::CENTER_CENTER,
@@ -2570,15 +2619,20 @@ fn draw_wind_indicator(
     );
 
     let tooltip_text = if let Some(spd) = speed_num {
-        let dir_info = if !compass_str.is_empty() {
-            format!(" {}", compass_str)
+        let rel_desc = rel_wind_rad.map_or("", describe_relative_wind);
+        let compass_info = if !compass_str.is_empty() {
+            format!(" · True Compass: {}", compass_str)
         } else {
             String::new()
         };
-        let deg_info = wind_rad.map_or(String::new(), |r| {
-            format!(" ({:.0}°)", r.to_degrees().rem_euclid(360.0))
+        let deg_info = rel_wind_rad.map_or(String::new(), |r| {
+            format!(" ({:.0}° rel)", r.to_degrees().rem_euclid(360.0))
         });
-        format!("Wind: {} {}{}{}", spd, speed_unit, dir_info, deg_info)
+        if !rel_desc.is_empty() {
+            format!("Wind: {} {} ({}){}{}", spd, speed_unit, rel_desc, compass_info, deg_info)
+        } else {
+            format!("Wind: {} {}{}{}", spd, speed_unit, compass_info, deg_info)
+        }
     } else {
         "Wind: Awaiting telemetry".to_string()
     };
@@ -3044,6 +3098,15 @@ impl WarRoomApp {
                             if let Ok(Value::FLOAT(wd)) = live.get("WindDir") {
                                 if wd.is_finite() {
                                     s.wind_dir_raw = format!("{:.3} rad", wd);
+                                }
+                            }
+                            if let Ok(Value::FLOAT(yn)) = live.get("YawNorth") {
+                                if yn.is_finite() {
+                                    s.player_yaw_north = yn;
+                                }
+                            } else if let Ok(Value::FLOAT(yaw)) = live.get("Yaw") {
+                                if yaw.is_finite() {
+                                    s.player_yaw_north = yaw;
                                 }
                             }
                             if let Ok(Value::FLOAT(rh)) = live.get("RelativeHumidity") {
@@ -5735,11 +5798,11 @@ impl WarRoomApp {
             (stint_num, stint_lap_count, stint_avg, last_lap, fast_lap, comp_header, comp_last_lap, comp_sub, delta_opt, fuel_level_ltr, laps_of_fuel, pit_target_lap, laps_remain, player_lap, fuel_burn_rate_ltr, fuel_to_add_display, has_fuel_calc, inc_str, inc_color, caution_str, caution_color, flag_text, flag_color, player_pos)
         };
 
-        let (air_temp_val, track_temp_val, wind_spd_val, wind_spd_unit, wind_rad_val, wind_compass_str, air_str, track_str) = if is_preview {
+        let (air_temp_val, track_temp_val, wind_spd_val, wind_spd_unit, rel_wind_rad, wind_compass_str, air_str, track_str) = if is_preview {
             if is_metric {
-                (Some(22), Some(28), Some(10), "km/h", Some(45.0_f32.to_radians()), "NE".to_string(), "22°C".to_string(), "28°C".to_string())
+                (Some(22), Some(28), Some(10), "km/h", Some(90.0_f32.to_radians()), "NE".to_string(), "22°C".to_string(), "28°C".to_string())
             } else {
-                (Some(72), Some(82), Some(6), "mph", Some(45.0_f32.to_radians()), "NE".to_string(), "72°F".to_string(), "82°F".to_string())
+                (Some(72), Some(82), Some(6), "mph", Some(90.0_f32.to_radians()), "NE".to_string(), "72°F".to_string(), "82°F".to_string())
             }
         } else {
             let air_val = parse_temp_num(&state.air_temp_raw, is_metric);
@@ -5749,7 +5812,8 @@ impl WarRoomApp {
             let w_cmp = format_wind_dir(&state.wind_dir_raw);
             let a_str = convert_unit(&state.air_temp_raw, is_metric);
             let t_str = convert_unit(&state.track_temp_raw, is_metric);
-            (air_val, trk_val, w_spd, w_unit, w_rad, w_cmp, a_str, t_str)
+            let rel_rad = w_rad.map(|raw_rad| calculate_relative_wind_rad(raw_rad, state.player_yaw_north));
+            (air_val, trk_val, w_spd, w_unit, rel_rad, w_cmp, a_str, t_str)
         };
 
         let temp_display_str = match (air_temp_val, track_temp_val) {
@@ -6039,7 +6103,7 @@ impl WarRoomApp {
                                         temp_resp.on_hover_text(&temp_tooltip);
 
                                         ui.add_space(6.0 * scale);
-                                        draw_wind_indicator(ui, wind_spd_val, wind_spd_unit, wind_rad_val, &wind_compass_str, scale);
+                                        draw_wind_indicator(ui, wind_spd_val, wind_spd_unit, rel_wind_rad, &wind_compass_str, scale);
                                     }
 
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -6213,11 +6277,14 @@ impl eframe::App for WarRoomApp {
 
                 let (header_wind_spd, header_wind_unit) = parse_wind_speed(&current_state.wind_speed_raw, current_metric);
                 let header_wind_rad = parse_wind_direction_rad(&current_state.wind_dir_raw);
+                let header_rel_wind = header_wind_rad.map(|w_rad| {
+                    calculate_relative_wind_rad(w_rad, current_state.player_yaw_north)
+                });
                 egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         ui.label(egui::RichText::new(format!("☀ {} · Air {} · Track {} · Wind {}", sky_str, air_str, track_str, wind_spd_str)).color(muted).size(12.0));
-                        draw_wind_indicator(ui, header_wind_spd, header_wind_unit, header_wind_rad, &wind_dir_str, 0.72);
+                        draw_wind_indicator(ui, header_wind_spd, header_wind_unit, header_rel_wind, &wind_dir_str, 0.72);
                         ui.label(egui::RichText::new(format!("· RH {}", rh_str)).color(muted).size(12.0));
                     });
                 });
@@ -7640,6 +7707,29 @@ DriverInfo:
         let trk = parse_temp_num("82 F", false);
         let formatted = format!("{}/{}", air.unwrap(), trk.unwrap());
         assert_eq!(formatted, "72/82");
+
+        // 5. Car-relative wind calculations
+        // User scenario: Wind from West (270° = 3pi/2), car facing North (yaw = 0.0)
+        // Wind is blowing from left to right across the car -> arrow points RIGHT (90° = pi/2)
+        let w_west = 270.0_f32.to_radians();
+        let rel_north = calculate_relative_wind_rad(w_west, 0.0);
+        assert!((rel_north - 90.0_f32.to_radians()).abs() < 0.001);
+        assert_eq!(describe_relative_wind(rel_north), "Crosswind (Left → Right)");
+
+        // Car turns 90° right to face East (yaw_north = -pi/2). Wind from West is now TAILWIND (0° / UP)
+        let rel_east = calculate_relative_wind_rad(w_west, -90.0_f32.to_radians());
+        assert!(rel_east.abs() < 0.001 || (rel_east - 2.0 * std::f32::consts::PI).abs() < 0.001);
+        assert_eq!(describe_relative_wind(rel_east), "Tailwind (Pushing from behind)");
+
+        // Car turns another 90° right to face South (yaw_north = pi). Wind from West is now CROSSWIND R->L (270° / LEFT)
+        let rel_south = calculate_relative_wind_rad(w_west, 180.0_f32.to_radians());
+        assert!((rel_south - 270.0_f32.to_radians()).abs() < 0.001);
+        assert_eq!(describe_relative_wind(rel_south), "Crosswind (Right → Left)");
+
+        // Car turns another 90° right to face West (yaw_north = pi/2). Wind from West is now HEADWIND (180° / DOWN)
+        let rel_west = calculate_relative_wind_rad(w_west, 90.0_f32.to_radians());
+        assert!((rel_west - 180.0_f32.to_radians()).abs() < 0.001);
+        assert_eq!(describe_relative_wind(rel_west), "Headwind (Directly into front)");
     }
 }
 

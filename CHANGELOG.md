@@ -5,6 +5,17 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.2.4] — 2026-10-21
+
+### Added & Improved
+* **Dynamic Car-Relative Wind Direction:**
+  * **Real-time Vehicle Heading Alignment:** Synchronized wind direction vector math directly against `YawNorth` (60 Hz telemetry orientation) so the gauge tracks wind relative to the car's cockpit nose in real-time as you steer through corners and straights.
+  * **Accurate Relative Wind Vectors:** Correctly resolves crosswinds (Left-to-Right = 3 o'clock arrow, Right-to-Left = 9 o'clock arrow), direct headwinds (6 o'clock arrow), and tailwinds (12 o'clock arrow).
+  * **Prominent Motorsport Vector Gauge:** Enlarged gauge diameter (`28px`), added a bold chevron pointer with vector shaft and white border, and integrated a gold car-nose reference pip at 12 o'clock.
+  * **Descriptive Wind Tooltips:** Hovering over the wind gauge now details relative aerodynamic wind behavior (e.g. `Crosswind (Left → Right) · True Compass: NE (45° rel)`).
+
+---
+
 ## [0.2.3] — 2026-10-21
 
 ### Added
