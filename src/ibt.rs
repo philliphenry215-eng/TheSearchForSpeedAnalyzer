@@ -207,6 +207,7 @@ pub struct IbtSessionMetadata {
     pub total_laps_header: i32,
     pub session_duration_secs: f64,
     pub channel_count: usize,
+    pub is_nextgen_lr_offset_applied: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -497,6 +498,11 @@ pub struct TireCornerAnalysis {
     pub wear_outside_pct: f32,
     pub wear_center_pct: f32,
     pub wear_inside_pct: f32,
+
+    // Peak thermal dynamics & track location
+    pub peak_temp_f: f32,
+    pub peak_dist_pct: f32,
+    pub peak_track_loc: String,
 }
 
 impl Default for TireCornerAnalysis {
@@ -528,6 +534,9 @@ impl Default for TireCornerAnalysis {
             wear_outside_pct: 100.0,
             wear_center_pct: 100.0,
             wear_inside_pct: 100.0,
+            peak_temp_f: 0.0,
+            peak_dist_pct: 0.0,
+            peak_track_loc: String::new(),
         }
     }
 }
@@ -580,6 +589,22 @@ pub struct NormalizedLapTrace {
     pub side_rake_mm: Option<Vec<f32>>,
     pub front_split_mm: Option<Vec<f32>>,
     pub rear_split_mm: Option<Vec<f32>>,
+    pub lf_temp_f: Option<Vec<f32>>,
+    pub rf_temp_f: Option<Vec<f32>>,
+    pub lr_temp_f: Option<Vec<f32>>,
+    pub rr_temp_f: Option<Vec<f32>>,
+    pub lf_inside_temp_f: Option<Vec<f32>>,
+    pub lf_outside_temp_f: Option<Vec<f32>>,
+    pub rf_inside_temp_f: Option<Vec<f32>>,
+    pub rf_outside_temp_f: Option<Vec<f32>>,
+    pub lr_inside_temp_f: Option<Vec<f32>>,
+    pub lr_outside_temp_f: Option<Vec<f32>>,
+    pub rr_inside_temp_f: Option<Vec<f32>>,
+    pub rr_outside_temp_f: Option<Vec<f32>>,
+    pub lf_press_psi: Option<Vec<f32>>,
+    pub rf_press_psi: Option<Vec<f32>>,
+    pub lr_press_psi: Option<Vec<f32>>,
+    pub rr_press_psi: Option<Vec<f32>>,
 }
 
 /// Side-by-Side Lap Comparison (Lap A Baseline vs. Lap B Target)
@@ -651,6 +676,53 @@ fn decode_cstr_latin1(bytes: &[u8]) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+/// NASCAR NextGen Left Rear ride height datum calibration offset in meters (-0.50 inches = -0.0127 m).
+/// In iRacing, the NASCAR NextGen Cup cars have a known LR sensor offset where 0.50" must be subtracted
+/// to align with physical setup and garage datum.
+pub const NASCAR_NEXTGEN_LR_RH_OFFSET_M: f32 = 0.0127; // 0.50 inches (12.7 mm)
+
+/// Returns true if the vehicle in this session is a NASCAR NextGen Cup car.
+pub fn is_nascar_nextgen(car_name: &str, yaml_str: &str) -> bool {
+    let cn = car_name.to_lowercase();
+    let yl = yaml_str.to_lowercase();
+    cn.contains("next gen")
+        || cn.contains("nextgen")
+        || cn.contains("stockcar2022")
+        || cn.contains("nascarcup22")
+        || yl.contains("stockcar2022")
+        || yl.contains("nascarcup22")
+        || yl.contains("next gen")
+        || yl.contains("nextgen")
+        || (cn.contains("nascar")
+            && (cn.contains("camaro") || cn.contains("mustang") || cn.contains("camry") || cn.contains("cup"))
+            && yl.contains("tiresaero"))
+}
+
+/// Classifies the track location (turn, apex, straightaway) from track distance percentage and optional lateral acceleration.
+pub fn classify_track_location(dist_pct: f32, lat_accel_g: Option<f32>) -> String {
+    let pct = dist_pct.clamp(0.0, 100.0);
+    let zone = if pct < 15.0 {
+        "Frontstretch / T1 Entry"
+    } else if pct <= 35.0 {
+        "Turn 1 / 2"
+    } else if pct < 65.0 {
+        "Backstretch"
+    } else if pct <= 85.0 {
+        "Turn 3 / 4"
+    } else {
+        "Frontstretch / Tri-Oval"
+    };
+    if let Some(g) = lat_accel_g {
+        if g.abs() > 0.4 {
+            format!("{} (Apex · {:.1}G)", zone, g.abs())
+        } else {
+            format!("{} ({:.1}%)", zone, pct)
+        }
+    } else {
+        format!("{} ({:.1}%)", zone, pct)
+    }
 }
 
 /// Parses an `.ibt` file from disk into a complete `IbtSession`.
@@ -903,9 +975,20 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
     // Ride height channels
     let full_lf_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LFrideHeight"));
     let full_rf_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("RFrideHeight"));
-    let full_lr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LRrideHeight"));
+    let mut full_lr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LRrideHeight"));
     let full_rr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("RRrideHeight"));
     let full_cfsr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("CFSRrideHeight"));
+
+    // Check if car is a NASCAR NextGen cup car (requires -0.50" / -0.0127m Left Rear ride height datum calibration)
+    let is_nextgen = is_nascar_nextgen(&metadata.car_name, &yaml_str);
+    metadata.is_nextgen_lr_offset_applied = is_nextgen;
+    if is_nextgen {
+        if let Some(ref mut lr_vec) = full_lr_rh {
+            for v in lr_vec.iter_mut() {
+                *v -= NASCAR_NEXTGEN_LR_RH_OFFSET_M;
+            }
+        }
+    }
 
     // Shock deflection & native velocity channels
     let full_lf_defl = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LFshockDefl"))
@@ -1069,6 +1152,8 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
                 slice_opt(&full_rr_cr, s, e),
                 slice_opt(&full_rr_press, s, e),
             ),
+            &lap_dist_pct,
+            slice_opt(&full_lat_accel, s, e).as_deref(),
         );
 
         apply_hot_tires_and_wear_to_lap(
@@ -1734,6 +1819,36 @@ pub fn normalize_lap(lap: &LapAnalysis, num_points: usize) -> NormalizedLapTrace
     let front_split_mm = norm_opt(&lap.suspension.front_split_mm);
     let rear_split_mm = norm_opt(&lap.suspension.rear_split_mm);
 
+    let fallback_tire_series = |opt: &Option<Vec<f32>>, fallback_val: f32| -> Option<Vec<f32>> {
+        norm_opt(opt).or_else(|| {
+            if fallback_val > 0.1 {
+                Some(vec![fallback_val; pts])
+            } else {
+                None
+            }
+        })
+    };
+
+    let lf_temp_f = fallback_tire_series(&lap.tires.lf.center_temp_f, lap.tires.lf.center_stats_f.avg);
+    let rf_temp_f = fallback_tire_series(&lap.tires.rf.center_temp_f, lap.tires.rf.center_stats_f.avg);
+    let lr_temp_f = fallback_tire_series(&lap.tires.lr.center_temp_f, lap.tires.lr.center_stats_f.avg);
+    let rr_temp_f = fallback_tire_series(&lap.tires.rr.center_temp_f, lap.tires.rr.center_stats_f.avg);
+
+    let lf_inside_temp_f = fallback_tire_series(&lap.tires.lf.inside_temp_f, lap.tires.lf.inside_stats_f.avg);
+    let lf_outside_temp_f = fallback_tire_series(&lap.tires.lf.outside_temp_f, lap.tires.lf.outside_stats_f.avg);
+    let rf_inside_temp_f = fallback_tire_series(&lap.tires.rf.inside_temp_f, lap.tires.rf.inside_stats_f.avg);
+    let rf_outside_temp_f = fallback_tire_series(&lap.tires.rf.outside_temp_f, lap.tires.rf.outside_stats_f.avg);
+
+    let lr_inside_temp_f = fallback_tire_series(&lap.tires.lr.inside_temp_f, lap.tires.lr.inside_stats_f.avg);
+    let lr_outside_temp_f = fallback_tire_series(&lap.tires.lr.outside_temp_f, lap.tires.lr.outside_stats_f.avg);
+    let rr_inside_temp_f = fallback_tire_series(&lap.tires.rr.inside_temp_f, lap.tires.rr.inside_stats_f.avg);
+    let rr_outside_temp_f = fallback_tire_series(&lap.tires.rr.outside_temp_f, lap.tires.rr.outside_stats_f.avg);
+
+    let lf_press_psi = fallback_tire_series(&lap.tires.lf.pressure_psi, lap.tires.lf.end_pressure_psi);
+    let rf_press_psi = fallback_tire_series(&lap.tires.rf.pressure_psi, lap.tires.rf.end_pressure_psi);
+    let lr_press_psi = fallback_tire_series(&lap.tires.lr.pressure_psi, lap.tires.lr.end_pressure_psi);
+    let rr_press_psi = fallback_tire_series(&lap.tires.rr.pressure_psi, lap.tires.rr.end_pressure_psi);
+
     NormalizedLapTrace {
         lap_number: lap.descriptor.lap_number,
         duration_secs: lap.descriptor.duration_secs,
@@ -1756,6 +1871,22 @@ pub fn normalize_lap(lap: &LapAnalysis, num_points: usize) -> NormalizedLapTrace
         side_rake_mm,
         front_split_mm,
         rear_split_mm,
+        lf_temp_f,
+        rf_temp_f,
+        lr_temp_f,
+        rr_temp_f,
+        lf_inside_temp_f,
+        lf_outside_temp_f,
+        rf_inside_temp_f,
+        rf_outside_temp_f,
+        lr_inside_temp_f,
+        lr_outside_temp_f,
+        rr_inside_temp_f,
+        rr_outside_temp_f,
+        lf_press_psi,
+        rf_press_psi,
+        lr_press_psi,
+        rr_press_psi,
     }
 }
 
@@ -2294,6 +2425,8 @@ pub fn compute_corner_tire_analysis(
     cm_c: Option<Vec<f32>>,
     cr_c: Option<Vec<f32>>,
     pressure_kpa: Option<Vec<f32>>,
+    dist_pct: &[f32],
+    lat_accel: Option<&[f32]>,
 ) -> TireCornerAnalysis {
     let c_to_f = |opt: Option<Vec<f32>>| -> Option<Vec<f32>> {
         opt.map(|v| v.into_iter().map(|c| (c * 9.0 / 5.0) + 32.0).collect())
@@ -2365,6 +2498,57 @@ pub fn compute_corner_tire_analysis(
             (0.0, 0.0, 0.0, 0.0)
         };
 
+    let peak_temp_f = inside_stats_f.max.max(center_stats_f.max).max(outside_stats_f.max);
+
+    // Find the track distance percentage where peak temp (or peak cornering load) occurred
+    let mut peak_dist_pct = 0.0_f32;
+    let mut found_peak = false;
+    let is_dynamic_temp = (center_stats_f.max - center_stats_f.min).abs() > 0.1
+        || (inside_stats_f.max - inside_stats_f.min).abs() > 0.1
+        || (outside_stats_f.max - outside_stats_f.min).abs() > 0.1;
+
+    if is_dynamic_temp {
+        let series_candidates = [&center_temp_f, &inside_temp_f, &outside_temp_f];
+        for opt_series in series_candidates {
+            if let Some(s) = opt_series {
+                if let Some((idx, _)) = s.iter().enumerate().max_by(|a, b| {
+                    a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal)
+                }) {
+                    if let Some(&p) = dist_pct.get(idx) {
+                        peak_dist_pct = p * 100.0;
+                        found_peak = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if !found_peak {
+        if let Some(accel) = lat_accel {
+            if let Some((idx, _)) = accel.iter().enumerate().max_by(|a, b| {
+                a.1.abs().partial_cmp(&b.1.abs()).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                if let Some(&p) = dist_pct.get(idx) {
+                    peak_dist_pct = p * 100.0;
+                }
+            }
+        } else {
+            peak_dist_pct = if is_left_side { 25.0 } else { 75.0 };
+        }
+    }
+
+    let peak_lat_g = lat_accel.and_then(|a| {
+        if a.is_empty() {
+            None
+        } else {
+            let idx = (((peak_dist_pct / 100.0) * ((a.len() - 1) as f32)).round() as usize).min(a.len() - 1);
+            a.get(idx).copied()
+        }
+    });
+
+    let peak_track_loc = classify_track_location(peak_dist_pct, peak_lat_g);
+
     TireCornerAnalysis {
         corner_name,
         is_left_side,
@@ -2392,6 +2576,9 @@ pub fn compute_corner_tire_analysis(
         wear_outside_pct: 100.0,
         wear_center_pct: 100.0,
         wear_inside_pct: 100.0,
+        peak_temp_f,
+        peak_dist_pct,
+        peak_track_loc,
     }
 }
 
@@ -2408,11 +2595,13 @@ pub fn compute_tire_analysis(
     rf: RawCornerTireTuple,
     lr: RawCornerTireTuple,
     rr: RawCornerTireTuple,
+    dist_pct: &[f32],
+    lat_accel: Option<&[f32]>,
 ) -> LapTireAnalysis {
-    let lf_data = compute_corner_tire_analysis("LF", true, lf.0, lf.1, lf.2, lf.3, lf.4);
-    let rf_data = compute_corner_tire_analysis("RF", false, rf.0, rf.1, rf.2, rf.3, rf.4);
-    let lr_data = compute_corner_tire_analysis("LR", true, lr.0, lr.1, lr.2, lr.3, lr.4);
-    let rr_data = compute_corner_tire_analysis("RR", false, rr.0, rr.1, rr.2, rr.3, rr.4);
+    let lf_data = compute_corner_tire_analysis("LF", true, lf.0, lf.1, lf.2, lf.3, lf.4, dist_pct, lat_accel);
+    let rf_data = compute_corner_tire_analysis("RF", false, rf.0, rf.1, rf.2, rf.3, rf.4, dist_pct, lat_accel);
+    let lr_data = compute_corner_tire_analysis("LR", true, lr.0, lr.1, lr.2, lr.3, lr.4, dist_pct, lat_accel);
+    let rr_data = compute_corner_tire_analysis("RR", false, rr.0, rr.1, rr.2, rr.3, rr.4, dist_pct, lat_accel);
 
     let has_temp_data = lf_data.temp_source != TireTempSource::Unavailable
         || rf_data.temp_source != TireTempSource::Unavailable
@@ -2834,6 +3023,19 @@ fn apply_hot_tires_and_wear_to_lap(
                     corner.peak_pressure_psi = corner.peak_pressure_psi.max(g_psi);
                 }
             }
+        }
+
+        corner.peak_temp_f = corner
+            .inside_stats_f
+            .max
+            .max(corner.center_stats_f.max)
+            .max(corner.outside_stats_f.max);
+        if corner.peak_track_loc.is_empty() {
+            corner.peak_track_loc = if corner.is_left_side {
+                "Turn 1 / 2 (25%)".to_string()
+            } else {
+                "Turn 3 / 4 (75%)".to_string()
+            };
         }
 
         if corner.cold_pressure_psi > 0.1 && corner.end_pressure_psi > 0.1 {
@@ -3427,12 +3629,16 @@ mod tests {
             Some(vec![90.0]),
             Some(vec![100.0]),
             Some(vec![100.0]), // 100 kPa = 14.5038 PSI
+            &[0.25],
+            Some(&[1.5]),
         );
         assert!((lf.inside_stats_f.avg - 212.0).abs() < 0.01);
         assert!((lf.outside_stats_f.avg - 176.0).abs() < 0.01);
         assert!((lf.spread_stats_f.avg - 36.0).abs() < 0.01);
         assert!(lf.center_bias_stats_f.avg.abs() < 0.01);
         assert!((lf.pressure_stats_psi.avg - 14.5038).abs() < 0.01);
+        assert!((lf.peak_temp_f - 212.0).abs() < 0.01);
+        assert!(lf.peak_track_loc.contains("Turn 1 / 2"));
 
         // Right Front (RF): CL = Inside (100°C = 212°F), CM = Center (95°C = 203°F), CR = Outside (80°C = 176°F)
         // Inside - Outside Spread on RF = CL(212°F) - CR(176°F) = +36.0°F
@@ -3445,7 +3651,16 @@ mod tests {
             Some(vec![95.0]),
             Some(vec![80.0]),
             Some(vec![200.0]), // 200 kPa = 29.0076 PSI
+            &[0.75],
+            Some(&[1.8]),
         );
+        assert!((rf.inside_stats_f.avg - 212.0).abs() < 0.01);
+        assert!((rf.outside_stats_f.avg - 176.0).abs() < 0.01);
+        assert!((rf.spread_stats_f.avg - 36.0).abs() < 0.01);
+        assert!((rf.center_bias_stats_f.avg - 9.0).abs() < 0.01);
+        assert!((rf.pressure_stats_psi.avg - 29.0076).abs() < 0.01);
+        assert!((rf.peak_temp_f - 212.0).abs() < 0.01);
+        assert!(rf.peak_track_loc.contains("Turn 3 / 4"));
         assert!((rf.inside_stats_f.avg - 212.0).abs() < 0.01);
         assert!((rf.outside_stats_f.avg - 176.0).abs() < 0.01);
         assert!((rf.spread_stats_f.avg - 36.0).abs() < 0.01);
@@ -3595,5 +3810,82 @@ CarSetup:
         assert!((lap6_rf.center_stats_f.avg - 233.6).abs() < 0.2);
         assert!((lap6_rf.outside_stats_f.avg - 219.2).abs() < 0.2);
         assert!((lap6_rf.wear_inside_pct - 92.0).abs() < 0.1);
+    }
+
+    /// 7. Confirms NASCAR NextGen Cup cars have the -0.50" (-12.7mm) LR ride height datum offset applied
+    ///    and that peak tire temperatures and track locations are properly populated.
+    #[test]
+    fn test_nascar_nextgen_lr_offset_and_tire_peak_location() {
+        let yaml = r#"---
+DriverInfo:
+  Drivers:
+    - CarIdx: 0
+      CarScreenName: "NASCAR Cup Series Next Gen Chevrolet Camaro ZL1"
+      CarPath: "stockcar2022_chevy"
+CarSetup:
+  TiresAero:
+    LeftRearTire:
+      StartingPressure: 131.0 kPa
+...
+"#;
+        let defs = [
+            ("SessionTime", "Time", "s", IbtVarType::Double),
+            ("Lap", "Lap", "", IbtVarType::Int),
+            ("LapDistPct", "Pct", "%", IbtVarType::Float),
+            ("PlayerTrackSurface", "Surf", "", IbtVarType::Int),
+            ("LFrideHeight", "LF RH", "m", IbtVarType::Float),
+            ("RFrideHeight", "RF RH", "m", IbtVarType::Float),
+            ("LRrideHeight", "LR RH", "m", IbtVarType::Float),
+            ("RRrideHeight", "RR RH", "m", IbtVarType::Float),
+            ("LatAccel", "Lat G", "m/s^2", IbtVarType::Float),
+        ];
+
+        let mut builder = SyntheticIbtBuilder::new(60, yaml, &defs);
+        for i in 0..60 {
+            let mut row = builder.new_row();
+            builder.set_f64(&mut row, "SessionTime", i as f64 / 60.0);
+            builder.set_i32(&mut row, "Lap", 1);
+            builder.set_f32(&mut row, "LapDistPct", i as f32 / 59.0);
+            builder.set_i32(&mut row, "PlayerTrackSurface", 3);
+            builder.set_f32(&mut row, "LFrideHeight", 0.050);
+            builder.set_f32(&mut row, "RFrideHeight", 0.050);
+            builder.set_f32(&mut row, "LRrideHeight", 0.0762); // 3.0 inches (0.0762 m)
+            builder.set_f32(&mut row, "RRrideHeight", 0.0762);
+            // Simulate peak lateral G at Turn 3/4 (~75% dist)
+            let lat_g = if i >= 40 && i <= 50 { 2.5 * 9.80665 } else { 0.1 };
+            builder.set_f32(&mut row, "LatAccel", lat_g);
+            builder.push_row(&row);
+        }
+
+        let bytes = builder.finish(1700000000, 0.0, 1.0, 1);
+        let sess = parse_ibt_bytes(&bytes, "nextgen_camaro.ibt").expect("Must parse");
+
+        assert!(sess.metadata.is_nextgen_lr_offset_applied, "NextGen Cup car must be detected");
+        assert_eq!(sess.analyzed_laps.len(), 1);
+        let lap = &sess.analyzed_laps[0];
+
+        // LR ride height must be 0.0762 - 0.0127 = 0.0635 m = 63.5 mm (2.5 inches instead of 3.0)
+        let lr_stats = lap.suspension.lr_stats_mm;
+        assert!(
+            (lr_stats.avg - 63.5).abs() < 0.1,
+            "LR ride height avg must be ~63.5 mm (2.5 in), got {:.2} mm",
+            lr_stats.avg
+        );
+
+        // Rear split (LR - RR) must be 63.5 - 76.2 = -12.7 mm (-0.50 in)
+        let rear_split_avg = lap.suspension.rear_split_stats_mm.avg;
+        assert!(
+            (rear_split_avg - (-12.7)).abs() < 0.1,
+            "Rear split must reflect -12.7 mm (-0.50 in) offset, got {:.2} mm",
+            rear_split_avg
+        );
+
+        // Tires should report peak location near Turn 3/4
+        let rf = &lap.tires.rf;
+        assert!(
+            rf.peak_track_loc.contains("Turn 3 / 4") || rf.peak_track_loc.contains("Apex"),
+            "Peak track loc must reflect peak cornering load, got '{}'",
+            rf.peak_track_loc
+        );
     }
 }

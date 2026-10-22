@@ -34,6 +34,20 @@ enum LoadWorkerState {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TireChartMode {
+    AllCorners, // LF, RF, LR, RR Center Temperatures
+    FrontAxle,  // LF vs RF 3-Zone (Outside, Mid, Inside)
+    RearAxle,   // LR vs RR 3-Zone (Outside, Mid, Inside)
+    Pressures,  // LF, RF, LR, RR Dynamic Pressures (PSI / kPa)
+}
+
+impl Default for TireChartMode {
+    fn default() -> Self {
+        Self::AllCorners
+    }
+}
+
 pub struct IbtTelemetryLabState {
     pub directory_input: String,
     pub scanned_files: Vec<IbtFileEntry>,
@@ -48,6 +62,7 @@ pub struct IbtTelemetryLabState {
     pub hover_dist_pct: Option<f32>,
     pub channel_search_filter: String,
     pub status_error: Option<String>,
+    pub tire_chart_mode: TireChartMode,
     worker: LoadWorkerState,
     has_initialized_dir: bool,
 }
@@ -69,6 +84,7 @@ impl Default for IbtTelemetryLabState {
             hover_dist_pct: None,
             channel_search_filter: String::new(),
             status_error: None,
+            tire_chart_mode: TireChartMode::AllCorners,
             worker: LoadWorkerState::Idle,
             has_initialized_dir: false,
         }
@@ -836,6 +852,7 @@ impl IbtTelemetryLabState {
                                     self.render_ride_height_and_rake_tab(
                                         ui,
                                         settings,
+                                        &sess,
                                         lap_a,
                                         lap_b,
                                         &norm_a,
@@ -846,7 +863,14 @@ impl IbtTelemetryLabState {
                                     self.render_shock_histograms_tab(ui, settings, lap_a, lap_b);
                                 }
                                 IbtAnalysisTab::TiresAndPressures => {
-                                    self.render_tires_and_pressures_tab(ui, settings, lap_a, lap_b);
+                                    self.render_tires_and_pressures_tab(
+                                        ui,
+                                        settings,
+                                        &sess,
+                                        lap_a,
+                                        lap_b,
+                                        &norm_a,
+                                    );
                                 }
                                 IbtAnalysisTab::ChannelsAndExport => {
                                     self.render_channels_and_export_tab(
@@ -1165,6 +1189,7 @@ impl IbtTelemetryLabState {
         &mut self,
         ui: &mut egui::Ui,
         settings: &AppSettings,
+        sess: &IbtSession,
         lap_a: &LapAnalysis,
         _lap_b: Option<&LapAnalysis>,
         norm_a: &NormalizedLapTrace,
@@ -1181,6 +1206,32 @@ impl IbtTelemetryLabState {
         let scale = if use_metric { 1.0 } else { MM_TO_INCHES };
         let unit = if use_metric { "mm" } else { "in" };
         let susp = &lap_a.suspension;
+
+        if sess.metadata.is_nextgen_lr_offset_applied {
+            egui::Frame::none()
+                .fill(settings.card_elevated_color())
+                .stroke(egui::Stroke::new(1.0, primary))
+                .rounding(egui::Rounding::same(8.0))
+                .inner_margin(egui::Margin::symmetric(12.0, 7.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("🏷 NASCAR NextGen Calibration Active:")
+                                .color(primary)
+                                .size(11.5)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "-0.50\" (-12.7 mm) datum calibration applied to Left Rear (LR) ride height, dynamic rake, side rake, and rear split.",
+                            )
+                            .color(white)
+                            .size(11.0),
+                        );
+                    });
+                });
+            ui.add_space(8.0);
+        }
 
         // Top KPI Row: Front RH, Rear RH, Dynamic Longitudinal Rake, Dynamic Side Rake, Center Floor CFSR
         ui.columns(5, |cols| {
@@ -1384,10 +1435,15 @@ impl IbtTelemetryLabState {
         }
 
         if !rear_rh_series.is_empty() {
+            let rear_title = if sess.metadata.is_nextgen_lr_offset_applied {
+                format!("REAR RIDE HEIGHTS (LR*, RR) ({}) · *LR includes -0.50\" NextGen offset", unit.to_uppercase())
+            } else {
+                format!("REAR RIDE HEIGHTS (LR, RR) ({})", unit.to_uppercase())
+            };
             draw_synchronized_trace_lane(
                 ui,
                 settings,
-                &format!("REAR RIDE HEIGHTS (LR, RR) ({})", unit.to_uppercase()),
+                &rear_title,
                 unit,
                 &norm_a.grid_dist_pct,
                 &norm_a.grid_dist_m,
@@ -1497,13 +1553,21 @@ impl IbtTelemetryLabState {
         }
 
         if !split_series.is_empty() {
+            let split_title = if sess.metadata.is_nextgen_lr_offset_applied {
+                format!(
+                    "LATERAL CORNER SPLITS · FRONT (LF - RF) & REAR (LR* - RR) ({}) · *LR calibrated",
+                    unit.to_uppercase()
+                )
+            } else {
+                format!(
+                    "LATERAL CORNER SPLITS · FRONT (LF - RF) & REAR (LR - RR) ({})",
+                    unit.to_uppercase()
+                )
+            };
             draw_synchronized_trace_lane(
                 ui,
                 settings,
-                &format!(
-                    "LATERAL CORNER SPLITS · FRONT (LF - RF) & REAR (LR - RR) ({})",
-                    unit.to_uppercase()
-                ),
+                &split_title,
                 unit,
                 &norm_a.grid_dist_pct,
                 &norm_a.grid_dist_m,
@@ -1618,16 +1682,30 @@ impl IbtTelemetryLabState {
         &mut self,
         ui: &mut egui::Ui,
         settings: &AppSettings,
+        sess: &IbtSession,
         lap_a: &LapAnalysis,
         lap_b: Option<&LapAnalysis>,
+        norm_a: &NormalizedLapTrace,
     ) {
         let primary = settings.primary_accent();
         let white = settings.text_color();
         let muted = settings.text_muted();
         let amber = settings.status_amber();
+        let green = settings.status_green();
         let panel_bg = settings.panel_color();
+        let elevated = settings.card_elevated_color();
         let divider = settings.divider_color();
+        let use_metric = settings.use_metric;
 
+        let fmt_temp = |f_val: f32| -> String {
+            if use_metric {
+                format!("{:.1}°C", (f_val - 32.0) / 1.8)
+            } else {
+                format!("{:.1}°F", f_val)
+            }
+        };
+
+        // 1. Header Frame: Title, Source, Chart Mode Selector
         egui::Frame::none()
             .fill(panel_bg)
             .stroke(egui::Stroke::new(1.0, divider))
@@ -1637,22 +1715,46 @@ impl IbtTelemetryLabState {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!(
-                            "4-CORNER TIRE TEMPERATURES, TREAD WEAR, SPREAD & HOT PRESSURE — LAP {} ({})",
+                            "4-CORNER TIRE THERMAL ANALYSIS & PRESSURES — LAP {} ({})",
                             lap_a.descriptor.lap_number,
-                            lap_a.tires.lf.temp_source.label()
+                            lap_a.descriptor.status_badge()
                         ))
                         .color(primary)
-                        .size(12.0)
+                        .size(12.5)
                         .strong(),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(
-                                "Spread ΔT = T_inside - T_outside · Center Bias = T_center - (T_in + T_out)/2",
-                            )
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(format!("Source: {}", lap_a.tires.lf.temp_source.label()))
                             .color(muted)
-                            .size(11.5),
-                        );
+                            .size(11.0),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mode_btn = |ui: &mut egui::Ui, mode: TireChartMode, label: &str, current: TireChartMode| -> bool {
+                            let is_active = mode == current;
+                            let btn = egui::Button::new(
+                                egui::RichText::new(label)
+                                    .color(if is_active { egui::Color32::BLACK } else { white })
+                                    .size(11.0)
+                                    .strong(),
+                            )
+                            .fill(if is_active { primary } else { elevated });
+                            ui.add(btn).clicked()
+                        };
+
+                        if mode_btn(ui, TireChartMode::Pressures, "📊 Pressures (PSI)", self.tire_chart_mode) {
+                            self.tire_chart_mode = TireChartMode::Pressures;
+                        }
+                        if mode_btn(ui, TireChartMode::RearAxle, "🛡️ Rear Axle", self.tire_chart_mode) {
+                            self.tire_chart_mode = TireChartMode::RearAxle;
+                        }
+                        if mode_btn(ui, TireChartMode::FrontAxle, "⚡ Front Axle", self.tire_chart_mode) {
+                            self.tire_chart_mode = TireChartMode::FrontAxle;
+                        }
+                        if mode_btn(ui, TireChartMode::AllCorners, "🏎️ 4-Corners", self.tire_chart_mode) {
+                            self.tire_chart_mode = TireChartMode::AllCorners;
+                        }
                     });
                 });
 
@@ -1660,20 +1762,185 @@ impl IbtTelemetryLabState {
                     && lap_a.tires.lf.wear_center_pct >= 99.9
                     && lap_a.tires.lf.temp_source == TireTempSource::Carcass;
                 if lf_static {
-                    ui.add_space(4.0);
+                    ui.add_space(3.0);
                     ui.label(
                         egui::RichText::new(
-                            "ℹ iRacing Telemetry Note: On-track tire channels (*tempCL/CM/CR) remain at starting temps while driving and latch hot pit/garage readings when stopping in the pit box or exiting the car to the garage.",
+                            "ℹ iRacing Telemetry Note: On-track carcass channels (*tempCL/CM/CR) remain at starting values while driving; definitive hot readings are latched at pit stops and garage exit.",
                         )
                         .color(amber)
-                        .size(11.0),
+                        .size(10.5),
                     );
                 }
             });
 
         ui.add_space(8.0);
 
-        let _ = white;
+        // 2. Synchronized Color Telemetry Trace Lane Across Track Distance (0% - 100%)
+        let (chart_title, chart_unit, series_list): (&str, &str, Vec<TraceSeries>) = match self.tire_chart_mode {
+            TireChartMode::AllCorners => {
+                let mut list = Vec::new();
+                if let Some(ref v) = norm_a.lf_temp_f {
+                    list.push(TraceSeries {
+                        label: "LF Center",
+                        data: v,
+                        color: egui::Color32::from_rgb(56, 189, 248),
+                        stroke_width: 1.8,
+                    });
+                }
+                if let Some(ref v) = norm_a.rf_temp_f {
+                    list.push(TraceSeries {
+                        label: "RF Center",
+                        data: v,
+                        color: egui::Color32::from_rgb(251, 191, 36),
+                        stroke_width: 2.2,
+                    });
+                }
+                if let Some(ref v) = norm_a.lr_temp_f {
+                    list.push(TraceSeries {
+                        label: "LR Center",
+                        data: v,
+                        color: egui::Color32::from_rgb(74, 222, 128),
+                        stroke_width: 1.8,
+                    });
+                }
+                if let Some(ref v) = norm_a.rr_temp_f {
+                    list.push(TraceSeries {
+                        label: "RR Center",
+                        data: v,
+                        color: egui::Color32::from_rgb(248, 113, 113),
+                        stroke_width: 2.0,
+                    });
+                }
+                ("TIRE SURFACE / CARCASS TEMPERATURES ACROSS LAP (LF, RF, LR, RR)", if use_metric { "°C" } else { "°F" }, list)
+            }
+            TireChartMode::FrontAxle => {
+                let mut list = Vec::new();
+                if let Some(ref v) = norm_a.lf_outside_temp_f {
+                    list.push(TraceSeries { label: "LF Out", data: v, color: egui::Color32::from_rgb(96, 165, 250), stroke_width: 1.4 });
+                }
+                if let Some(ref v) = norm_a.lf_temp_f {
+                    list.push(TraceSeries { label: "LF Mid", data: v, color: egui::Color32::from_rgb(56, 189, 248), stroke_width: 2.0 });
+                }
+                if let Some(ref v) = norm_a.lf_inside_temp_f {
+                    list.push(TraceSeries { label: "LF In", data: v, color: egui::Color32::from_rgb(45, 212, 191), stroke_width: 1.4 });
+                }
+                if let Some(ref v) = norm_a.rf_inside_temp_f {
+                    list.push(TraceSeries { label: "RF In", data: v, color: egui::Color32::from_rgb(251, 146, 60), stroke_width: 1.4 });
+                }
+                if let Some(ref v) = norm_a.rf_temp_f {
+                    list.push(TraceSeries { label: "RF Mid", data: v, color: egui::Color32::from_rgb(251, 191, 36), stroke_width: 2.2 });
+                }
+                if let Some(ref v) = norm_a.rf_outside_temp_f {
+                    list.push(TraceSeries { label: "RF Out", data: v, color: egui::Color32::from_rgb(234, 179, 8), stroke_width: 1.4 });
+                }
+                ("FRONT AXLE TIRE TEMPERATURE DISTRIBUTION (LF vs. RF — 3-ZONE)", if use_metric { "°C" } else { "°F" }, list)
+            }
+            TireChartMode::RearAxle => {
+                let mut list = Vec::new();
+                if let Some(ref v) = norm_a.lr_outside_temp_f {
+                    list.push(TraceSeries { label: "LR Out", data: v, color: egui::Color32::from_rgb(52, 211, 153), stroke_width: 1.4 });
+                }
+                if let Some(ref v) = norm_a.lr_temp_f {
+                    list.push(TraceSeries { label: "LR Mid", data: v, color: egui::Color32::from_rgb(74, 222, 128), stroke_width: 2.0 });
+                }
+                if let Some(ref v) = norm_a.lr_inside_temp_f {
+                    list.push(TraceSeries { label: "LR In", data: v, color: egui::Color32::from_rgb(167, 243, 208), stroke_width: 1.4 });
+                }
+                if let Some(ref v) = norm_a.rr_inside_temp_f {
+                    list.push(TraceSeries { label: "RR In", data: v, color: egui::Color32::from_rgb(244, 63, 94), stroke_width: 1.4 });
+                }
+                if let Some(ref v) = norm_a.rr_temp_f {
+                    list.push(TraceSeries { label: "RR Mid", data: v, color: egui::Color32::from_rgb(248, 113, 113), stroke_width: 2.2 });
+                }
+                if let Some(ref v) = norm_a.rr_outside_temp_f {
+                    list.push(TraceSeries { label: "RR Out", data: v, color: egui::Color32::from_rgb(251, 113, 133), stroke_width: 1.4 });
+                }
+                ("REAR AXLE TIRE TEMPERATURE DISTRIBUTION (LR vs. RR — 3-ZONE)", if use_metric { "°C" } else { "°F" }, list)
+            }
+            TireChartMode::Pressures => {
+                let mut list = Vec::new();
+                if let Some(ref v) = norm_a.lf_press_psi {
+                    list.push(TraceSeries { label: "LF Pressure", data: v, color: egui::Color32::from_rgb(56, 189, 248), stroke_width: 1.8 });
+                }
+                if let Some(ref v) = norm_a.rf_press_psi {
+                    list.push(TraceSeries { label: "RF Pressure", data: v, color: egui::Color32::from_rgb(251, 191, 36), stroke_width: 2.2 });
+                }
+                if let Some(ref v) = norm_a.lr_press_psi {
+                    list.push(TraceSeries { label: "LR Pressure", data: v, color: egui::Color32::from_rgb(74, 222, 128), stroke_width: 1.8 });
+                }
+                if let Some(ref v) = norm_a.rr_press_psi {
+                    list.push(TraceSeries { label: "RR Pressure", data: v, color: egui::Color32::from_rgb(248, 113, 113), stroke_width: 2.0 });
+                }
+                ("DYNAMIC TIRE PRESSURES ACROSS LAP (LF, RF, LR, RR)", if use_metric { "kPa" } else { "psi" }, list)
+            }
+        };
+
+        if !series_list.is_empty() {
+            draw_synchronized_trace_lane(
+                ui,
+                settings,
+                chart_title,
+                chart_unit,
+                &norm_a.grid_dist_pct,
+                &norm_a.grid_dist_m,
+                self.x_axis_mode,
+                &series_list,
+                160.0,
+                false,
+                &mut self.hover_dist_pct,
+            );
+
+            // Track Sector Reference Timeline Bar
+            ui.add_space(4.0);
+            egui::Frame::none()
+                .fill(panel_bg)
+                .rounding(egui::Rounding::same(6.0))
+                .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Track Sectors:").color(muted).size(10.5));
+                        draw_legend_pill(ui, egui::Color32::from_rgb(71, 85, 105), "🏁 Frontstretch (0-15%)", white);
+                        draw_legend_pill(ui, egui::Color32::from_rgb(30, 64, 175), "↩ Turn 1 / 2 (15-35%)", white);
+                        draw_legend_pill(ui, egui::Color32::from_rgb(71, 85, 105), "➡️ Backstretch (35-65%)", white);
+                        draw_legend_pill(ui, egui::Color32::from_rgb(180, 83, 9), "↩ Turn 3 / 4 (65-85%)", white);
+                        draw_legend_pill(ui, egui::Color32::from_rgb(71, 85, 105), "🏁 Tri-Oval (85-100%)", white);
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let rf = &lap_a.tires.rf;
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "🔥 Hottest Tire: RF {} · 📍 {}",
+                                    fmt_temp(rf.peak_temp_f),
+                                    rf.peak_track_loc
+                                ))
+                                .color(temp_heat_color(rf.peak_temp_f))
+                                .size(11.0)
+                                .strong(),
+                            );
+                        });
+                    });
+                });
+            ui.add_space(8.0);
+        }
+
+        // 3. Visual 4-Wheel Top-Down Chassis Heatmap Cards
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("🏎️ 4-CORNER CHASSIS HEATMAP & TREAD WEAR")
+                    .color(primary)
+                    .size(12.0)
+                    .strong(),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("▲ FRONT OF CAR (DIRECTION OF TRAVEL) ▲")
+                    .color(muted)
+                    .size(11.0),
+            );
+        });
+        ui.add_space(4.0);
+
+        // Front Row: LF & RF
         ui.columns(2, |cols| {
             draw_tire_corner_analysis_card(
                 &mut cols[0],
@@ -1691,8 +1958,9 @@ impl IbtTelemetryLabState {
             );
         });
 
-        ui.add_space(8.0);
+        ui.add_space(6.0);
 
+        // Rear Row: LR & RR
         ui.columns(2, |cols| {
             draw_tire_corner_analysis_card(
                 &mut cols[0],
@@ -1709,6 +1977,106 @@ impl IbtTelemetryLabState {
                 lap_b.map(|lb| &lb.tires.rr),
             );
         });
+
+        ui.add_space(10.0);
+
+        // 4. Stint / Run Progression Table: Peak Tire Temps & Pressures Per Lap Across the Entire Session
+        egui::Frame::none()
+            .fill(panel_bg)
+            .stroke(egui::Stroke::new(1.0, divider))
+            .rounding(egui::Rounding::same(10.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "🏁 RUN PROGRESSION — PEAK TIRE TEMPERATURES & PRESSURES ({} LAPS)",
+                            sess.analyzed_laps.len()
+                        ))
+                        .color(primary)
+                        .size(12.0)
+                        .strong(),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Click any row to inspect that lap's telemetry and tire footprint")
+                            .color(muted)
+                            .size(11.0),
+                    );
+                });
+
+                ui.add_space(6.0);
+
+                egui::ScrollArea::vertical()
+                    .id_source("ibt_tire_run_progression_scroll")
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("ibt_tire_progression_grid")
+                            .num_columns(9)
+                            .spacing([14.0, 5.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("Lap #").color(muted).strong().size(11.0));
+                                ui.label(egui::RichText::new("Time").color(muted).strong().size(11.0));
+                                ui.label(egui::RichText::new("Status").color(muted).strong().size(11.0));
+                                ui.label(egui::RichText::new("LF Peak").color(muted).strong().size(11.0));
+                                ui.label(egui::RichText::new("RF Peak").color(primary).strong().size(11.0));
+                                ui.label(egui::RichText::new("LR Peak").color(muted).strong().size(11.0));
+                                ui.label(egui::RichText::new("RR Peak").color(muted).strong().size(11.0));
+                                ui.label(egui::RichText::new("Hottest Tire & Location").color(muted).strong().size(11.0));
+                                ui.label(egui::RichText::new("Hot Press (RF)").color(muted).strong().size(11.0));
+                                ui.end_row();
+
+                                for (idx, lap) in sess.analyzed_laps.iter().enumerate() {
+                                    let is_selected = idx == self.selected_lap_a_idx;
+                                    let row_col = if is_selected { primary } else { white };
+
+                                    let lap_label = format!("Lap {}", lap.descriptor.lap_number);
+                                    let lap_btn = ui.selectable_label(is_selected, egui::RichText::new(lap_label).color(row_col).strong());
+                                    if lap_btn.clicked() {
+                                        self.selected_lap_a_idx = idx;
+                                    }
+
+                                    ui.label(egui::RichText::new(format_time(lap.descriptor.duration_secs)).color(row_col));
+                                    let badge = lap.descriptor.status_badge();
+                                    let badge_col = if badge.contains("PB") {
+                                        primary
+                                    } else if badge == "VALID" {
+                                        green
+                                    } else {
+                                        amber
+                                    };
+                                    ui.label(egui::RichText::new(badge).color(badge_col).strong());
+
+                                    let t = &lap.tires;
+                                    ui.label(egui::RichText::new(fmt_temp(t.lf.peak_temp_f)).color(temp_heat_color(t.lf.peak_temp_f)));
+                                    ui.label(egui::RichText::new(fmt_temp(t.rf.peak_temp_f)).color(temp_heat_color(t.rf.peak_temp_f)).strong());
+                                    ui.label(egui::RichText::new(fmt_temp(t.lr.peak_temp_f)).color(temp_heat_color(t.lr.peak_temp_f)));
+                                    ui.label(egui::RichText::new(fmt_temp(t.rr.peak_temp_f)).color(temp_heat_color(t.rr.peak_temp_f)));
+
+                                    let corners = [
+                                        ("LF", t.lf.peak_temp_f, &t.lf.peak_track_loc),
+                                        ("RF", t.rf.peak_temp_f, &t.rf.peak_track_loc),
+                                        ("LR", t.lr.peak_temp_f, &t.lr.peak_track_loc),
+                                        ("RR", t.rr.peak_temp_f, &t.rr.peak_track_loc),
+                                    ];
+                                    let hottest = corners.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+                                    ui.label(
+                                        egui::RichText::new(format!("{} ({} · {})", hottest.0, fmt_temp(hottest.1), hottest.2))
+                                            .color(temp_heat_color(hottest.1)),
+                                    );
+
+                                    let rf_press_str = if use_metric {
+                                        format!("{:.1} kPa", t.rf.end_pressure_psi / KPA_TO_PSI)
+                                    } else {
+                                        format!("{:.1} psi", t.rf.end_pressure_psi)
+                                    };
+                                    ui.label(egui::RichText::new(rf_press_str).color(primary));
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
     }
 
     // ========================================================================
@@ -2351,6 +2719,25 @@ fn draw_tire_corner_analysis_card(
 
             ui.add_space(6.0);
 
+            ui.horizontal(|ui| {
+                let peak_col = temp_heat_color(corner.peak_temp_f);
+                ui.label(
+                    egui::RichText::new(format!("🔥 Peak: {}", fmt_temp(corner.peak_temp_f)))
+                        .color(peak_col)
+                        .size(12.5)
+                        .strong(),
+                );
+                if !corner.peak_track_loc.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("📍 {}", corner.peak_track_loc))
+                            .color(white)
+                            .size(11.5),
+                    );
+                }
+            });
+
+            ui.add_space(5.0);
+
             // 3-Band Temperature & Tread Wear Boxes (Displayed in Pit/Garage Order: O·M·I for Left, I·M·O for Right)
             let (
                 col1_lbl,
@@ -2546,9 +2933,13 @@ pub fn format_ibt_engineering_report_tsv(
     let wdir_c = crate::format_wind_dir(&m.wind_dir);
     out.push_str("SEARCH FOR SPEED — OFFLINE .IBT TELEMETRY ENGINEERING REPORT\n");
     out.push_str(&format!(
-        "File\t{}\nTrack\t{}\nCar\t#{} {}\nDriver\t{} ({} iR)\nSetup\t{}\nWeather\tAir {} / Track {} / Wind {} {}\n\n",
+        "File\t{}\nTrack\t{}\nCar\t#{} {}\nDriver\t{} ({} iR)\nSetup\t{}\nWeather\tAir {} / Track {} / Wind {} {}\n",
         m.file_name, m.track_display_name, m.car_number, m.car_name, m.driver_name, m.irating, m.setup_name, air_c, trk_c, wnd_c, wdir_c
     ));
+    if m.is_nextgen_lr_offset_applied {
+        out.push_str("Calibration\tNASCAR NextGen LR -0.50\" (-12.7 mm) datum calibration applied\n");
+    }
+    out.push('\n');
 
     out.push_str(&format!(
         "PRIMARY LAP A\tLap {} ({:.3}s) [{}]\n",
@@ -2596,11 +2987,13 @@ pub fn format_ibt_engineering_report_tsv(
     }
 
     out.push_str("\n4-CORNER TIRE TEMPERATURES (°F) & PRESSURES (PSI)\n");
-    out.push_str("Corner\tInside (°F)\tCenter (°F)\tOutside (°F)\tSpread (In-Out °F)\tCenter Bias (°F)\tStart PSI\tHot End PSI\n");
+    out.push_str("Corner\tPeak Temp (°F)\tPeak Location\tInside (°F)\tCenter (°F)\tOutside (°F)\tSpread (In-Out °F)\tCenter Bias (°F)\tStart PSI\tHot End PSI\n");
     for t in [&lap_a.tires.lf, &lap_a.tires.rf, &lap_a.tires.lr, &lap_a.tires.rr] {
         out.push_str(&format!(
-            "{}\t{:.1}\t{:.1}\t{:.1}\t{:+.1}\t{:+.1}\t{:.2}\t{:.2}\n",
+            "{}\t{:.1}\t{}\t{:.1}\t{:.1}\t{:.1}\t{:+.1}\t{:+.1}\t{:.2}\t{:.2}\n",
             t.corner_name,
+            t.peak_temp_f,
+            t.peak_track_loc,
             t.inside_stats_f.avg,
             t.center_stats_f.avg,
             t.outside_stats_f.avg,

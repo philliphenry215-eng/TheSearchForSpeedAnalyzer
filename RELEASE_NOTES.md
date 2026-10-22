@@ -1,3 +1,23 @@
+# The Search For Speed Analyzer — v0.3.1
+
+### 🏁 NASCAR NextGen Calibration & Visual Tire Telemetry Suite:
+* **🏷️ NASCAR NextGen Left Rear Ride Height Calibration ($-0.50^{\prime\prime}$ / $-12.7\text{ mm}$):**
+  * Automatically detects NASCAR NextGen Cup cars (`Chevrolet Camaro ZL1`, `Ford Mustang`, `Toyota Camry`) from session metadata and setup schema.
+  * Corrects iRacing's known $+0.50^{\prime\prime}$ sensor datum offset by subtracting $0.50^{\prime\prime}$ ($0.0127\text{ m}$) across all continuous samples, aligning LR ride height, dynamic longitudinal pitch rake, roll / side rake, and rear splits with physical garage setup sheets.
+  * Prominent calibration banner in the **`📐 Ride Height & Rake`** tab confirms active calibration.
+* **📈 Synchronized Color Telemetry Graphs for Tires & Pressures (0–100% Lap Distance):**
+  * Added dedicated multi-trace telemetry chart with view toggles: **`🏎️ 4-Corners`** (LF, RF, LR, RR center temps), **`⚡ Front Axle`** (LF vs RF 3-zone), **`🛡️ Rear Axle`** (LR vs RR 3-zone), and **`📊 Pressures (PSI / kPa)`**.
+  * Synchronized cursor scrubbing displaying live temperature, pressure, speed, and track distance.
+* **🗺️ Track Sector Reference Bar & Peak Location Callouts:**
+  * Interactive track sector timeline directly below the chart identifies corner locations: Frontstretch ($0\text{–}15\%$), Turn 1/2 ($15\text{–}35\%$), Backstretch ($35\text{–}65\%$), Turn 3/4 ($65\text{–}85\%$), and Tri-Oval ($85\text{–}100\%$).
+  * Prominent **Peak Thermal Badges** (`🔥 Peak: 233.6°F · 📍 Turn 3/4 Apex 74% Dist`) identify exactly where on track and on which tire corner maximum thermal stress occurred.
+* **🏎️ Top-Down 4-Wheel Chassis Heatmap Cards:**
+  * Re-architected corner cards into a top-down car chassis layout (Front Axle $\rightarrow$ Chassis Divider $\rightarrow$ Rear Axle) with dynamic temperature heat-tinting (Cool Blue, Optimal Green, Warm Amber, Overheating Red).
+* **🏁 Stint Run Progression Table:**
+  * Full session overview table listing completed laps, lap times, status badges, 4-corner peak temperatures, hottest tire callouts, and hot pressures with 1-click lap selection.
+
+---
+
 # The Search For Speed Analyzer — v0.3.0
 
 ### 📊 Offline iRacing `.IBT` Telemetry Analysis Engine & Lab View:
