@@ -5,6 +5,17 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.2.5] — 2026-10-22
+
+### Fixed & Improved
+* **Relative Wind Direction Vector Math:** Corrected vehicle relative wind angle calculation (`(WindDir - YawNorth + PI)`) to properly honor iRacing's clockwise yaw rotation. Wind arrow orientation now mirrors real vehicle air flow across all angles and turns:
+  * Tailwinds point forward at 12 o'clock, headwinds point backward at 6 o'clock.
+  * Crosswinds and quartering tailwinds (e.g. 2 o'clock) align seamlessly with Stint Analyzer and telemetry references without vertical reflection or sign flips.
+* **1-to-1 Wind Speed Precision Match:** Fixed wind speed telemetry storage to preserve decimal precision (`format!("{:.2} m/s", wv)`), eliminating premature integer rounding that caused the app to read 1 mph higher than iRacing's in-sim Weather tab.
+* **Refined Vector Compass Gauge:** Polished the circular wind gauge with an enlarged chevron pointer and crisp border for rapid glanceability at race pace.
+
+---
+
 ## [0.2.4] — 2026-10-21
 
 ### Added & Improved

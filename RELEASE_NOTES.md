@@ -1,3 +1,12 @@
+# The Search For Speed Analyzer — v0.2.5
+
+### 🧭 Precision Wind Direction Vectoring & 1-to-1 Speed Match:
+* **True Cockpit Wind Orientation Alignment:** Fixed the wind angle calculation across the app (`(WindDir - YawNorth + PI)`), aligning vehicle yaw orientation with iRacing's clockwise coordinate system. Tailwinds now point forward (12 o'clock / UP), headwinds point backward (6 o'clock / DOWN), and quartering tailwinds (e.g. 2 o'clock) match external tools like Stint Analyzer 1-to-1 without inversion.
+* **Exact Wind Velocity Decimal Precision:** Eliminated the premature truncation of live wind speed (`format!("{:.2} m/s", wv)`), ensuring wind speed across all app views perfectly matches iRacing's Weather tab (e.g. 5 mph instead of rounding up to 6 or 7 mph).
+* **Enhanced Wind Vector Visuals:** Polished the wind vector compass gauge with a prominent sharp chevron pointer, higher contrast gold reference pip at 12 o'clock, and bright teal shaft for instant cockpit readability.
+
+---
+
 # The Search For Speed Analyzer — v0.2.4
 
 ### 🧭 Car-Relative Dynamic Wind Heading & Prominent Vector Gauge:

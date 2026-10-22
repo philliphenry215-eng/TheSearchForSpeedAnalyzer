@@ -2511,7 +2511,10 @@ fn parse_wind_direction_rad(raw: &str) -> Option<f32> {
 
 fn calculate_relative_wind_rad(wind_dir_rad: f32, yaw_north: f32) -> f32 {
     let two_pi = 2.0 * std::f32::consts::PI;
-    let rad = (wind_dir_rad + yaw_north + std::f32::consts::PI).rem_euclid(two_pi);
+    // In iRacing telemetry, both WindDir and YawNorth are defined in radians clockwise from North (0=North, pi/2=East).
+    // WindDir represents where the wind blows FROM. The air flow vector is (WindDir + PI).
+    // Relative to the car heading (YawNorth), the air movement vector is (WindDir - YawNorth + PI).
+    let rad = (wind_dir_rad - yaw_north + std::f32::consts::PI).rem_euclid(two_pi);
     if (rad - two_pi).abs() < 0.0001 || rad >= two_pi {
         0.0
     } else {
@@ -2548,7 +2551,7 @@ fn draw_wind_indicator(
     compass_str: &str,
     scale: f32,
 ) -> egui::Response {
-    let widget_size = (28.0 * scale).round().max(20.0);
+    let widget_size = (30.0 * scale).round().max(22.0);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(widget_size, widget_size), egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
@@ -2558,10 +2561,10 @@ fn draw_wind_indicator(
     let cyan_bright = egui::Color32::from_rgb(0, 229, 200);      // #00E5C8 vibrant motorsport teal
     let cyan_glow = egui::Color32::from_rgb(34, 211, 238);        // #22D3EE bright cyan
     let cyan_dim = egui::Color32::from_rgba_unmultiplied(0, 229, 200, 75);
-    let bg_circle = egui::Color32::from_rgba_unmultiplied(12, 17, 23, 190);
-    let gold_nose = egui::Color32::from_rgb(250, 204, 21);       // Forward reference notch
+    let bg_circle = egui::Color32::from_rgba_unmultiplied(12, 17, 23, 200);
+    let gold_nose = egui::Color32::from_rgb(250, 204, 21);       // Forward reference notch (car nose)
 
-    // Subtle dark circular background
+    // Dark circular background
     painter.circle_filled(center, r + 2.0 * scale, bg_circle);
 
     let has_wind = speed_num.unwrap_or(0) > 0;
@@ -2575,36 +2578,41 @@ fn draw_wind_indicator(
     painter.circle_stroke(center, r, ring_stroke);
 
     // Forward car-nose reference pip at 12 o'clock (0° = straight ahead)
-    let nose_top = center + egui::vec2(0.0, -(r + 2.5 * scale));
+    let nose_top = center + egui::vec2(0.0, -(r + 3.0 * scale));
     let nose_bottom = center + egui::vec2(0.0, -(r - 1.5 * scale));
-    painter.line_segment([nose_top, nose_bottom], egui::Stroke::new(1.8 * scale, gold_nose));
+    painter.line_segment([nose_top, nose_bottom], egui::Stroke::new(2.0 * scale, gold_nose));
 
     // If there is wind direction, draw the prominent directional pointer arrowhead and vector line
     if let (true, Some(rad)) = (has_wind, rel_wind_rad) {
         // rad: 0 is Forward (UP), PI/2 is Right (RIGHT), PI is Backward (DOWN), 3PI/2 is Left (LEFT)
         let dir_vec = egui::vec2(rad.sin(), -rad.cos());
-        let tip = center + dir_vec * (r + 4.5 * scale);
+        let tip = center + dir_vec * (r + 5.5 * scale);
 
-        let base_center = center + dir_vec * (r - 5.5 * scale);
+        let base_center = center + dir_vec * (r - 5.0 * scale);
         let normal = egui::vec2(-dir_vec.y, dir_vec.x);
-        let half_w = 4.8 * scale;
+        let half_w = 5.2 * scale;
 
         let left = base_center + normal * half_w;
         let right = base_center - normal * half_w;
-        let notch = base_center + dir_vec * (1.8 * scale);
+        let notch = base_center + dir_vec * (2.0 * scale);
 
         // Vector pointer line from near center to arrowhead
         painter.line_segment(
-            [center + dir_vec * (r * 0.40), notch],
-            egui::Stroke::new(2.2 * scale, cyan_bright),
+            [center + dir_vec * (r * 0.35), notch],
+            egui::Stroke::new(2.5 * scale, cyan_bright),
         );
 
-        // Bold chevron polygon
+        // Prominent arrowhead chevron with crisp border
         painter.add(egui::Shape::convex_polygon(
             vec![tip, left, notch, right],
             cyan_glow,
-            egui::Stroke::new(0.8 * scale, egui::Color32::WHITE),
+            egui::Stroke::new(1.0 * scale, egui::Color32::WHITE),
         ));
+
+        // Center hub
+        painter.circle_filled(center, 2.5 * scale, cyan_bright);
+    } else {
+        painter.circle_filled(center, 2.0 * scale, cyan_dim);
     }
 
     // Center wind speed text
@@ -3076,23 +3084,23 @@ impl WarRoomApp {
                             // Read Live Track Temp & Air Temp directly from live telemetry SDK (degrees Celsius)
                             if let Ok(Value::FLOAT(tt)) = live.get("TrackTemp") {
                                 if tt > -40.0 && tt < 130.0 {
-                                    s.track_temp_raw = format!("{:.0} C", tt);
+                                    s.track_temp_raw = format!("{:.1} C", tt);
                                 }
                             } else if let Ok(Value::FLOAT(tt_crew)) = live.get("TrackTempCrew") {
                                 if tt_crew > -40.0 && tt_crew < 130.0 {
-                                    s.track_temp_raw = format!("{:.0} C", tt_crew);
+                                    s.track_temp_raw = format!("{:.1} C", tt_crew);
                                 }
                             }
 
                             if let Ok(Value::FLOAT(at)) = live.get("AirTemp") {
                                 if at > -40.0 && at < 130.0 {
-                                    s.air_temp_raw = format!("{:.0} C", at);
+                                    s.air_temp_raw = format!("{:.1} C", at);
                                 }
                             }
 
                             if let Ok(Value::FLOAT(wv)) = live.get("WindVel") {
                                 if wv >= 0.0 && wv < 100.0 {
-                                    s.wind_speed_raw = format!("{:.0} m/s", wv);
+                                    s.wind_speed_raw = format!("{:.2} m/s", wv);
                                 }
                             }
                             if let Ok(Value::FLOAT(wd)) = live.get("WindDir") {
@@ -7674,14 +7682,22 @@ DriverInfo:
         assert_eq!(parse_temp_num("...", false), None);
         assert_eq!(parse_temp_num("—", true), None);
 
-        // 2. Wind speed parsing
+        // 2. Wind speed parsing and conversion precision
         assert_eq!(parse_wind_speed("5.2 mph", false), (Some(5), "mph"));
         assert_eq!(parse_wind_speed("6 mph", false), (Some(6), "mph"));
         assert_eq!(parse_wind_speed("6 mph", true), (Some(10), "km/h"));
-        assert_eq!(parse_wind_speed("2.7 m/s", false), (Some(6), "mph"));
-        assert_eq!(parse_wind_speed("2.7 m/s", true), (Some(10), "km/h"));
+        assert_eq!(parse_wind_speed("2.24 m/s", false), (Some(5), "mph"));
+        assert_eq!(parse_wind_speed("2.68 m/s", false), (Some(6), "mph"));
+        assert_eq!(parse_wind_speed("3.13 m/s", false), (Some(7), "mph"));
+        assert_eq!(parse_wind_speed("3.58 m/s", false), (Some(8), "mph"));
         assert_eq!(parse_wind_speed("10 km/h", true), (Some(10), "km/h"));
         assert_eq!(parse_wind_speed("...", false), (None, "mph"));
+
+        // Verify convert_unit preserves exact integer mph from 2-decimal m/s SDK inputs
+        assert_eq!(convert_unit("2.24 m/s", false), "5 mph");
+        assert_eq!(convert_unit("2.68 m/s", false), "6 mph");
+        assert_eq!(convert_unit("3.13 m/s", false), "7 mph");
+        assert_eq!(convert_unit("3.58 m/s", false), "8 mph");
 
         // 3. Wind direction parsing
         let ne_rad = parse_wind_direction_rad("NE").expect("NE must parse");
@@ -7716,8 +7732,8 @@ DriverInfo:
         assert!((rel_north - 90.0_f32.to_radians()).abs() < 0.001);
         assert_eq!(describe_relative_wind(rel_north), "Crosswind (Left → Right)");
 
-        // Car turns 90° right to face East (yaw_north = -pi/2). Wind from West is now TAILWIND (0° / UP)
-        let rel_east = calculate_relative_wind_rad(w_west, -90.0_f32.to_radians());
+        // Car turns 90° right to face East in iRacing (yaw_north = +pi/2 clockwise). Wind from West is now TAILWIND (0° / UP)
+        let rel_east = calculate_relative_wind_rad(w_west, 90.0_f32.to_radians());
         assert!(rel_east.abs() < 0.001 || (rel_east - 2.0 * std::f32::consts::PI).abs() < 0.001);
         assert_eq!(describe_relative_wind(rel_east), "Tailwind (Pushing from behind)");
 
@@ -7726,10 +7742,30 @@ DriverInfo:
         assert!((rel_south - 270.0_f32.to_radians()).abs() < 0.001);
         assert_eq!(describe_relative_wind(rel_south), "Crosswind (Right → Left)");
 
-        // Car turns another 90° right to face West (yaw_north = pi/2). Wind from West is now HEADWIND (180° / DOWN)
-        let rel_west = calculate_relative_wind_rad(w_west, 90.0_f32.to_radians());
-        assert!((rel_west - 180.0_f32.to_radians()).abs() < 0.001);
-        assert_eq!(describe_relative_wind(rel_west), "Headwind (Directly into front)");
+        // Car turns another 90° right to face West (yaw_north = 3pi/2 or -pi/2). Wind from West is now HEADWIND (180° / DOWN)
+        let rel_west_pos = calculate_relative_wind_rad(w_west, 270.0_f32.to_radians());
+        assert!((rel_west_pos - 180.0_f32.to_radians()).abs() < 0.001);
+        assert_eq!(describe_relative_wind(rel_west_pos), "Headwind (Directly into front)");
+
+        let rel_west_neg = calculate_relative_wind_rad(w_west, -90.0_f32.to_radians());
+        assert!((rel_west_neg - 180.0_f32.to_radians()).abs() < 0.001);
+        assert_eq!(describe_relative_wind(rel_west_neg), "Headwind (Directly into front)");
+
+        // User report verification: Stint Analyzer 2 o'clock (60°) Quartering Tailwind vs old bug (which showed 4 o'clock / 120°)
+        // With West wind (270°) and car at 30° heading:
+        let rel_2oclock = calculate_relative_wind_rad(w_west, 30.0_f32.to_radians());
+        assert!((rel_2oclock - 60.0_f32.to_radians()).abs() < 0.001);
+        assert_eq!(describe_relative_wind(rel_2oclock), "Quartering Tailwind (Left → Right)");
+
+        // Direct Tailwind (Wind from South = 180°, car facing North = 0°) -> 0° (UP / Forward)
+        let tailwind = calculate_relative_wind_rad(180.0_f32.to_radians(), 0.0);
+        assert!(tailwind.abs() < 0.001 || (tailwind - 2.0 * std::f32::consts::PI).abs() < 0.001);
+        assert_eq!(describe_relative_wind(tailwind), "Tailwind (Pushing from behind)");
+
+        // Direct Headwind (Wind from North = 0°, car facing North = 0°) -> 180° (DOWN / Backward)
+        let headwind = calculate_relative_wind_rad(0.0, 0.0);
+        assert!((headwind - 180.0_f32.to_radians()).abs() < 0.001);
+        assert_eq!(describe_relative_wind(headwind), "Headwind (Directly into front)");
     }
 }
 

@@ -3,7 +3,7 @@
   #define MyAppName "The Search For Speed Analyzer"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.4"
+  #define MyAppVersion "0.2.5"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "The Henry Boys"
