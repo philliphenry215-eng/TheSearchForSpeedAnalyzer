@@ -2905,7 +2905,7 @@ dependencies = [
 
 [[package]]
 name = "search_for_speed_analyzer"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "eframe",
  "egui",

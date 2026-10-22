@@ -1,3 +1,21 @@
+# The Search For Speed Analyzer — v0.2.6
+
+### ⚖️ Side-by-Side Stint Telemetry Comparison:
+* **Compare Up to 3 Stints Side-by-Side:** Select and compare up to 3 individual stints simultaneously — analyze your own progression across tire runs and setup revisions, or benchmark directly against competitors in the session.
+* **Multi-Stint Lap Time Progression Chart:** Interactive line chart overlay with color-coded curves, stint PB highlights, and instant cursor hover displaying exact lap times and deltas to the fastest car on that lap.
+* **Dynamic Lap-by-Lap Comparison Log:** Side-by-side lap table with stint personal best highlights, delta times relative to baseline Stint A, and purple star callouts for the fastest driver on each lap.
+* **4-Corner Post-Stint Tire Wear & Temperature Comparison:** Compare LF, RF, LR, and RR inner/middle/outer carcass temperatures, cold vs hot pressures, and wear degradation cards across stints.
+* **Key Metrics & Pace Drop-off Analysis:** Side-by-side cards comparing completed laps, peak lap time, full stint average, consistency standard deviation ($\sigma$), fuel consumption rate per lap, and early-vs-late pace fall-off (laps 1–5 vs stint finish).
+* **Dedicated Floating Window & Pop-Out Modal:** Access stint comparisons from Cockpit View, Grid View, the overflow menu (`⋯`), or via the `[ ↗ Pop Out ]` button in the Stint Telemetry Analyzer.
+* **1-Click Spreadsheet Export:** Copy full side-by-side stint data and lap-by-lap comparison logs to clipboard formatted for Excel/Google Sheets.
+
+### 🧭 High-Legibility Relative Wind Dial & 14pt Speed Typography:
+* **High-Contrast 14pt Speed Typography:** Enlarged wind speed digits to prominent 14pt bold text for both single and double-digit wind speeds (e.g. 6 to 35+ mph or km/h), with a clean, uncluttered dial face for instant readability at race pace.
+* **Collision-Free Arrow Vectoring:** Vector pointer line originates cleanly outside the center text zone, ensuring the arrow shaft and chevron never cut through or obscure the digits.
+* **Decoupled Car-Nose Heading Pip:** Re-engineered the 12 o'clock forward heading reference as a sleek gold triangular pip on the outer perimeter, completely eliminating visual polygon clipping or wonky overlap when wind blows forward.
+
+---
+
 # The Search For Speed Analyzer — v0.2.5
 
 ### 🧭 Precision Wind Direction Vectoring & 1-to-1 Speed Match:
