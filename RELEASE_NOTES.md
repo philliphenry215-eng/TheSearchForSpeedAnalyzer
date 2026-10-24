@@ -1,3 +1,33 @@
+# The Search For Speed Analyzer — v0.3.5
+
+### 📂 Local Stint Database, Track-Matched Re-Import & Teammate Sharing:
+* **💾 Automatic Live Stint Saving (`%APPDATA%\SearchForSpeedAnalyzer`):**
+  * Completed player stints (`1+` green-flag laps) are automatically saved locally in real time and before session transitions (`Practice` $\rightarrow$ `Qualifying` $\rightarrow$ `Race`) so you never lose a Practice or Qualifying stint when iRacing advances the server.
+  * Each saved stint is ultra-lightweight (~2 KB) and stores lap times, per-lap fuel burn, 4-corner post-pit tire wear/temps/pressures, setup name, weather snapshot, and engineer notes.
+* **📂 Saved Stints Database Manager (`Re-Import` & `Compare`):**
+  * Open **`📂 Saved Stints`** from the Cockpit `STINT LOG` header, Grid View top bar, Stint Analyzer / Compare window, or the `⋯` menu.
+  * Automatically filters to **🏁 Current Track** when connected to iRacing (with a green `MATCH` badge) or **🌎 All Saved Stints**, with instant search across Track, Car, Setup, Driver, and Notes.
+  * Click **`📥 Re-Import`** to load any saved stint into your active session as `IMP 1`, `IMP 2`, etc. (`Ref` badge) without interfering with live `S1`, `S2` lap counting or pit tire latching, or click **`⚖ Compare`** to open it directly in a Side-by-Side Stint Comparison slot.
+* **⛽ Automatic Lap 0 Historical Fuel Burn Seeding:**
+  * Loading into a Track + Car combo that exists in your local Stint Database automatically seeds your baseline fuel burn rate on Lap 0 so **Burn / lap**, **Laps Left**, and **Pit Call** are immediately populated before completing your first lap.
+* **📋 1-Click Discord Stint Code & `.s4s.json` File Sharing:**
+  * Click **`📋 Share`** in Saved Stints (or **`💾 Save / Share`** on any driver's stint in Stint Analyzer) to copy a compact `S4S-STINT-V1:...` share code to your clipboard for Discord, or click **`📥 Paste Stint from Clipboard`** / **`📂 Open Stints Folder`** to import a teammate's stint and compare side-by-side.
+
+---
+
+# The Search For Speed Analyzer — v0.3.4
+
+### 🛞 Post-Pit 4-Corner Tire Popup Overlay & Dual-Layer HUD Transparency:
+* **🛞 Post-Pit 4-Corner Tire Popup Overlay:**
+  * Added an optional in-car floating overlay that automatically pops up for a configurable duration (`3s–60s`, default `15s`) whenever new post-pit or garage 4-corner tire wear and temperatures are latched.
+  * Displays `LF`, `RF`, `LR`, and `RR` 3-zone tread wear (`O·M·I` / `I·M·O`), carcass temperatures, and hot pressures, with independent position, scale (`75%–150%`), and **`👁 Preview / Move Popup`** controls in Settings.
+* **✨ True Transparent Outer HUD Background (`Outer Background Box` vs `Inner Card Opacity`):**
+  * Added Win32 DWM per-pixel alpha compositing (`DwmEnableBlurBehindWindow` + `DWMWA_BORDER_COLOR`) and separate **Inner Card Opacity** and **Outer Background Box** sliders (`0%` fully transparent by default) for both the main HUD overlay and the Tire Popup overlay, eliminating the solid black bounding box and bottom dead space.
+* **🏎️ Default Startup View Setting:**
+  * Added a **Default Startup View** selector in Settings (`Cockpit Stint & Fuel Analyzer` by default, `Multi-Driver Stint Grid`, or `Offline .IBT Telemetry Lab`).
+
+---
+
 # The Search For Speed Analyzer — v0.3.3
 
 ### 📸 1-Click Discord Share Cards & 2x2 Stint Comparison Tire Layout:

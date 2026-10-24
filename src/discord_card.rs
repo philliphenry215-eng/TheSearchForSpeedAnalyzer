@@ -413,8 +413,8 @@ pub fn render_discord_stint_card(
         fill_circle(&mut img, x0 + 18.0, header_card_y + 22.0, 5.0, accent);
 
         let stint_title = match entry.slot_label {
-            Some(slot) => format!("{} · S{} · #{} {}", slot, entry.stint.stint_number, entry.car_num, entry.driver_name),
-            None => format!("STINT S{} · #{} {}", entry.stint.stint_number, entry.car_num, entry.driver_name),
+            Some(slot) => format!("{} · {} · #{} {}", slot, entry.stint.short_label(), entry.car_num, entry.driver_name),
+            None => format!("STINT {} · #{} {}", entry.stint.short_label(), entry.car_num, entry.driver_name),
         };
         let title_trunc = truncate_to_width(&font_bold, 16.5, &stint_title, col_w - 125.0);
         draw_text(&mut img, &font_bold, x0 + 30.0, header_card_y + 12.0, 16.5, accent, &title_trunc);
@@ -533,7 +533,7 @@ pub fn render_discord_stint_card(
             "Fall-off: —".to_string()
         };
         let fuel_rate = entry.stint.fuel_per_lap();
-        let fuel_str = if entry.is_player && fuel_rate > 0.0005 {
+        let fuel_str = if (entry.is_player || entry.stint.is_imported) && fuel_rate > 0.0005 {
             format!("Fuel/Lap: {:.3} {}", fuel_rate * fuel_conv, fuel_unit)
         } else {
             "Fuel/Lap: —".to_string()
@@ -598,7 +598,7 @@ pub fn render_discord_stint_card(
         let tire_h = 92.0f32;
 
         let empty_tires = StintTireSet::default();
-        let has_tires = entry.is_player && entry.stint.tires.has_data && entry.stint.laps_completed > 0;
+        let has_tires = (entry.is_player || entry.stint.is_imported) && entry.stint.tires.has_data && entry.stint.laps_completed > 0;
         let t_set = if has_tires { &entry.stint.tires } else { &empty_tires };
 
         let corners: [(&str, &TireCornerData, usize, usize); 4] = [

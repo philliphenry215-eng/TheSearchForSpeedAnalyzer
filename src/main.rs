@@ -4,6 +4,7 @@ pub mod discord_card;
 pub mod ibt;
 pub mod ibt_ui;
 mod settings;
+pub mod stint_db;
 mod updater;
 
 use eframe::egui;
@@ -248,7 +249,8 @@ impl StintTireSet {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct StintData {
     pub stint_number: i32,
     pub start_lap: i32,
@@ -274,6 +276,9 @@ pub struct StintData {
     pub latched_fuel_burn_rate: f32,
     pub lap_fuel_burns: Vec<f32>,
     pub prev_crossing_fuel: f32,
+    pub is_imported: bool,
+    pub saved_id: String,
+    pub saved_label: String,
 }
 
 impl Default for StintData {
@@ -303,11 +308,27 @@ impl Default for StintData {
             latched_fuel_burn_rate: 0.0,
             lap_fuel_burns: Vec::new(),
             prev_crossing_fuel: 0.0,
+            is_imported: false,
+            saved_id: String::new(),
+            saved_label: String::new(),
         }
     }
 }
 
 impl StintData {
+    pub fn short_label(&self) -> String {
+        if self.is_imported {
+            let idx = if self.stint_number > 100 {
+                self.stint_number - 100
+            } else {
+                self.stint_number.max(1)
+            };
+            format!("IMP {}", idx)
+        } else {
+            format!("S{}", self.stint_number)
+        }
+    }
+
     pub fn valid_laps(&self) -> Vec<f32> {
         self.lap_times.iter().copied().filter(|&t| t > 5.0 && t < 360.0).collect()
     }
@@ -537,32 +558,78 @@ pub struct DriverState {
 }
 
 impl DriverState {
+    pub fn has_live_stints(&self) -> bool {
+        self.stints.iter().any(|s| !s.is_imported)
+    }
+
+    pub fn last_live_stint(&self) -> Option<&StintData> {
+        self.stints.iter().rev().find(|s| !s.is_imported)
+    }
+
+    pub fn last_live_stint_mut(&mut self) -> Option<&mut StintData> {
+        self.stints.iter_mut().rev().find(|s| !s.is_imported)
+    }
+
+    pub fn pop_last_live_stint(&mut self) {
+        if let Some(pos) = self.stints.iter().rposition(|s| !s.is_imported) {
+            self.stints.remove(pos);
+        }
+    }
+
+    pub fn next_live_stint_number(&self) -> i32 {
+        self.stints
+            .iter()
+            .filter(|s| !s.is_imported)
+            .map(|s| s.stint_number)
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
+    pub fn next_imported_stint_number(&self) -> i32 {
+        self.stints
+            .iter()
+            .filter(|s| s.is_imported)
+            .map(|s| s.stint_number)
+            .max()
+            .unwrap_or(100)
+            + 1
+    }
+
     pub fn estimated_fuel_burn_ltr(&self) -> f32 {
-        // 1. If active stint has at least 1 lap recorded, use active stint rate
-        if let Some(active) = self.stints.iter().rev().find(|s| s.is_active) {
+        // 1. If active live stint has at least 1 lap recorded, use active stint rate
+        if let Some(active) = self.stints.iter().rev().find(|s| !s.is_imported && s.is_active) {
             let b = active.fuel_per_lap();
             if b > 0.001 {
                 return b;
             }
         }
-        // 2. Fallback to previous closed stint with valid fuel data in this session
-        for stint in self.stints.iter().rev() {
+        // 2. Fallback to previous closed live stint with valid fuel data in this session
+        for stint in self.stints.iter().rev().filter(|s| !s.is_imported) {
             let b = stint.fuel_per_lap();
             if b > 0.001 {
                 return b;
             }
         }
-        // 3. Fallback to session-wide valid lap burn average across all stints in this session
+        // 3. Fallback to session-wide valid lap burn average across all live stints in this session
         let all_burns: Vec<f32> = self.stints.iter()
+            .filter(|s| !s.is_imported)
             .flat_map(|s| s.lap_fuel_burns.iter().copied())
             .filter(|&b| b > 0.005 && b < 25.0)
             .collect();
         if !all_burns.is_empty() {
             return all_burns.iter().sum::<f32>() / all_burns.len() as f32;
         }
-        // 4. Fallback to historical fuel burn rate from earlier sessions (e.g. Practice before Race)
+        // 4. Fallback to historical fuel burn rate from earlier sessions or Stint Database
         if self.historical_fuel_burn_rate > 0.001 {
             return self.historical_fuel_burn_rate;
+        }
+        // 5. Fallback to any re-imported stint with valid fuel burn
+        for stint in self.stints.iter().rev().filter(|s| s.is_imported) {
+            let b = stint.fuel_per_lap();
+            if b > 0.001 {
+                return b;
+            }
         }
         0.0
     }
@@ -571,6 +638,7 @@ impl DriverState {
 #[derive(Clone)]
 pub struct WarRoomState {
     pub is_connected: bool,
+    pub session_run_token: u64,
     pub session_id: i32,
     pub subsession_id: i32,
     pub session_num: i32,
@@ -650,6 +718,7 @@ impl Default for WarRoomState {
     fn default() -> Self {
         Self {
             is_connected: false,
+            session_run_token: stint_db::current_unix_millis(),
             session_id: 0,
             subsession_id: 0,
             session_num: -1,
@@ -694,7 +763,7 @@ impl Default for WarRoomState {
             is_under_caution: false,
             is_oval: false,
             was_race_green: false,
-            had_caution_since_last_green: false,
+            had_caution_since_last_green: bool::default(),
             session_flag_name: "GREEN".to_string(),
             debug_lap_number: 0,
             debug_lap_completed: 0,
@@ -720,9 +789,117 @@ impl Default for WarRoomState {
 }
 
 impl WarRoomState {
+    pub fn import_saved_stint(&mut self, record: &stint_db::SavedStintRecord) -> i32 {
+        // Populate session track/car/weather metadata if we are currently in Standby/Offline
+        if !is_real_track_name(&self.track_name) && !stint_db::is_placeholder_track(&record.track_name) {
+            self.track_name = record.track_name.clone();
+            if !record.track_length.is_empty() && record.track_length != "—" {
+                self.track_length = record.track_length.clone();
+            }
+            if !record.car_name.is_empty() && record.car_name != "—" {
+                self.car_name = record.car_name.clone();
+            }
+            if !record.session_type.is_empty() && record.session_type != "—" {
+                self.session_type = record.session_type.clone();
+            }
+            if !record.track_state.is_empty() && record.track_state != "—" {
+                self.track_state = record.track_state.clone();
+            }
+            if !record.air_temp.is_empty() && record.air_temp != "—" {
+                self.air_temp_raw = record.air_temp.clone();
+            }
+            if !record.track_temp.is_empty() && record.track_temp != "—" {
+                self.track_temp_raw = record.track_temp.clone();
+            }
+        }
+
+        let player_idx = self.player_car_idx;
+        let drv = self.drivers.entry(player_idx).or_insert_with(|| DriverState {
+            car_idx: player_idx,
+            driver_name: if !record.driver_name.is_empty() {
+                record.driver_name.clone()
+            } else {
+                "Player Car".to_string()
+            },
+            car_num: if !record.car_num.is_empty() && record.car_num != "0" {
+                record.car_num.clone()
+            } else {
+                "1".to_string()
+            },
+            irating: "—".to_string(),
+            position: 1,
+            is_on_pit_road: true,
+            is_in_world: false,
+            is_initialized: false,
+            total_laps_completed: 0,
+            last_processed_lap: 0,
+            last_known_lap_time: 0.0,
+            last_sf_crossing_time: 0.0,
+            exited_pits_on_current_lap: false,
+            ignored_lap_sdk: -1,
+            setup_name: if !record.setup_name.is_empty() {
+                record.setup_name.clone()
+            } else {
+                "Baseline".to_string()
+            },
+            stints: Vec::new(),
+            historical_fuel_burn_rate: 0.0,
+        });
+
+        // If this exact saved stint is already imported, return its existing stint_number
+        if !record.id.is_empty() {
+            if let Some(existing) = drv.stints.iter().find(|st| st.is_imported && st.saved_id == record.id) {
+                return existing.stint_number;
+            }
+        }
+
+        let imp_num = drv.next_imported_stint_number();
+        let mut imp_stint = record.stint.clone();
+        imp_stint.stint_number = imp_num;
+        imp_stint.is_active = false;
+        imp_stint.is_imported = true;
+        imp_stint.saved_id = record.id.clone();
+        imp_stint.saved_label = record.short_badge_label();
+        if imp_stint.setup_name.is_empty() || imp_stint.setup_name == "—" || imp_stint.setup_name == "Baseline" {
+            if !record.setup_name.is_empty() {
+                imp_stint.setup_name = record.setup_name.clone();
+            }
+        }
+        if imp_stint.track_temp_at_start.is_empty() || imp_stint.track_temp_at_start == "—" {
+            imp_stint.track_temp_at_start = record.track_temp.clone();
+        }
+        if imp_stint.air_temp_at_start.is_empty() || imp_stint.air_temp_at_start == "—" {
+            imp_stint.air_temp_at_start = record.air_temp.clone();
+        }
+
+        let burn = imp_stint.fuel_per_lap();
+        if drv.historical_fuel_burn_rate <= 0.001 && burn > 0.005 {
+            drv.historical_fuel_burn_rate = burn;
+        }
+
+        // Insert imported stints before any live stints so live stints remain at the end of drv.stints
+        let insert_idx = drv.stints.iter().position(|st| !st.is_imported).unwrap_or(drv.stints.len());
+        drv.stints.insert(insert_idx, imp_stint);
+        imp_num
+    }
+
+    pub fn remove_imported_stint(&mut self, stint_number: i32) -> bool {
+        let player_idx = self.player_car_idx;
+        if let Some(drv) = self.drivers.get_mut(&player_idx) {
+            if let Some(pos) = drv.stints.iter().position(|st| st.is_imported && st.stint_number == stint_number) {
+                drv.stints.remove(pos);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn reset_session_data(&mut self, manual: bool) {
+        // 0. Persist any completed live player stints to the local Stint Database before clearing
+        stint_db::auto_save_session_player_stints(self);
+
         // 1. Archive current session data before clearing if any laps or stints exist
-        if !self.drivers.is_empty() && self.drivers.values().any(|d| !d.stints.is_empty() || d.total_laps_completed > 0) {
+        if !self.drivers.is_empty() && self.drivers.values().any(|d| d.has_live_stints() || d.total_laps_completed > 0) {
             self.session_history.push(SessionArchive {
                 session_num: self.session_num,
                 session_type: self.session_type.clone(),
@@ -738,7 +915,11 @@ impl WarRoomState {
             if burn > 0.001 {
                 driver.historical_fuel_burn_rate = burn;
             }
-            driver.stints.clear();
+            if manual {
+                driver.stints.clear();
+            } else {
+                driver.stints.retain(|st| st.is_imported);
+            }
             driver.total_laps_completed = 0;
             driver.last_processed_lap = 0;
             driver.last_known_lap_time = 0.0;
@@ -752,6 +933,7 @@ impl WarRoomState {
         }
 
         // 3. Reset session-level counters
+        self.session_run_token = stint_db::current_unix_millis();
         self.caution_count = 0;
         self.caution_laps = 0;
         self.is_under_caution = false;
@@ -835,7 +1017,7 @@ impl WarRoomState {
             && (cur_session_time + 10.0) < self.debug_session_time;
 
         if is_first_init {
-            if self.drivers.values().any(|d| !d.stints.is_empty() || d.total_laps_completed > 0) {
+            if self.drivers.values().any(|d| d.has_live_stints() || d.total_laps_completed > 0) {
                 self.reset_session_data(false);
                 transition_detected = true;
             }
@@ -1020,7 +1202,7 @@ impl WarRoomState {
                 driver.is_in_world = in_world;
 
                 // If car is ALREADY on track driving when app connects (and in a race, only if green), start Stint 1 immediately!
-                if !is_pit && in_world && driver.stints.is_empty() && is_race_green && !green_just_started {
+                if !is_pit && in_world && !driver.has_live_stints() && is_race_green && !green_just_started {
                     let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
                         let eff = driver.estimated_fuel_burn_ltr();
                         if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
@@ -1052,6 +1234,7 @@ impl WarRoomState {
                         latched_fuel_burn_rate: prior_burn_rate,
                         lap_fuel_burns: Vec::new(),
                         prev_crossing_fuel: current_fuel_sample,
+                        ..Default::default()
                     });
                     if idx == player_idx {
                         pending_logs.push(format!("[LIVE ATTACH] Connected to on-track session at Lap {}. Stint S1 active.", current_lap_sdk));
@@ -1070,7 +1253,7 @@ impl WarRoomState {
                 driver.exited_pits_on_current_lap = false;
             }
 
-            if let Some(active) = driver.stints.last_mut() {
+            if let Some(active) = driver.last_live_stint_mut() {
                 if active.is_active && (active.setup_name.is_empty() || active.setup_name == "—" || active.setup_name == "Baseline") {
                     if active_setup != "Baseline" {
                         active.setup_name = active_setup.clone();
@@ -1082,7 +1265,7 @@ impl WarRoomState {
             if idx == player_idx && !is_pit && in_world {
                 let [cur_lf_p, cur_rf_p, cur_lr_p, cur_rr_p] = frame.player_live_pressures;
 
-                if let Some(active) = driver.stints.last_mut() {
+                if let Some(active) = driver.last_live_stint_mut() {
                     if active.is_active {
                         if cur_lf_p > 1.0 {
                             active.tires.lf.pressure = cur_lf_p;
@@ -1106,7 +1289,7 @@ impl WarRoomState {
                 let mut stint_num = 0;
                 let mut completed_laps = 0;
 
-                if let Some(active) = driver.stints.last_mut() {
+                if let Some(active) = driver.last_live_stint_mut() {
                     if active.is_active {
                         active.is_active = false;
                         active.end_lap = current_lap_sdk;
@@ -1125,7 +1308,7 @@ impl WarRoomState {
                 }
 
                 if aborted {
-                    driver.stints.pop();
+                    driver.pop_last_live_stint();
                     if idx == player_idx {
                         pending_logs.push(format!("[CAUTION DEPLOYED] Aborted 0-lap Stint S{} discarded.", stint_num));
                     }
@@ -1137,14 +1320,12 @@ impl WarRoomState {
 
             // 0B. GREEN FLAG START / RESTART IN RACE (Start new stint for ALL on-track drivers)
             if green_just_started && !is_pit && in_world {
-                if let Some(active) = driver.stints.last_mut() {
+                if let Some(active) = driver.last_live_stint_mut() {
                     active.is_active = false;
                     active.end_lap = current_lap_sdk;
                 }
-                if let Some(last) = driver.stints.last() {
-                    if last.laps_completed == 0 {
-                        driver.stints.pop();
-                    }
+                if driver.last_live_stint().map_or(false, |last| last.laps_completed == 0) {
+                    driver.pop_last_live_stint();
                 }
 
                 let crossed_sf_this_frame = current_lap_sdk > driver.last_processed_lap && current_lap_sdk > 0;
@@ -1175,7 +1356,7 @@ impl WarRoomState {
                 };
                 let awaiting_pit_out_lap_sf = !awaiting_pace_lap_sf && driver.exited_pits_on_current_lap && current_lap_sdk > 0;
 
-                let new_stint_num = driver.stints.len() as i32 + 1;
+                let new_stint_num = driver.next_live_stint_number();
                 let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
                     let eff = driver.estimated_fuel_burn_ltr();
                     if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
@@ -1207,6 +1388,7 @@ impl WarRoomState {
                     latched_fuel_burn_rate: prior_burn_rate,
                     lap_fuel_burns: Vec::new(),
                     prev_crossing_fuel: current_fuel_sample,
+                    ..Default::default()
                 });
                 driver.last_processed_lap = current_lap_sdk;
                 driver.total_laps_completed = current_lap_sdk.max(0);
@@ -1221,19 +1403,17 @@ impl WarRoomState {
             // 1. CAR EXITED PITS / ENTERED TRACK (Begin Stint if green)
             if (was_in_pit && !is_pit && in_world) || (!was_in_world && in_world && !is_pit) {
                 if is_race_green && !green_just_started {
-                    if let Some(active) = driver.stints.last_mut() {
+                    if let Some(active) = driver.last_live_stint_mut() {
                         active.is_active = false;
                         active.end_lap = current_lap_sdk.max(0);
                     }
 
                     // Discard previous 0-lap stint if aborted before completing any timed laps
-                    if let Some(last) = driver.stints.last() {
-                        if last.laps_completed == 0 {
-                            driver.stints.pop();
-                        }
+                    if driver.last_live_stint().map_or(false, |last| last.laps_completed == 0) {
+                        driver.pop_last_live_stint();
                     }
 
-                    let new_stint_num = driver.stints.len() as i32 + 1;
+                    let new_stint_num = driver.next_live_stint_number();
                     let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
                         let eff = driver.estimated_fuel_burn_ltr();
                         if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
@@ -1266,6 +1446,7 @@ impl WarRoomState {
                         latched_fuel_burn_rate: prior_burn_rate,
                         lap_fuel_burns: Vec::new(),
                         prev_crossing_fuel: 0.0,
+                        ..Default::default()
                     });
                     if idx == player_idx {
                         pending_logs.push(format!("[PIT EXIT] Stint S{} Started at Lap {}", new_stint_num, current_lap_sdk));
@@ -1283,7 +1464,7 @@ impl WarRoomState {
                 let mut stint_num = 0;
                 let mut completed_laps = 0;
 
-                if let Some(active) = driver.stints.last_mut() {
+                if let Some(active) = driver.last_live_stint_mut() {
                     if active.is_active {
                         active.is_active = false;
                         active.end_lap = current_lap_sdk;
@@ -1302,7 +1483,7 @@ impl WarRoomState {
                 }
 
                 if aborted {
-                    driver.stints.pop();
+                    driver.pop_last_live_stint();
                     if idx == player_idx {
                         pending_logs.push(format!("[ABORTED RUN] Stint S{} had 0 completed laps; discarded to prevent empty stint line.", stint_num));
                     }
@@ -1342,7 +1523,7 @@ impl WarRoomState {
                             pending_logs.push(format!("[CAUTION LAP] Lap {} completed under caution — ignored for green-flag stint.", current_lap_sdk));
                         }
                         if current_fuel_sample > 0.0 {
-                            if let Some(last_stint) = driver.stints.last_mut() {
+                            if let Some(last_stint) = driver.last_live_stint_mut() {
                                 last_stint.prev_crossing_fuel = current_fuel_sample;
                                 last_stint.crossing_fuel_level = current_fuel_sample;
                                 let burn_rate = last_stint.fuel_per_lap();
@@ -1362,9 +1543,9 @@ impl WarRoomState {
                 driver.last_known_lap_time = last_lap_time;
                 driver.last_processed_lap = current_lap_sdk;
                 driver.total_laps_completed = current_lap_sdk.max(0);
-            } else if (is_new_lap_count || is_new_lap_time) && !is_pit && in_world && driver.stints.last().map_or(false, |st| st.is_active && (st.awaiting_pace_lap_sf || st.awaiting_pit_out_lap_sf)) {
+            } else if (is_new_lap_count || is_new_lap_time) && !is_pit && in_world && driver.last_live_stint().map_or(false, |st| st.is_active && (st.awaiting_pace_lap_sf || st.awaiting_pit_out_lap_sf)) {
                 // 3C. First S/F crossing after a caution restart (finishing pace lap) or race green-flag pit exit (finishing pit out-lap)
-                if let Some(active) = driver.stints.last_mut() {
+                if let Some(active) = driver.stints.iter_mut().rev().find(|st| !st.is_imported) {
                     let was_pace_lap = active.awaiting_pace_lap_sf;
                     active.awaiting_pace_lap_sf = false;
                     active.awaiting_pit_out_lap_sf = false;
@@ -1398,7 +1579,7 @@ impl WarRoomState {
             } else {
                 // 3D. UNTIMED OUT-LAP COMPLETION (Start/Finish crossed for the first time since pit exit in Practice/Qualifying)
                 if is_new_lap_count && !is_pit && in_world && !is_new_lap_time {
-                    if let Some(active) = driver.stints.last_mut() {
+                    if let Some(active) = driver.stints.iter_mut().rev().find(|st| !st.is_imported) {
                         if active.is_active && !active.out_lap_completed {
                             active.out_lap_completed = true;
                             active.prev_crossing_fuel = current_fuel_sample;
@@ -1417,8 +1598,8 @@ impl WarRoomState {
                 }
 
                 if (is_new_lap_time || (is_new_lap_count && (last_lap_time - driver.last_known_lap_time).abs() > 0.0005)) && !is_pit && in_world {
-                    if driver.stints.is_empty() || !driver.stints.last().map_or(false, |st| st.is_active) {
-                        let new_stint_num = driver.stints.len() as i32 + 1;
+                    if !driver.has_live_stints() || !driver.last_live_stint().map_or(false, |st| st.is_active) {
+                        let new_stint_num = driver.next_live_stint_number();
                         let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
                             let eff = driver.estimated_fuel_burn_ltr();
                             if eff > 0.001 { (current_fuel_sample / eff).max(0.0) } else { 0.0 }
@@ -1450,10 +1631,11 @@ impl WarRoomState {
                             latched_fuel_burn_rate: prior_burn_rate,
                             lap_fuel_burns: Vec::new(),
                             prev_crossing_fuel: current_fuel_sample,
+                            ..Default::default()
                         });
                     }
 
-                    if let Some(active) = driver.stints.last_mut() {
+                    if let Some(active) = driver.stints.iter_mut().rev().find(|st| !st.is_imported) {
                         if last_lap_time > 3.0 && last_lap_time < 360.0 {
                             let was_uncompleted_out_lap = !active.out_lap_completed;
                             active.out_lap_completed = true;
@@ -1536,16 +1718,16 @@ impl WarRoomState {
         if is_in_stall_or_garage {
             if let Some(live) = live_sample {
                 let player_drv_opt = self.drivers.get(&player_idx);
-                let has_completed_laps = player_drv_opt.and_then(|d| d.stints.last()).map_or(false, |st| st.laps_completed > 0);
+                let has_completed_laps = player_drv_opt.and_then(|d| d.last_live_stint()).map_or(false, |st| st.laps_completed > 0);
 
                 if has_completed_laps {
-                    let prev_hot = player_drv_opt.and_then(|d| d.stints.last()).map(|st| &st.tires);
+                    let prev_hot = player_drv_opt.and_then(|d| d.last_live_stint()).map(|st| &st.tires);
                     let pit_tires = read_player_tires(live, prev_hot);
                     if pit_tires.is_valid() {
                         self.latest_tire_data = pit_tires.clone();
                         let mut triggered_stint_num = None;
                         if let Some(player_drv) = self.drivers.get_mut(&player_idx) {
-                            if let Some(last_stint) = player_drv.stints.last_mut() {
+                            if let Some(last_stint) = player_drv.last_live_stint_mut() {
                                 if !last_stint.is_active {
                                     if last_stint.tires.should_trigger_popup(&pit_tires) {
                                         triggered_stint_num = Some(last_stint.stint_number);
@@ -1897,13 +2079,13 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
 
     // Detect if this YAML belongs to a brand new session / weekend (e.g., closed race and loaded new practice)
     let has_prior_session = s.session_num != -1
-        || !s.drivers.is_empty()
+        || s.drivers.values().any(|d| d.has_live_stints() || d.total_laps_completed > 0)
         || s.session_id != 0
         || s.subsession_id != 0;
 
     let track_changed = is_real_track_name(&s.track_name)
         && is_real_track_name(new_track_name)
-        && s.track_name != new_track_name;
+        && !stint_db::tracks_match(&s.track_name, new_track_name);
 
     let session_id_changed = new_session_id != s.session_id
         && (s.session_id != 0 || (new_session_id != 0 && s.session_num != -1));
@@ -2029,6 +2211,7 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
 
     // 3. Driver Info
     let driver_info = &root["DriverInfo"];
+    let prev_player_idx = s.player_car_idx;
     if let Some(car_idx) = driver_info["DriverCarIdx"].as_u64() {
         s.player_car_idx = car_idx as usize;
     }
@@ -2048,6 +2231,19 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     };
 
     let player_idx = s.player_car_idx;
+
+    // Preserve any re-imported stints if player_car_idx changed when attaching to a session at the same track
+    let mut carried_imported_stints: Vec<StintData> = Vec::new();
+    if prev_player_idx != player_idx && !track_changed {
+        if let Some(prev_drv) = s.drivers.get_mut(&prev_player_idx) {
+            for st in &prev_drv.stints {
+                if st.is_imported {
+                    carried_imported_stints.push(st.clone());
+                }
+            }
+            prev_drv.stints.retain(|st| !st.is_imported);
+        }
+    }
 
     if let Some(drivers) = driver_info["Drivers"].as_sequence() {
         let mut active_yaml_indices = std::collections::HashSet::new();
@@ -2092,12 +2288,12 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
             };
 
             s.drivers.entry(idx).and_modify(|target| {
-                // If a different real driver took over this CarIdx slot, reset their stints/laps
+                // If a different real driver took over this CarIdx slot, reset their live stints/laps
                 let had_real_name = !target.driver_name.is_empty()
                     && target.driver_name != "Player Car"
                     && !target.driver_name.starts_with("Car #");
                 if had_real_name && !user_name.is_empty() && target.driver_name != user_name {
-                    target.stints.clear();
+                    target.stints.retain(|st| st.is_imported);
                     target.total_laps_completed = 0;
                     target.last_processed_lap = 0;
                     target.last_known_lap_time = 0.0;
@@ -2144,12 +2340,36 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
         }
     }
 
-    // Backfill setup_name into player driver and any stints that were started before setup was known
+    // Re-attach any carried imported stints to the active player driver slot
+    if !carried_imported_stints.is_empty() {
+        if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+            for imp in carried_imported_stints {
+                if !player_drv.stints.iter().any(|st| st.is_imported && st.saved_id == imp.saved_id) {
+                    let insert_idx = player_drv.stints.iter().position(|st| !st.is_imported).unwrap_or(player_drv.stints.len());
+                    player_drv.stints.insert(insert_idx, imp);
+                }
+            }
+        }
+    }
+
+    // Auto-seed historical fuel burn rate from local Stint Database when Track + Car are known
+    if is_real_track_name(&s.track_name) {
+        let needs_seed = s.drivers.get(&player_idx).map_or(false, |d| d.historical_fuel_burn_rate <= 0.001);
+        if needs_seed {
+            if let Some(cached_burn) = stint_db::StintDatabase::load().latest_fuel_burn_for_track_and_car(&s.track_name, &s.car_name) {
+                if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+                    player_drv.historical_fuel_burn_rate = cached_burn;
+                }
+            }
+        }
+    }
+
+    // Backfill setup_name into player driver and any live stints that were started before setup was known
     if effective_setup != "Baseline" {
         if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
             player_drv.setup_name = effective_setup.clone();
             for stint in &mut player_drv.stints {
-                if stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline" {
+                if !stint.is_imported && (stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline") {
                     stint.setup_name = effective_setup.clone();
                 }
             }
@@ -2163,7 +2383,7 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                 s.latest_tire_data = garage_tires.clone();
                 let mut triggered_stint_num = None;
                 if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                    if let Some(last_stint) = player_drv.stints.last_mut() {
+                    if let Some(last_stint) = player_drv.last_live_stint_mut() {
                         if !last_stint.is_active && last_stint.laps_completed > 0 {
                             if last_stint.tires.should_trigger_popup(&garage_tires) {
                                 triggered_stint_num = Some(last_stint.stint_number);
@@ -3275,6 +3495,10 @@ struct WarRoomApp {
     main_overlay_hwnd: (isize, u8),
     tire_popup_hwnd: (isize, u8),
     ibt_lab: ibt_ui::IbtTelemetryLabState,
+    stint_db: stint_db::StintDatabase,
+    show_stint_db_modal: bool,
+    stint_db_filter_current_track: bool,
+    stint_db_search_query: String,
 }
 
 fn load_logo_texture(ctx: &egui::Context, is_dark: bool) -> Option<egui::TextureHandle> {
@@ -3365,7 +3589,7 @@ impl WarRoomApp {
                             let mut s = state_clone.lock().unwrap();
                             if s.needs_new_connection_reset
                                 || s.session_num != -1
-                                || !s.drivers.is_empty()
+                                || s.drivers.values().any(|d| d.has_live_stints() || d.total_laps_completed > 0)
                             {
                                 s.reset_for_new_session();
                             }
@@ -3671,6 +3895,10 @@ impl WarRoomApp {
             main_overlay_hwnd: (0, 0),
             tire_popup_hwnd: (0, 0),
             ibt_lab: ibt_ui::IbtTelemetryLabState::default(),
+            stint_db: stint_db::StintDatabase::load(),
+            show_stint_db_modal: false,
+            stint_db_filter_current_track: true,
+            stint_db_search_query: String::new(),
         }
     }
 
@@ -3704,6 +3932,10 @@ impl WarRoomApp {
             main_overlay_hwnd: (0, 0),
             tire_popup_hwnd: (0, 0),
             ibt_lab: ibt_ui::IbtTelemetryLabState::default(),
+            stint_db: stint_db::StintDatabase::default(),
+            show_stint_db_modal: false,
+            stint_db_filter_current_track: true,
+            stint_db_search_query: String::new(),
         }
     }
 
@@ -4928,7 +5160,15 @@ impl WarRoomApp {
                 ui.add_space(30.0);
                 ui.label(egui::RichText::new("No stints recorded yet in this session.").color(muted).size(15.0));
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("Complete laps on track (or monitor competitor runs) to compare stints side by side.").color(muted).size(12.5));
+                ui.label(egui::RichText::new("Complete laps on track (or re-import a saved stint from your database) to compare stints side by side.").color(muted).size(12.5));
+                ui.add_space(12.0);
+                if ui.add(
+                    egui::Button::new(egui::RichText::new("📂 Open Saved Stints / Re-Import").color(egui::Color32::BLACK).size(12.5).strong())
+                        .fill(primary)
+                        .rounding(egui::Rounding::same(6.0))
+                ).clicked() {
+                    self.show_stint_db_modal = true;
+                }
             });
             return;
         }
@@ -4958,7 +5198,7 @@ impl WarRoomApp {
         for (idx, slot) in self.stint_compare_slots.iter().enumerate() {
             if let Some(drv) = s.drivers.get(&slot.car_idx) {
                 if let Some(stint) = drv.stints.iter().find(|st| st.stint_number == slot.stint_number) {
-                    let is_player = slot.car_idx == s.player_car_idx;
+                    let is_player = slot.car_idx == s.player_car_idx || stint.is_imported;
                     let setup_display = if is_player {
                         if !stint.setup_name.is_empty() && stint.setup_name != "—" && stint.setup_name != "Baseline" {
                             &stint.setup_name
@@ -5066,6 +5306,13 @@ impl WarRoomApp {
                             add_third_stint = true;
                         }
                     }
+
+                    if ui.add(
+                        egui::Button::new(egui::RichText::new("📂 Load Saved Stint").color(white).size(11.5))
+                            .fill(elevated)
+                    ).on_hover_text("Re-import a saved stint from your database or paste a shared stint to compare").clicked() {
+                        self.show_stint_db_modal = true;
+                    }
                 });
             });
 
@@ -5086,7 +5333,15 @@ impl WarRoomApp {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("●").color(entry.color).size(13.0));
                                         ui.label(egui::RichText::new(entry.slot_label).color(entry.color).strong().size(12.5));
-                                        if entry.is_player {
+                                        if entry.stint.is_imported {
+                                            egui::Frame::none()
+                                                .fill(with_alpha(secondary, 42))
+                                                .rounding(egui::Rounding::same(4.0))
+                                                .inner_margin(egui::Margin::symmetric(4.0, 1.0))
+                                                .show(ui, |ui| {
+                                                    ui.label(egui::RichText::new("Imported").color(secondary).strong().size(10.0));
+                                                });
+                                        } else if entry.is_player {
                                             egui::Frame::none()
                                                 .fill(with_alpha(primary, 34))
                                                 .rounding(egui::Rounding::same(4.0))
@@ -5126,7 +5381,7 @@ impl WarRoomApp {
                                     ui.add_space(2.0);
 
                                     // Stint Picker
-                                    let st_curr_label = format!("Stint S{} ({} laps · Fast: {})", entry.stint.stint_number, entry.stint.laps_completed, format_time(entry.stint.fast_lap));
+                                    let st_curr_label = format!("{} ({} laps · Fast: {})", entry.stint.short_label(), entry.stint.laps_completed, format_time(entry.stint.fast_lap));
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new("Stint:").color(muted).size(11.0));
                                         egui::ComboBox::from_id_source(format!("cmp_stint_slot_{}", c_idx))
@@ -5135,8 +5390,14 @@ impl WarRoomApp {
                                             .show_ui(ui, |ui| {
                                                 if let Some(drv) = s.drivers.get(&entry.car_idx) {
                                                     for st in &drv.stints {
-                                                        let tag = if st.is_active { " · Live" } else { "" };
-                                                        let label = format!("S{} ({} laps · Fast: {}{})", st.stint_number, st.laps_completed, format_time(st.fast_lap), tag);
+                                                        let tag = if st.is_active {
+                                                            " · Live"
+                                                        } else if st.is_imported {
+                                                            " · Imported"
+                                                        } else {
+                                                            ""
+                                                        };
+                                                        let label = format!("{} ({} laps · Fast: {}{})", st.short_label(), st.laps_completed, format_time(st.fast_lap), tag);
                                                         let is_curr = st.stint_number == entry.stint_num;
                                                         if ui.selectable_label(is_curr, label).clicked() {
                                                             new_stint_for_slot = Some((c_idx, st.stint_number));
@@ -5670,11 +5931,19 @@ impl WarRoomApp {
         }
 
         if let Some((car_idx, s_num, new_notes)) = updated_notes {
+            let mut saved_id_to_update = String::new();
             if let Ok(mut state_guard) = self.state.lock() {
                 if let Some(drv) = state_guard.drivers.get_mut(&car_idx) {
                     if let Some(st) = drv.stints.iter_mut().find(|st| st.stint_number == s_num) {
-                        st.notes = new_notes;
+                        st.notes = new_notes.clone();
+                        saved_id_to_update = st.saved_id.clone();
                     }
+                }
+            }
+            if !saved_id_to_update.is_empty() {
+                if let Some(rec) = self.stint_db.records.iter_mut().find(|r| r.id == saved_id_to_update) {
+                    rec.stint.notes = new_notes;
+                    self.stint_db.save();
                 }
             }
         }
@@ -5755,11 +6024,20 @@ impl WarRoomApp {
                         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                         .collapsible(false)
                         .show(ctx, |ui| {
-                            ui.label(egui::RichText::new("No stints recorded yet for this driver. Complete laps on track to view stint telemetry.").color(muted));
+                            ui.label(egui::RichText::new("No stints recorded yet for this driver. Complete laps on track or re-import a saved stint to view telemetry.").color(muted));
                             ui.add_space(8.0);
-                            if ui.add(egui::Button::new(egui::RichText::new("Close").color(white)).fill(elevated)).clicked() {
-                                self.show_stint_analyzer_modal = false;
-                            }
+                            ui.horizontal(|ui| {
+                                if ui.add(
+                                    egui::Button::new(egui::RichText::new("📂 Open Saved Stints / Re-Import").color(egui::Color32::BLACK).strong())
+                                        .fill(primary)
+                                ).clicked() {
+                                    self.show_stint_analyzer_modal = false;
+                                    self.show_stint_db_modal = true;
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("Close").color(white)).fill(elevated)).clicked() {
+                                    self.show_stint_analyzer_modal = false;
+                                }
+                            });
                         });
                     return;
                 }
@@ -5800,7 +6078,7 @@ impl WarRoomApp {
         let window_title = if is_compare {
             "⚖ Stint Comparison (Side-by-Side) · Up to 3 Stints".to_string()
         } else {
-            format!("Stint S{} · #{} {} · Telemetry & Lap Log", stint.stint_number, drv_ref.car_num, drv_ref.driver_name)
+            format!("Stint {} · #{} {} · Telemetry & Lap Log", stint.short_label(), drv_ref.car_num, drv_ref.driver_name)
         };
 
         egui::Window::new(window_title)
@@ -5852,9 +6130,9 @@ impl WarRoomApp {
                         for st in player_stints.iter() {
                             let is_sel = st.stint_number == selected_num;
                             let tab_title = if st.is_active {
-                                format!("S{} · Live ({})", st.stint_number, st.laps_completed)
+                                format!("{} · Live ({})", st.short_label(), st.laps_completed)
                             } else {
-                                format!("S{} ({})", st.stint_number, st.laps_completed)
+                                format!("{} ({})", st.short_label(), st.laps_completed)
                             };
 
                             let btn = egui::Button::new(
@@ -5892,7 +6170,26 @@ impl WarRoomApp {
                             self.show_stint_analyzer_modal = false;
                         }
 
+                        if ui.add_sized(egui::vec2(108.0, 26.0), egui::Button::new(egui::RichText::new("📂 Saved Stints").color(white).size(11.5)).fill(elevated)).on_hover_text("Open Saved Stints Database to re-import or share stints").clicked() {
+                            self.show_stint_db_modal = true;
+                        }
+
                         if !is_compare {
+                            if ui.add_sized(
+                                egui::vec2(108.0, 26.0),
+                                egui::Button::new(egui::RichText::new("💾 Save / Share").color(white).size(11.5)).fill(elevated)
+                            ).on_hover_text("Save this stint to your local Stint Database and copy a shareable S4S stint code to clipboard").clicked() {
+                                let record = stint_db::build_record_from_state(s, target_car_idx, stint);
+                                let share_str = stint_db::export_share_string(&record);
+                                self.stint_db.upsert_stint(record);
+                                if let Ok(code) = share_str {
+                                    ui.output_mut(|o| o.copied_text = code);
+                                    self.toast_message = Some((format!("💾 Saved Stint {} to Database & copied share code!", stint.short_label()), std::time::Instant::now()));
+                                } else {
+                                    self.toast_message = Some((format!("💾 Saved Stint {} to local Stint Database!", stint.short_label()), std::time::Instant::now()));
+                                }
+                            }
+
                             if ui.add_sized(
                                 egui::vec2(148.0, 26.0),
                                 egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(11.5).strong()).fill(primary)
@@ -6241,11 +6538,19 @@ impl WarRoomApp {
 
         if !is_compare {
             if let Some((s_num, new_notes)) = updated_notes {
+                let mut saved_id_to_update = String::new();
                 if let Ok(mut state_guard) = self.state.lock() {
                     if let Some(drv) = state_guard.drivers.get_mut(&target_car_idx) {
                         if let Some(st) = drv.stints.iter_mut().find(|st| st.stint_number == s_num) {
-                            st.notes = new_notes;
+                            st.notes = new_notes.clone();
+                            saved_id_to_update = st.saved_id.clone();
                         }
+                    }
+                }
+                if !saved_id_to_update.is_empty() {
+                    if let Some(rec) = self.stint_db.records.iter_mut().find(|r| r.id == saved_id_to_update) {
+                        rec.stint.notes = new_notes;
+                        self.stint_db.save();
                     }
                 }
             }
@@ -6436,6 +6741,18 @@ impl WarRoomApp {
                     .rounding(egui::Rounding::same(12.0))
                     .inner_margin(16.0)
                     .show(ui, |ui| {
+                        let mut remove_imported_stint_num: Option<i32> = None;
+                        let saved_track_count = if is_real_track_name(&s.track_name) {
+                            self.stint_db.records.iter().filter(|r| stint_db::tracks_match(&r.track_name, &s.track_name)).count()
+                        } else {
+                            self.stint_db.records.len()
+                        };
+                        let saved_btn_label = if saved_track_count > 0 {
+                            format!("📂 Saved Stints ({})", saved_track_count)
+                        } else {
+                            "📂 Saved Stints".to_string()
+                        };
+
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("STINT LOG").color(muted).size(11.0).extra_letter_spacing(1.0));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -6445,6 +6762,14 @@ impl WarRoomApp {
                                         .rounding(egui::Rounding::same(6.0))
                                 ).clicked() {
                                     self.show_settings_modal = true;
+                                }
+
+                                if ui.add(
+                                    egui::Button::new(egui::RichText::new(saved_btn_label).color(white).size(11.5))
+                                        .fill(elevated)
+                                        .rounding(egui::Rounding::same(6.0))
+                                ).on_hover_text("Open Saved Stints Database to re-import previous track stints or paste a shared stint").clicked() {
+                                    self.show_stint_db_modal = true;
                                 }
                             });
                         });
@@ -6458,7 +6783,7 @@ impl WarRoomApp {
                                 .striped(true)
                                 .resizable(true)
                                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                .column(Column::initial(95.0).at_least(85.0))
+                                .column(Column::initial(115.0).at_least(95.0))
                                 .column(Column::initial(65.0).at_least(55.0));
 
                             for _ in &active_buckets {
@@ -6485,20 +6810,24 @@ impl WarRoomApp {
                                     for stint in drv.stints.iter().rev() {
                                         let row_color = if stint.is_active { white } else { egui::Color32::from_rgb(184, 191, 204) };
                                         let is_selected = self.selected_stint_num == Some(stint.stint_number);
+                                        let stint_lbl = stint.short_label();
 
                                         body.row(30.0, |mut row| {
                                             row.col(|ui| {
                                                 ui.push_id(("cockpit_stint_col", stint.stint_number), |ui| {
                                                     ui.horizontal(|ui| {
-                                                        let resp = ui.selectable_label(is_selected, egui::RichText::new(format!("S{}", stint.stint_number)).color(if is_selected { primary } else { white }).strong().size(13.0));
+                                                        let resp = ui.selectable_label(is_selected, egui::RichText::new(&stint_lbl).color(if is_selected { primary } else { white }).strong().size(13.0));
                                                         if resp.double_clicked() {
                                                             let tsv = format_full_stint_excel_tsv(stint, &active_buckets, is_metric);
                                                             ui.output_mut(|o| o.copied_text = tsv);
-                                                            self.toast_message = Some((format!("Copied Stint S{} for Excel!", stint.stint_number), std::time::Instant::now()));
+                                                            self.toast_message = Some((format!("Copied Stint {} for Excel!", stint_lbl), std::time::Instant::now()));
                                                         } else if resp.clicked() {
                                                             self.selected_driver_car_idx = Some(s.player_car_idx);
                                                             self.selected_stint_num = Some(stint.stint_number);
                                                             self.show_stint_analyzer_modal = true;
+                                                        }
+                                                        if !stint.saved_label.is_empty() {
+                                                            resp.on_hover_text(format!("Re-imported stint: {}", stint.saved_label));
                                                         }
                                                         if stint.is_active {
                                                             egui::Frame::none()
@@ -6508,6 +6837,17 @@ impl WarRoomApp {
                                                                 .show(ui, |ui| {
                                                                     ui.label(egui::RichText::new("Live").color(green).size(10.5).strong());
                                                                 });
+                                                        } else if stint.is_imported {
+                                                            egui::Frame::none()
+                                                                .fill(with_alpha(secondary, 36))
+                                                                .rounding(egui::Rounding::same(4.0))
+                                                                .inner_margin(egui::Margin::symmetric(4.0, 1.0))
+                                                                .show(ui, |ui| {
+                                                                    ui.label(egui::RichText::new("Ref").color(secondary).size(10.0).strong());
+                                                                });
+                                                            if ui.add(egui::Button::new(egui::RichText::new("✕").color(muted).size(10.0)).frame(false)).on_hover_text("Unload this imported stint from current session (remains saved in your Stint Database)").clicked() {
+                                                                remove_imported_stint_num = Some(stint.stint_number);
+                                                            }
                                                         }
                                                     });
                                                 });
@@ -6518,7 +6858,7 @@ impl WarRoomApp {
                                                     if resp.double_clicked() {
                                                         let tsv = format_stint_laps_tsv(stint);
                                                         ui.output_mut(|o| o.copied_text = tsv);
-                                                        self.toast_message = Some((format!("Copied S{} Laps for Excel", stint.stint_number), std::time::Instant::now()));
+                                                        self.toast_message = Some((format!("Copied {} Laps for Excel", stint_lbl), std::time::Instant::now()));
                                                     } else if resp.clicked() {
                                                         self.selected_driver_car_idx = Some(s.player_car_idx);
                                                         self.selected_stint_num = Some(stint.stint_number);
@@ -6535,7 +6875,7 @@ impl WarRoomApp {
                                                         if resp.double_clicked() {
                                                             let tsv = format_full_stint_excel_tsv(stint, &active_buckets, is_metric);
                                                             ui.output_mut(|o| o.copied_text = tsv);
-                                                            self.toast_message = Some((format!("Copied Stint S{} for Excel", stint.stint_number), std::time::Instant::now()));
+                                                            self.toast_message = Some((format!("Copied Stint {} for Excel", stint_lbl), std::time::Instant::now()));
                                                         }
                                                     });
                                                 });
@@ -6550,6 +6890,15 @@ impl WarRoomApp {
                                 }
                             });
                         });
+
+                        if let Some(rem_num) = remove_imported_stint_num {
+                            if let Ok(mut state_guard) = self.state.lock() {
+                                state_guard.remove_imported_stint(rem_num);
+                            }
+                            if self.selected_stint_num == Some(rem_num) {
+                                self.selected_stint_num = None;
+                            }
+                        }
 
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
@@ -6627,7 +6976,7 @@ impl WarRoomApp {
                                 .or(last_completed_stint);
 
                             let stint_has_tires = selected_stint.map_or(false, |st| st.tires.has_data && st.laps_completed > 0);
-                            let s_num = selected_stint.map_or(1, |st| st.stint_number);
+                            let s_lbl = selected_stint.map_or("S1".to_string(), |st| st.short_label());
 
                             let empty_tires = StintTireSet::default();
                             let tires_to_show = if stint_has_tires {
@@ -6638,7 +6987,7 @@ impl WarRoomApp {
 
                             ui.horizontal(|ui| {
                                 let header_lbl = if stint_has_tires {
-                                    format!("TIRES · S{}", s_num)
+                                    format!("TIRES · {}", s_lbl)
                                 } else {
                                     "TIRES · AWAITING PIT".to_string()
                                 };
@@ -6742,7 +7091,9 @@ impl WarRoomApp {
             is_on_pit_road: bool,
             setup_name: &'a str,
             stint_num: i32,
+            stint_short_label: String,
             stint_is_active: bool,
+            stint_is_imported: bool,
             laps_completed: i32,
             last_lap: f32,
             fast_lap: f32,
@@ -6773,7 +7124,9 @@ impl WarRoomApp {
                         is_on_pit_road: drv.is_on_pit_road,
                         setup_name: entry_setup,
                         stint_num: 1,
+                        stint_short_label: "S1".to_string(),
                         stint_is_active: false,
+                        stint_is_imported: false,
                         laps_completed: 0,
                         last_lap: 0.0,
                         fast_lap: 0.0,
@@ -6803,7 +7156,9 @@ impl WarRoomApp {
                         is_on_pit_road: drv.is_on_pit_road,
                         setup_name: entry_setup,
                         stint_num: stint.stint_number,
+                        stint_short_label: stint.short_label(),
                         stint_is_active: stint.is_active,
+                        stint_is_imported: stint.is_imported,
                         laps_completed: stint.laps_completed,
                         last_lap: stint.last_lap,
                         fast_lap: stint.fast_lap,
@@ -6987,6 +7342,14 @@ impl WarRoomApp {
                             self.ensure_compare_slots_populated(s);
                             self.stint_analyzer_tab = StintAnalyzerTab::Compare;
                             self.show_stint_analyzer_modal = true;
+                        }
+
+                        if ui.add(
+                            egui::Button::new(egui::RichText::new("📂 Saved Stints").color(white).size(11.5))
+                                .fill(elevated)
+                                .rounding(egui::Rounding::same(6.0))
+                        ).on_hover_text("Open Saved Stints Database to re-import previous track stints or paste a shared stint").clicked() {
+                            self.show_stint_db_modal = true;
                         }
 
                         if ui.add(
@@ -7235,8 +7598,16 @@ impl WarRoomApp {
                                 if cols.stint {
                                     row.col(|ui| {
                                         ui.push_id(("grid_stint_col", row_idx, e.car_idx, e.stint_num), |ui| {
-                                            let tag = if e.stint_is_active { " · Live" } else if e.is_on_pit_road { " · Pit" } else { "" };
-                                            let stint_btn_text = format!("S{}{}", e.stint_num, tag);
+                                            let tag = if e.stint_is_active {
+                                                " · Live"
+                                            } else if e.stint_is_imported {
+                                                " · Ref"
+                                            } else if e.is_on_pit_road {
+                                                " · Pit"
+                                            } else {
+                                                ""
+                                            };
+                                            let stint_btn_text = format!("{}{}", e.stint_short_label, tag);
 
                                             let is_sel = self.selected_driver_car_idx == Some(e.car_idx) && self.selected_stint_num == Some(e.stint_num);
                                             let resp = ui.add(
@@ -8344,6 +8715,577 @@ impl WarRoomApp {
             self.tire_popup_hwnd = (0, 0);
         }
     }
+
+    fn render_stint_db_modal(&mut self, ctx: &egui::Context, s: &WarRoomState) {
+        if !self.show_stint_db_modal {
+            return;
+        }
+
+        let primary = self.settings.primary_accent();
+        let secondary = self.settings.secondary_accent();
+        let white = self.settings.text_color();
+        let muted = self.settings.text_muted();
+        let elevated = self.settings.card_elevated_color();
+        let green = self.settings.status_green();
+        let is_metric = self.settings.use_metric;
+        let fuel_conv = if is_metric { 1.0 } else { 0.264172 };
+        let fuel_unit_str = if is_metric { "L" } else { "gal" };
+
+        let has_real_track = is_real_track_name(&s.track_name);
+        let filter_current_track = self.stint_db_filter_current_track && has_real_track;
+
+        let total_saved = self.stint_db.records.len();
+        let current_track_count = if has_real_track {
+            self.stint_db.count_for_track(&s.track_name)
+        } else {
+            0
+        };
+
+        let screen_rect = ctx.screen_rect();
+        let win_w = (screen_rect.width() * 0.86).clamp(860.0, 1280.0);
+        let win_h = (screen_rect.height() * 0.82).clamp(520.0, 840.0);
+
+        let mut is_open = self.show_stint_db_modal;
+        let mut close_modal = false;
+
+        let mut action_reimport: Option<stint_db::SavedStintRecord> = None;
+        let mut action_compare: Option<stint_db::SavedStintRecord> = None;
+        let mut action_share: Option<stint_db::SavedStintRecord> = None;
+        let mut action_delete_id: Option<String> = None;
+
+        egui::Window::new("📂 Saved Stints Database · Track Re-Import & Share")
+            .id(egui::Id::new("stint_database_modal_window"))
+            .open(&mut is_open)
+            .default_size([win_w, win_h])
+            .default_pos([screen_rect.min.x + 60.0, screen_rect.min.y + 50.0])
+            .collapsible(false)
+            .resizable(true)
+            .show(ctx, |ui| {
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    close_modal = true;
+                }
+
+                // Top Filter & Action Bar
+                ui.horizontal(|ui| {
+                    if has_real_track {
+                        let cur_btn = egui::Button::new(
+                            egui::RichText::new(format!("🏁 Current Track ({})", current_track_count))
+                                .color(if filter_current_track { egui::Color32::WHITE } else { muted })
+                                .size(12.0)
+                                .strong(),
+                        )
+                        .fill(if filter_current_track { with_alpha(primary, 190) } else { elevated })
+                        .rounding(egui::Rounding::same(6.0));
+                        if ui
+                            .add(cur_btn)
+                            .on_hover_text(format!("Show saved stints matching {}", s.track_name))
+                            .clicked()
+                        {
+                            self.stint_db_filter_current_track = true;
+                        }
+                    }
+
+                    let all_btn = egui::Button::new(
+                        egui::RichText::new(format!("🌎 All Saved Stints ({})", total_saved))
+                            .color(if !filter_current_track { egui::Color32::WHITE } else { muted })
+                            .size(12.0)
+                            .strong(),
+                    )
+                    .fill(if !filter_current_track { with_alpha(secondary, 190) } else { elevated })
+                    .rounding(egui::Rounding::same(6.0));
+                    if ui.add(all_btn).clicked() {
+                        self.stint_db_filter_current_track = false;
+                    }
+
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+
+                    ui.label(egui::RichText::new("SEARCH").color(muted).size(11.0).extra_letter_spacing(0.8));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.stint_db_search_query)
+                            .hint_text("Track, Car, Setup, Driver, Notes...")
+                            .desired_width(210.0),
+                    );
+                    if !self.stint_db_search_query.is_empty() {
+                        if ui
+                            .add(egui::Button::new(egui::RichText::new("Clear").color(muted).size(11.0)).frame(false))
+                            .clicked()
+                        {
+                            self.stint_db_search_query.clear();
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_sized(
+                                egui::vec2(72.0, 26.0),
+                                egui::Button::new(egui::RichText::new("✕ Close").color(white).size(12.0)).fill(elevated),
+                            )
+                            .clicked()
+                        {
+                            close_modal = true;
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("📂 Open Stints Folder").color(white).size(11.5))
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0)),
+                            )
+                            .on_hover_text("Open the local .s4s.json stints folder in Windows Explorer to share or drop stint files")
+                            .clicked()
+                        {
+                            let folder = self.stint_db.stints_folder_path();
+                            let _ = std::fs::create_dir_all(&folder);
+                            stint_db::open_folder_in_explorer(&folder);
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("🔄 Sync Folder").color(white).size(11.5))
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0)),
+                            )
+                            .on_hover_text("Scan the stints folder for any new .s4s.json stint files dropped from teammates")
+                            .clicked()
+                        {
+                            let added = self.stint_db.scan_stints_folder();
+                            if added > 0 {
+                                self.toast_message = Some((
+                                    format!("📂 Imported {} new stint file(s) from folder!", added),
+                                    std::time::Instant::now(),
+                                ));
+                            } else {
+                                self.toast_message = Some((
+                                    "📂 Stints folder is up to date.".to_string(),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("📥 Paste Stint from Clipboard")
+                                        .color(egui::Color32::BLACK)
+                                        .size(11.5)
+                                        .strong(),
+                                )
+                                .fill(primary)
+                                .rounding(egui::Rounding::same(6.0)),
+                            )
+                            .on_hover_text("Import a shared S4S-STINT-V1:... code or JSON stint copied from Discord and load it into the session")
+                            .clicked()
+                        {
+                            match stint_db::read_clipboard_text().and_then(|raw| stint_db::import_from_str(&raw)) {
+                                Ok(rec) => {
+                                    self.stint_db.upsert_stint(rec.clone());
+                                    action_reimport = Some(rec);
+                                }
+                                Err(err) => {
+                                    self.toast_message = Some((
+                                        format!("⚠ Clipboard import failed: {}", err),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                            }
+                        }
+                    });
+                });
+
+                ui.add_space(6.0);
+
+                // Info Banner
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(16, 22, 32))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14)))
+                    .rounding(egui::Rounding::same(8.0))
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new("💾 Auto-Save Active:")
+                                    .color(green)
+                                    .strong()
+                                    .size(11.5),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Completed stints (1+ laps) are automatically saved locally with lap times, fuel burn, 4-corner pit tire wear/temps, setup name, and notes. Re-import any stint to view it as IMP 1, IMP 2 in your Stint Log or Side-by-Side Comparison without affecting live telemetry.",
+                                )
+                                .color(muted)
+                                .size(11.5),
+                            );
+                        });
+                    });
+
+                ui.add_space(8.0);
+
+                let query = self.stint_db_search_query.trim().to_lowercase();
+                let filtered_records: Vec<stint_db::SavedStintRecord> = self
+                    .stint_db
+                    .records
+                    .iter()
+                    .filter(|r| {
+                        if filter_current_track && !stint_db::tracks_match(&r.track_name, &s.track_name) {
+                            return false;
+                        }
+                        if !query.is_empty() {
+                            let m_track = r.track_name.to_lowercase().contains(&query);
+                            let m_car = r.car_name.to_lowercase().contains(&query);
+                            let m_setup = r.setup_name.to_lowercase().contains(&query);
+                            let m_drv = r.driver_name.to_lowercase().contains(&query);
+                            let m_notes = r.stint.notes.to_lowercase().contains(&query);
+                            if !(m_track || m_car || m_setup || m_drv || m_notes) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .cloned()
+                    .collect();
+
+                if filtered_records.is_empty() {
+                    egui::Frame::none()
+                        .fill(elevated)
+                        .rounding(egui::Rounding::same(10.0))
+                        .inner_margin(24.0)
+                        .show(ui, |ui| {
+                            ui.vertical_centered(|ui| {
+                                if filter_current_track {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "No saved stints found for current track ({}) yet.",
+                                            s.track_name
+                                        ))
+                                        .color(white)
+                                        .strong()
+                                        .size(14.0),
+                                    );
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Complete at least 1 green-flag lap on track to auto-save your first stint here, or switch to 'All Saved Stints'.",
+                                        )
+                                        .color(muted)
+                                        .size(12.0),
+                                    );
+                                    if total_saved > 0 {
+                                        ui.add_space(10.0);
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(format!(
+                                                        "🌎 Show All Saved Stints ({})",
+                                                        total_saved
+                                                    ))
+                                                    .color(white)
+                                                    .size(12.0),
+                                                )
+                                                .fill(with_alpha(secondary, 160)),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.stint_db_filter_current_track = false;
+                                        }
+                                    }
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("No saved stints match your filter yet.")
+                                            .color(white)
+                                            .strong()
+                                            .size(14.0),
+                                    );
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Complete laps in iRacing (auto-saved automatically), click '💾 Save / Share' on any stint in Stint Analyzer, or click '📥 Paste Stint from Clipboard' above.",
+                                        )
+                                        .color(muted)
+                                        .size(12.0),
+                                    );
+                                }
+                            });
+                        });
+                } else {
+                    let player_drv = s.drivers.get(&s.player_car_idx);
+                    let avail_h = (ui.available_height() - 10.0).max(200.0);
+
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(14, 17, 23))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10)))
+                        .rounding(egui::Rounding::same(10.0))
+                        .inner_margin(10.0)
+                        .show(ui, |ui| {
+                            egui::ScrollArea::both()
+                                .auto_shrink([false, false])
+                                .max_height(avail_h)
+                                .show(ui, |ui| {
+                                    TableBuilder::new(ui)
+                                        .striped(true)
+                                        .resizable(true)
+                                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                                        .column(Column::initial(125.0).at_least(105.0)) // Saved Date
+                                        .column(Column::initial(195.0).at_least(140.0)) // Track & Car
+                                        .column(Column::initial(175.0).at_least(130.0)) // Setup & Driver
+                                        .column(Column::initial(52.0).at_least(45.0))   // Laps
+                                        .column(Column::initial(78.0).at_least(68.0))   // Fastest
+                                        .column(Column::initial(78.0).at_least(68.0))   // Full Avg
+                                        .column(Column::initial(72.0).at_least(62.0))   // Fuel/Lap
+                                        .column(Column::initial(78.0).at_least(68.0))   // Tires
+                                        .column(Column::remainder().at_least(250.0))    // Actions
+                                        .header(28.0, |mut header| {
+                                            header.col(|ui| { ui.label(egui::RichText::new("Saved").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Track & Car").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Setup & Driver").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Laps").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Fastest").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Full Avg").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Fuel/Lap").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Pit Tires").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Actions (Re-Import / Compare / Share)").color(muted).size(11.5)); });
+                                        })
+                                        .body(|mut body| {
+                                            for (row_idx, rec) in filtered_records.iter().enumerate() {
+                                                let is_track_match = has_real_track && stint_db::tracks_match(&rec.track_name, &s.track_name);
+                                                let already_imported_num = player_drv.and_then(|d| {
+                                                    d.stints
+                                                        .iter()
+                                                        .find(|st| st.is_imported && st.saved_id == rec.id)
+                                                        .map(|st| st.stint_number)
+                                                });
+
+                                                body.row(34.0, |mut row| {
+                                                    // 1. Saved Date
+                                                    row.col(|ui| {
+                                                        ui.label(egui::RichText::new(&rec.saved_at_display).color(muted).size(11.5));
+                                                    });
+
+                                                    // 2. Track & Car
+                                                    row.col(|ui| {
+                                                        ui.vertical(|ui| {
+                                                            ui.spacing_mut().item_spacing.y = 1.0;
+                                                            ui.horizontal(|ui| {
+                                                                ui.label(egui::RichText::new(&rec.track_name).color(white).strong().size(12.0));
+                                                                if is_track_match {
+                                                                    egui::Frame::none()
+                                                                        .fill(with_alpha(green, 34))
+                                                                        .rounding(egui::Rounding::same(4.0))
+                                                                        .inner_margin(egui::Margin::symmetric(4.0, 1.0))
+                                                                        .show(ui, |ui| {
+                                                                            ui.label(egui::RichText::new("MATCH").color(green).strong().size(9.5));
+                                                                        });
+                                                                }
+                                                            });
+                                                            ui.label(egui::RichText::new(&rec.car_name).color(muted).size(10.5));
+                                                        });
+                                                    });
+
+                                                    // 3. Setup & Driver
+                                                    row.col(|ui| {
+                                                        ui.vertical(|ui| {
+                                                            ui.spacing_mut().item_spacing.y = 1.0;
+                                                            ui.label(egui::RichText::new(&rec.setup_name).color(primary).strong().size(11.5));
+                                                            let drv_txt = format!("#{} {} · {}", rec.car_num, rec.driver_name, rec.session_type);
+                                                            let resp = ui.label(egui::RichText::new(drv_txt).color(muted).size(10.5));
+                                                            if !rec.stint.notes.is_empty() {
+                                                                resp.on_hover_text(format!("Notes: {}", rec.stint.notes));
+                                                            }
+                                                        });
+                                                    });
+
+                                                    // 4. Laps
+                                                    row.col(|ui| {
+                                                        ui.label(egui::RichText::new(format!("{}", rec.stint.laps_completed)).color(white).strong().size(12.5));
+                                                    });
+
+                                                    // 5. Fastest
+                                                    row.col(|ui| {
+                                                        ui.label(egui::RichText::new(format_time(rec.stint.fast_lap)).color(green).strong().size(12.5));
+                                                    });
+
+                                                    // 6. Full Avg
+                                                    row.col(|ui| {
+                                                        ui.label(egui::RichText::new(format_time(rec.stint.full_average())).color(white).size(12.5));
+                                                    });
+
+                                                    // 7. Fuel/Lap
+                                                    row.col(|ui| {
+                                                        let f_rate = rec.stint.fuel_per_lap() * fuel_conv;
+                                                        let f_str = if f_rate > 0.0005 {
+                                                            format!("{:.3} {}", f_rate, fuel_unit_str)
+                                                        } else {
+                                                            "—".to_string()
+                                                        };
+                                                        ui.label(egui::RichText::new(f_str).color(white).size(11.5));
+                                                    });
+
+                                                    // 8. Pit Tires
+                                                    row.col(|ui| {
+                                                        if rec.stint.tires.has_data {
+                                                            let lf_w = (rec.stint.tires.lf.wear_l + rec.stint.tires.lf.wear_m + rec.stint.tires.lf.wear_r) / 3.0;
+                                                            let rf_w = (rec.stint.tires.rf.wear_l + rec.stint.tires.rf.wear_m + rec.stint.tires.rf.wear_r) / 3.0;
+                                                            egui::Frame::none()
+                                                                .fill(with_alpha(secondary, 36))
+                                                                .rounding(egui::Rounding::same(4.0))
+                                                                .inner_margin(egui::Margin::symmetric(5.0, 1.5))
+                                                                .show(ui, |ui| {
+                                                                    ui.label(egui::RichText::new(format!("✓ {:.0}/{:.0}%", lf_w, rf_w)).color(secondary).strong().size(10.5));
+                                                                });
+                                                        } else {
+                                                            ui.label(egui::RichText::new("—").color(muted).size(11.5));
+                                                        }
+                                                    });
+
+                                                    // 9. Actions
+                                                    row.col(|ui| {
+                                                        ui.push_id(("stint_db_row_actions", row_idx, &rec.id), |ui| {
+                                                            ui.horizontal(|ui| {
+                                                                let reimp_label = if let Some(imp_n) = already_imported_num {
+                                                                    format!("✓ IMP {}", (imp_n - 100).max(1))
+                                                                } else {
+                                                                    "📥 Re-Import".to_string()
+                                                                };
+                                                                let reimp_btn = egui::Button::new(
+                                                                    egui::RichText::new(reimp_label)
+                                                                        .color(if already_imported_num.is_some() { white } else { egui::Color32::BLACK })
+                                                                        .size(11.5)
+                                                                        .strong(),
+                                                                )
+                                                                .fill(if already_imported_num.is_some() { with_alpha(green, 150) } else { primary })
+                                                                .rounding(egui::Rounding::same(5.0));
+
+                                                                if ui
+                                                                    .add(reimp_btn)
+                                                                    .on_hover_text("Load this saved stint into the active session (Cockpit & Grid) as a reference stint")
+                                                                    .clicked()
+                                                                {
+                                                                    action_reimport = Some(rec.clone());
+                                                                }
+
+                                                                if ui
+                                                                    .add(
+                                                                        egui::Button::new(egui::RichText::new("⚖ Compare").color(white).size(11.5))
+                                                                            .fill(elevated)
+                                                                            .rounding(egui::Rounding::same(5.0)),
+                                                                    )
+                                                                    .on_hover_text("Re-import and immediately open in Side-by-Side Stint Comparison")
+                                                                    .clicked()
+                                                                {
+                                                                    action_compare = Some(rec.clone());
+                                                                }
+
+                                                                if ui
+                                                                    .add(
+                                                                        egui::Button::new(egui::RichText::new("📋 Share").color(white).size(11.5))
+                                                                            .fill(elevated)
+                                                                            .rounding(egui::Rounding::same(5.0)),
+                                                                    )
+                                                                    .on_hover_text("Copy S4S-STINT-V1 share code to clipboard for pasting in Discord")
+                                                                    .clicked()
+                                                                {
+                                                                    action_share = Some(rec.clone());
+                                                                }
+
+                                                                if ui
+                                                                    .add(
+                                                                        egui::Button::new(egui::RichText::new("🗑").color(muted).size(11.5))
+                                                                            .fill(egui::Color32::TRANSPARENT),
+                                                                    )
+                                                                    .on_hover_text("Delete this stint from local database")
+                                                                    .clicked()
+                                                                {
+                                                                    action_delete_id = Some(rec.id.clone());
+                                                                }
+                                                            });
+                                                        });
+                                                    });
+                                                });
+                                            }
+                                        });
+                                });
+                        });
+                }
+            });
+
+        if let Some(rec) = action_reimport {
+            let (car_idx, imp_num) = if let Ok(mut state_guard) = self.state.lock() {
+                let num = state_guard.import_saved_stint(&rec);
+                (state_guard.player_car_idx, num)
+            } else {
+                (s.player_car_idx, 101)
+            };
+            self.selected_driver_car_idx = Some(car_idx);
+            self.selected_stint_num = Some(imp_num);
+            let imp_label = format!("IMP {}", (imp_num - 100).max(1));
+            self.toast_message = Some((
+                format!(
+                    "📥 Re-imported {} ({} · {} laps) into session!",
+                    imp_label, rec.setup_name, rec.stint.laps_completed
+                ),
+                std::time::Instant::now(),
+            ));
+        }
+
+        if let Some(rec) = action_compare {
+            let (car_idx, imp_num, cloned_state) = if let Ok(mut state_guard) = self.state.lock() {
+                let num = state_guard.import_saved_stint(&rec);
+                let p_idx = state_guard.player_car_idx;
+                (p_idx, num, state_guard.clone_state_for_ui())
+            } else {
+                (s.player_car_idx, 101, s.clone_state_for_ui())
+            };
+            self.ensure_compare_slots_populated(&cloned_state);
+            let slot_entry = StintCompareSlot {
+                car_idx,
+                stint_number: imp_num,
+            };
+            if !self.stint_compare_slots.contains(&slot_entry) {
+                if self.stint_compare_slots.len() >= 3 {
+                    self.stint_compare_slots.pop();
+                }
+                self.stint_compare_slots.push(slot_entry);
+            }
+            self.selected_driver_car_idx = Some(car_idx);
+            self.selected_stint_num = Some(imp_num);
+            self.stint_analyzer_tab = StintAnalyzerTab::Compare;
+            self.show_stint_analyzer_modal = true;
+            self.show_stint_db_modal = false;
+            is_open = false;
+            let imp_label = format!("IMP {}", (imp_num - 100).max(1));
+            self.toast_message = Some((
+                format!("⚖ Loaded {} ({}) into Stint Comparison!", imp_label, rec.setup_name),
+                std::time::Instant::now(),
+            ));
+        }
+
+        if let Some(rec) = action_share {
+            match stint_db::export_share_string(&rec) {
+                Ok(code) => {
+                    ctx.output_mut(|o| o.copied_text = code);
+                    self.toast_message = Some((
+                        "📋 Copied shareable stint code to clipboard — paste in Discord or share via Stints folder!"
+                            .to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    self.toast_message = Some((format!("⚠ Share failed: {}", e), std::time::Instant::now()));
+                }
+            }
+        }
+
+        if let Some(del_id) = action_delete_id {
+            if self.stint_db.delete_stint(&del_id) {
+                self.toast_message = Some(("🗑 Removed stint from local database".to_string(), std::time::Instant::now()));
+            }
+        }
+
+        if !is_open || close_modal {
+            self.show_stint_db_modal = false;
+        }
+    }
 }
 
 fn render_overlay_tire_corner_card(
@@ -8516,6 +9458,9 @@ impl eframe::App for WarRoomApp {
 
         drop(s);
 
+        // Automatically persist completed live player stints (1+ laps) into the local Stint Database
+        self.stint_db.sync_player_stints_from_state(&current_state);
+
         // --- SINGLE REFINED MOTORSPORT HEADER BAR (Design A) ---
         let header_frame = egui::Frame::none()
             .fill(self.settings.bg_color())
@@ -8669,6 +9614,10 @@ impl eframe::App for WarRoomApp {
                             self.ensure_compare_slots_populated(&current_state);
                             self.stint_analyzer_tab = StintAnalyzerTab::Compare;
                             self.show_stint_analyzer_modal = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("📂 Saved Stints Database (Re-Import / Share)").clicked() {
+                            self.show_stint_db_modal = true;
                             ui.close_menu();
                         }
                         if ui.button("📊 Offline .IBT Telemetry Lab").clicked() {
@@ -8854,6 +9803,7 @@ impl eframe::App for WarRoomApp {
         self.render_telemetry_debugger(ctx, &current_state);
         self.render_stint_analyzer_modal(ctx, &current_state);
         self.render_stint_comparison_window(ctx, &current_state);
+        self.render_stint_db_modal(ctx, &current_state);
         self.render_release_notes_modal(ctx);
         self.render_floating_overlay_hud(ctx, &current_state);
         self.render_tire_popup_overlay(ctx, &current_state);
@@ -10464,6 +11414,121 @@ DriverInfo:
         let mut updated_pit_tires = post_pit_tires.clone();
         updated_pit_tires.rf.wear_m = 76.0;
         assert!(post_pit_tires.should_trigger_popup(&updated_pit_tires));
+    }
+
+    #[test]
+    fn test_imported_stint_coexists_with_live_telemetry() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 1;
+        state.track_name = "Bristol Motor Speedway".to_string();
+        state.car_name = "NASCAR Cup Series Next Gen Chevrolet Camaro ZL1".to_string();
+
+        let mut saved_stint = StintData::default();
+        saved_stint.stint_number = 1;
+        saved_stint.laps_completed = 10;
+        saved_stint.lap_times = vec![15.1, 15.0, 14.9, 15.0, 15.05, 15.1, 15.12, 15.15, 15.2, 15.22];
+        saved_stint.fast_lap = 14.9;
+        saved_stint.fuel_used = 4.20;
+        saved_stint.lap_fuel_burns = vec![0.42; 10];
+        saved_stint.setup_name = "Bristol_Q_Race.sto".to_string();
+
+        let rec = stint_db::SavedStintRecord {
+            id: "test_bristol_stint_1".to_string(),
+            saved_at_unix: 1700000000,
+            saved_at_display: "2026-10-24 17:00".to_string(),
+            track_name: "Bristol Motor Speedway".to_string(),
+            track_length: "0.53 mi".to_string(),
+            car_name: "NASCAR Cup Series Next Gen Chevrolet Camaro ZL1".to_string(),
+            session_type: "PRACTICE".to_string(),
+            driver_name: "TestDriver".to_string(),
+            car_num: "24".to_string(),
+            setup_name: "Bristol_Q_Race.sto".to_string(),
+            track_temp: "30.0 C".to_string(),
+            air_temp: "22.0 C".to_string(),
+            track_state: "50%".to_string(),
+            stint: saved_stint,
+        };
+
+        let imp_num = state.import_saved_stint(&rec);
+        assert_eq!(imp_num, 101);
+
+        let drv = state.drivers.get(&1).unwrap();
+        assert_eq!(drv.stints.len(), 1);
+        assert!(drv.stints[0].is_imported);
+        assert_eq!(drv.stints[0].short_label(), "IMP 1");
+        assert!((drv.historical_fuel_burn_rate - 0.42).abs() < 0.001, "Historical fuel burn should be seeded from imported stint");
+
+        // Now simulate live telemetry on track: live stint S1 should be created alongside IMP 1
+        let mut pit_road = vec![false; 64];
+        let mut laps_comp = vec![0; 64];
+        let mut last_laps = vec![0.0; 64];
+        let mut fast_laps = vec![0.0; 64];
+        let mut positions = vec![0; 64];
+        let mut surfaces = vec![0; 64];
+        let mut lap_dist_pcts = vec![0.0; 64];
+
+        surfaces[1] = 3; // On track
+        laps_comp[1] = 1;
+        last_laps[1] = 15.050;
+        fast_laps[1] = 15.050;
+        positions[1] = 1;
+        lap_dist_pcts[1] = 0.05;
+        pit_road[1] = false;
+
+        let frame1 = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 50.0,
+            current_fuel_sample: 60.0,
+            player_live_pressures: [200.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame1, None, false);
+
+        // Complete a flying lap
+        laps_comp[1] = 2;
+        last_laps[1] = 14.850;
+        fast_laps[1] = 14.850;
+        let frame2 = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 65.0,
+            current_fuel_sample: 59.58,
+            player_live_pressures: [200.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame2, None, false);
+
+        let drv = state.drivers.get(&1).unwrap();
+        assert_eq!(drv.stints.len(), 2, "Should have both IMP 1 and live S1");
+        assert_eq!(drv.stints[0].short_label(), "IMP 1");
+        assert_eq!(drv.stints[0].laps_completed, 10, "IMP 1 laps must remain untouched");
+        assert_eq!(drv.stints[1].short_label(), "S1");
+        assert!(!drv.stints[1].is_imported);
+        assert!(drv.stints[1].is_active);
+        assert_eq!(drv.stints[1].laps_completed, 1);
+
+        // Unloading IMP 1 should leave live S1 intact
+        assert!(state.remove_imported_stint(101));
+        let drv = state.drivers.get(&1).unwrap();
+        assert_eq!(drv.stints.len(), 1);
+        assert_eq!(drv.stints[0].short_label(), "S1");
     }
 }
 
