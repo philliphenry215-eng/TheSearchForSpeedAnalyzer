@@ -225,6 +225,27 @@ impl StintTireSet {
     pub fn is_valid(&self) -> bool {
         self.lf.pressure > 0.5 || self.rf.pressure > 0.5 || self.lf.temp_m > 10.0 || self.rf.temp_m > 10.0 || self.lf.wear_m > 0.1 || self.rf.wear_m > 0.1
     }
+
+    pub fn has_wear_or_temps(&self) -> bool {
+        self.lf.temp_m > 5.0 || self.rf.temp_m > 5.0 || self.lf.wear_m > 0.1 || self.rf.wear_m > 0.1
+    }
+
+    pub fn should_trigger_popup(&self, new_tires: &StintTireSet) -> bool {
+        if !new_tires.has_wear_or_temps() {
+            return false;
+        }
+        if !self.has_data || !self.has_wear_or_temps() {
+            return true;
+        }
+        (self.lf.wear_m - new_tires.lf.wear_m).abs() > 0.5
+            || (self.rf.wear_m - new_tires.rf.wear_m).abs() > 0.5
+            || (self.lr.wear_m - new_tires.lr.wear_m).abs() > 0.5
+            || (self.rr.wear_m - new_tires.rr.wear_m).abs() > 0.5
+            || (self.lf.temp_m - new_tires.lf.temp_m).abs() > 1.0
+            || (self.rf.temp_m - new_tires.rf.temp_m).abs() > 1.0
+            || (self.lr.temp_m - new_tires.lr.temp_m).abs() > 1.0
+            || (self.rr.temp_m - new_tires.rr.temp_m).abs() > 1.0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -589,6 +610,8 @@ pub struct WarRoomState {
     pub player_gap_behind: f32,
     pub player_lap_distance_pct: f32,
     pub latest_tire_data: StintTireSet,
+    pub tire_popup_trigger_seq: u64,
+    pub tire_popup_stint_num: i32,
     pub player_is_in_car: bool,
     pub player_yaw_north: f32,
     pub player_incidents: i32,
@@ -660,6 +683,8 @@ impl Default for WarRoomState {
             player_gap_behind: 0.0,
             player_lap_distance_pct: 0.0,
             latest_tire_data: StintTireSet::default(),
+            tire_popup_trigger_seq: 0,
+            tire_popup_stint_num: 1,
             player_is_in_car: false,
             player_yaw_north: 0.0,
             player_incidents: 0,
@@ -740,6 +765,8 @@ impl WarRoomState {
         self.debug_lap_best_time = 0.0;
         self.debug_lap_best_lap_num = 0;
         self.latest_tire_data = StintTireSet::default();
+        self.tire_popup_trigger_seq = 0;
+        self.tire_popup_stint_num = 1;
         self.player_yaw_north = 0.0;
 
         if manual {
@@ -1516,13 +1543,21 @@ impl WarRoomState {
                     let pit_tires = read_player_tires(live, prev_hot);
                     if pit_tires.is_valid() {
                         self.latest_tire_data = pit_tires.clone();
+                        let mut triggered_stint_num = None;
                         if let Some(player_drv) = self.drivers.get_mut(&player_idx) {
                             if let Some(last_stint) = player_drv.stints.last_mut() {
                                 if !last_stint.is_active {
+                                    if last_stint.tires.should_trigger_popup(&pit_tires) {
+                                        triggered_stint_num = Some(last_stint.stint_number);
+                                    }
                                     last_stint.tires = pit_tires;
                                     state_changed = true;
                                 }
                             }
+                        }
+                        if let Some(s_num) = triggered_stint_num {
+                            self.tire_popup_trigger_seq += 1;
+                            self.tire_popup_stint_num = s_num;
                         }
                     }
                 }
@@ -2126,12 +2161,20 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
         if let Some(garage_tires) = parse_car_setup_tires(car_setup) {
             if garage_tires.is_valid() {
                 s.latest_tire_data = garage_tires.clone();
+                let mut triggered_stint_num = None;
                 if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
                     if let Some(last_stint) = player_drv.stints.last_mut() {
                         if !last_stint.is_active && last_stint.laps_completed > 0 {
+                            if last_stint.tires.should_trigger_popup(&garage_tires) {
+                                triggered_stint_num = Some(last_stint.stint_number);
+                            }
                             last_stint.tires = garage_tires;
                         }
                     }
+                }
+                if let Some(s_num) = triggered_stint_num {
+                    s.tire_popup_trigger_seq += 1;
+                    s.tire_popup_stint_num = s_num;
                 }
             }
         }
@@ -3225,6 +3268,12 @@ struct WarRoomApp {
     show_release_notes_modal: bool,
     release_notes_custom_content: Option<String>,
     preview_overlay_hud: bool,
+    preview_tire_popup_hud: bool,
+    last_seen_tire_popup_seq: u64,
+    tire_popup_active_until: Option<std::time::Instant>,
+    tire_popup_stint_num: i32,
+    main_overlay_hwnd: (isize, u8),
+    tire_popup_hwnd: (isize, u8),
     ibt_lab: ibt_ui::IbtTelemetryLabState,
 }
 
@@ -3615,6 +3664,12 @@ impl WarRoomApp {
             show_release_notes_modal: false,
             release_notes_custom_content: None,
             preview_overlay_hud: false,
+            preview_tire_popup_hud: false,
+            last_seen_tire_popup_seq: 0,
+            tire_popup_active_until: None,
+            tire_popup_stint_num: 1,
+            main_overlay_hwnd: (0, 0),
+            tire_popup_hwnd: (0, 0),
             ibt_lab: ibt_ui::IbtTelemetryLabState::default(),
         }
     }
@@ -3642,6 +3697,12 @@ impl WarRoomApp {
             show_release_notes_modal: false,
             release_notes_custom_content: None,
             preview_overlay_hud: false,
+            preview_tire_popup_hud: false,
+            last_seen_tire_popup_seq: 0,
+            tire_popup_active_until: None,
+            tire_popup_stint_num: 1,
+            main_overlay_hwnd: (0, 0),
+            tire_popup_hwnd: (0, 0),
             ibt_lab: ibt_ui::IbtTelemetryLabState::default(),
         }
     }
@@ -3916,17 +3977,20 @@ impl WarRoomApp {
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 
-                ui.label(egui::RichText::new("VIEW MODE").color(muted).size(11.0).extra_letter_spacing(0.8));
+                ui.label(egui::RichText::new("DEFAULT STARTUP VIEW").color(muted).size(11.0).extra_letter_spacing(0.8));
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.settings.view_mode == ActiveViewMode::CockpitEngineer, "Cockpit Stint & Fuel Analyzer").clicked() {
+                    if ui.selectable_label(self.settings.default_startup_view == ActiveViewMode::CockpitEngineer, "Cockpit Stint & Fuel Analyzer").clicked() {
+                        self.settings.default_startup_view = ActiveViewMode::CockpitEngineer;
                         self.settings.view_mode = ActiveViewMode::CockpitEngineer;
                         self.settings.save();
                     }
-                    if ui.selectable_label(self.settings.view_mode == ActiveViewMode::GridTable, "Multi-Driver Stint Grid").clicked() {
+                    if ui.selectable_label(self.settings.default_startup_view == ActiveViewMode::GridTable, "Multi-Driver Stint Grid").clicked() {
+                        self.settings.default_startup_view = ActiveViewMode::GridTable;
                         self.settings.view_mode = ActiveViewMode::GridTable;
                         self.settings.save();
                     }
-                    if ui.selectable_label(self.settings.view_mode == ActiveViewMode::IbtTelemetry, "Offline .IBT Telemetry Lab").clicked() {
+                    if ui.selectable_label(self.settings.default_startup_view == ActiveViewMode::IbtTelemetry, "Offline .IBT Telemetry Lab").clicked() {
+                        self.settings.default_startup_view = ActiveViewMode::IbtTelemetry;
                         self.settings.view_mode = ActiveViewMode::IbtTelemetry;
                         self.settings.save();
                     }
@@ -4110,8 +4174,15 @@ impl WarRoomApp {
                 });
 
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("HUD Opacity").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.overlay.opacity, 0.20..=1.0)).changed() {
+                    ui.label(egui::RichText::new("HUD Card Opacity").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.overlay.opacity, 0.05..=1.0).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("HUD Background Box Opacity").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.overlay.bg_opacity, 0.0..=1.0).custom_formatter(|n, _| if n <= 0.005 { "0% (Transparent)".to_string() } else { format!("{:.0}%", n * 100.0) })).changed() {
                         self.settings.save();
                     }
                 });
@@ -4133,6 +4204,67 @@ impl WarRoomApp {
                     if self.settings.overlay.position.is_some() {
                         if ui.add(egui::Button::new(egui::RichText::new("Reset").color(muted).size(11.5)).fill(elevated)).clicked() {
                             self.settings.overlay.position = None;
+                            self.settings.save();
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ui.label(egui::RichText::new("POST-PIT 4-CORNER TIRE POPUP OVERLAY").color(muted).size(11.0).extra_letter_spacing(0.8));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.checkbox(&mut self.settings.tire_popup_overlay.enabled, "Auto-popup 4-corner tires after pitting").changed() {
+                        self.settings.save();
+                    }
+                    if ui.checkbox(&mut self.settings.tire_popup_overlay.always_on_top, "Always on top").changed() {
+                        self.settings.save();
+                    }
+                    let tire_prev_text = if self.preview_tire_popup_hud { "Hide Tire Popup Preview" } else { "Show Tire Popup Preview" };
+                    if ui.selectable_label(self.preview_tire_popup_hud, tire_prev_text).clicked() {
+                        self.preview_tire_popup_hud = !self.preview_tire_popup_hud;
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Popup Duration").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.duration_secs, 3.0..=60.0).suffix(" sec")).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Popup Scale").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.scale, 0.75..=1.50).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tire Card Opacity").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.opacity, 0.05..=1.0).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tire Background Box Opacity").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.bg_opacity, 0.0..=1.0).custom_formatter(|n, _| if n <= 0.005 { "0% (Transparent)".to_string() } else { format!("{:.0}%", n * 100.0) })).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tire popup position:").color(muted));
+                    let tire_pos_str = match self.settings.tire_popup_overlay.position {
+                        Some([x, y]) => format!("({:.0}, {:.0})", x, y),
+                        None => "Default (Center)".to_string(),
+                    };
+                    ui.label(egui::RichText::new(tire_pos_str).color(white));
+                    if self.settings.tire_popup_overlay.position.is_some() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Reset").color(muted).size(11.5)).fill(elevated)).clicked() {
+                            self.settings.tire_popup_overlay.position = None;
                             self.settings.save();
                         }
                     }
@@ -7303,14 +7435,108 @@ pub fn format_overlay_race_remain_strings(
     (rem_str, lap_done_str)
 }
 
+#[cfg(target_os = "windows")]
+fn ensure_overlay_hwnd_transparency(window_title: &str, tracked: &mut (isize, u8)) {
+    #[repr(C, packed(1))]
+    struct DwmBlurBehind {
+        dw_flags: u32,
+        f_enable: i32,
+        h_rgn_blur: isize,
+        f_transition_on_maximized: i32,
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(lp_class_name: *const u16, lp_window_name: *const u16) -> isize;
+        fn GetWindowThreadProcessId(hwnd: isize, lpdw_process_id: *mut u32) -> u32;
+        fn IsWindowVisible(hwnd: isize) -> i32;
+    }
+
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn CreateRectRgn(x1: i32, y1: i32, x2: i32, y2: i32) -> isize;
+        fn DeleteObject(ho: isize) -> i32;
+    }
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmEnableBlurBehindWindow(hwnd: isize, p_blur_behind: *const DwmBlurBehind) -> i32;
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            dw_attribute: u32,
+            pv_attribute: *const std::ffi::c_void,
+            cb_attribute: u32,
+        ) -> i32;
+    }
+
+    let mut wide_title: Vec<u16> = window_title.encode_utf16().collect();
+    wide_title.push(0);
+
+    unsafe {
+        let hwnd = FindWindowW(std::ptr::null(), wide_title.as_ptr());
+        if hwnd == 0 {
+            return;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != std::process::id() {
+            return;
+        }
+
+        if tracked.0 != hwnd {
+            *tracked = (hwnd, 0);
+        }
+        if tracked.1 >= 10 {
+            return;
+        }
+        if IsWindowVisible(hwnd) != 0 {
+            tracked.1 += 1;
+        }
+
+        // Empty region for the blur effect so DWM composites the OpenGL alpha channel directly
+        let rgn = CreateRectRgn(0, 0, -1, -1);
+        let bb = DwmBlurBehind {
+            dw_flags: 0x0000_0001 | 0x0000_0002, // DWM_BB_ENABLE | DWM_BB_BLURREGION
+            f_enable: 1,
+            h_rgn_blur: rgn,
+            f_transition_on_maximized: 0,
+        };
+        let _ = DwmEnableBlurBehindWindow(hwnd, &bb);
+        if rgn != 0 {
+            let _ = DeleteObject(rgn);
+        }
+
+        // Suppress Windows 11 system border and outer rounding on frameless transparent overlay HWNDs
+        let color_none: u32 = 0xFFFF_FFFE; // DWMWA_COLOR_NONE
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            34, // DWMWA_BORDER_COLOR
+            &color_none as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let corner_donotround: u32 = 1; // DWMWCP_DONOTROUND
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            33, // DWMWA_WINDOW_CORNER_PREFERENCE
+            &corner_donotround as *const u32 as *const std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_overlay_hwnd_transparency(_window_title: &str, _tracked: &mut (isize, u8)) {}
+
 impl WarRoomApp {
     fn render_floating_overlay_hud(&mut self, ctx: &egui::Context, state: &WarRoomState) {
         if !self.settings.overlay.enabled && !self.preview_overlay_hud {
+            self.main_overlay_hwnd = (0, 0);
             return;
         }
 
         let is_preview = (!state.is_connected || !state.player_is_in_car) && self.preview_overlay_hud;
         if (!state.is_connected || !state.player_is_in_car) && !is_preview {
+            self.main_overlay_hwnd = (0, 0);
             return;
         }
 
@@ -7325,7 +7551,8 @@ impl WarRoomApp {
         let fuel_conv = if is_metric { 1.0 } else { 0.264172 };
         let fuel_unit_str = if is_metric { "L" } else { "gal" };
 
-        let opacity = self.settings.overlay.opacity.clamp(0.20, 1.0);
+        let opacity = self.settings.overlay.opacity.clamp(0.05, 1.0);
+        let bg_opacity = self.settings.overlay.bg_opacity.clamp(0.0, 1.0);
         let always_on_top = self.settings.overlay.always_on_top;
         let safety_margin = self.settings.overlay.safety_margin_laps;
 
@@ -7579,13 +7806,24 @@ impl WarRoomApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
 
-            let bg_alpha = (opacity * 255.0) as u8;
-            let bg_color = egui::Color32::from_rgba_unmultiplied(11, 13, 18, bg_alpha);
-            let card_fill = egui::Color32::from_rgba_unmultiplied(19, 22, 29, (bg_alpha as f32 * 0.92) as u8);
-            let card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14));
+            let outer_bg_alpha = (bg_opacity * 255.0).round() as u8;
+            let bg_color = if outer_bg_alpha == 0 {
+                egui::Color32::TRANSPARENT
+            } else {
+                egui::Color32::from_rgba_unmultiplied(11, 13, 18, outer_bg_alpha)
+            };
+            let outer_stroke = if outer_bg_alpha == 0 {
+                egui::Stroke::NONE
+            } else {
+                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (18.0 * bg_opacity).round() as u8))
+            };
+
+            let card_alpha = (opacity * 255.0).round() as u8;
+            let card_fill = egui::Color32::from_rgba_unmultiplied(19, 22, 29, card_alpha);
+            let inner_card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (22.0 * opacity).round() as u8));
 
             egui::CentralPanel::default()
-                .frame(egui::Frame::none().fill(bg_color).rounding(12.0).inner_margin(8.0 * scale).stroke(card_stroke))
+                .frame(egui::Frame::none().fill(bg_color).rounding(12.0).inner_margin(8.0 * scale).stroke(outer_stroke))
                 .show(ctx, |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0 * scale, (5.0 * scale).max(3.0));
 
@@ -7593,6 +7831,7 @@ impl WarRoomApp {
                     if show_pace {
                         egui::Frame::none()
                             .fill(card_fill)
+                            .stroke(inner_card_stroke)
                             .rounding(8.0)
                             .inner_margin(egui::Margin::symmetric(card_padding_x, card_padding_y))
                             .show(ui, |ui| {
@@ -7646,6 +7885,7 @@ impl WarRoomApp {
                     if show_fuel {
                         egui::Frame::none()
                             .fill(card_fill)
+                            .stroke(inner_card_stroke)
                             .rounding(8.0)
                             .inner_margin(egui::Margin::symmetric(card_padding_x, card_padding_y))
                             .show(ui, |ui| {
@@ -7755,6 +7995,7 @@ impl WarRoomApp {
                     if show_bottom_bar {
                         egui::Frame::none()
                             .fill(card_fill)
+                            .stroke(inner_card_stroke)
                             .rounding(8.0)
                             .inner_margin(egui::Margin::symmetric(card_padding_x, (4.0 * scale).max(2.5)))
                             .show(ui, |ui| {
@@ -7792,19 +8033,429 @@ impl WarRoomApp {
                                 });
                             });
                     }
+
+                    let measured_h = (ui.min_rect().max.y + 8.0 * scale).round().max(36.0 * scale);
+                    let current_size = ctx.input(|i| i.viewport().inner_rect.map(|r| [r.width(), r.height()]));
+                    if let Some([cw, ch]) = current_size {
+                        if (cw - target_width).abs() > 1.5 || (ch - measured_h).abs() > 1.5 {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(target_width, measured_h)));
+                        }
+                    }
                 });
+
+            ensure_overlay_hwnd_transparency("S4S Floating Overlay HUD", &mut self.main_overlay_hwnd);
+        });
+    }
+
+    fn render_tire_popup_overlay(&mut self, ctx: &egui::Context, state: &WarRoomState) {
+        if state.tire_popup_trigger_seq > self.last_seen_tire_popup_seq {
+            self.last_seen_tire_popup_seq = state.tire_popup_trigger_seq;
+            self.tire_popup_stint_num = state.tire_popup_stint_num;
+            if self.settings.tire_popup_overlay.enabled {
+                let dur = self.settings.tire_popup_overlay.duration_secs.clamp(3.0, 60.0);
+                self.tire_popup_active_until = Some(std::time::Instant::now() + std::time::Duration::from_secs_f32(dur));
+            }
+        }
+
+        let now = std::time::Instant::now();
+        let remaining_secs = self.tire_popup_active_until.and_then(|until| {
+            if until > now {
+                Some((until - now).as_secs_f32())
+            } else {
+                None
+            }
+        });
+
+        if remaining_secs.is_none() && self.tire_popup_active_until.is_some() {
+            self.tire_popup_active_until = None;
+        }
+
+        let show_popup = self.preview_tire_popup_hud
+            || (self.settings.tire_popup_overlay.enabled && remaining_secs.is_some());
+
+        if !show_popup {
+            self.tire_popup_hwnd = (0, 0);
+            return;
+        }
+
+        if remaining_secs.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
+        let primary = self.settings.primary_accent();
+        let white = self.settings.text_color();
+        let muted = self.settings.text_muted();
+        let amber = self.settings.status_amber();
+        let is_metric = self.settings.use_metric;
+
+        let scale = self.settings.tire_popup_overlay.scale.clamp(0.75, 1.50);
+        let opacity = self.settings.tire_popup_overlay.opacity.clamp(0.05, 1.0);
+        let bg_opacity = self.settings.tire_popup_overlay.bg_opacity.clamp(0.0, 1.0);
+        let always_on_top = self.settings.tire_popup_overlay.always_on_top;
+
+        // Resolve player stint tire set or fallback to preview sample
+        let player_drv = state.drivers.get(&state.player_car_idx);
+        let matched_stint = player_drv.and_then(|d| {
+            d.stints
+                .iter()
+                .rev()
+                .find(|st| st.stint_number == self.tire_popup_stint_num && st.tires.has_wear_or_temps())
+                .or_else(|| d.stints.iter().rev().find(|st| st.tires.has_wear_or_temps()))
+        });
+
+        let (display_stint_num, display_laps, tires_data, is_sample_data) = if let Some(st) = matched_stint {
+            (st.stint_number, st.laps_completed, st.tires.clone(), false)
+        } else if state.latest_tire_data.has_wear_or_temps() {
+            (self.tire_popup_stint_num.max(1), 0, state.latest_tire_data.clone(), false)
+        } else {
+            // Realistic preview sample so user can position & size the popup anytime
+            let sample = StintTireSet {
+                lf: TireCornerData {
+                    temp_l: 88.0,
+                    temp_m: 92.0,
+                    temp_r: 96.0,
+                    wear_l: 94.0,
+                    wear_m: 91.0,
+                    wear_r: 89.0,
+                    pressure: 186.2,
+                },
+                rf: TireCornerData {
+                    temp_l: 108.0,
+                    temp_m: 104.0,
+                    temp_r: 99.0,
+                    wear_l: 78.0,
+                    wear_m: 81.0,
+                    wear_r: 85.0,
+                    pressure: 206.8,
+                },
+                lr: TireCornerData {
+                    temp_l: 86.0,
+                    temp_m: 89.0,
+                    temp_r: 91.0,
+                    wear_l: 95.0,
+                    wear_m: 93.0,
+                    wear_r: 92.0,
+                    pressure: 179.3,
+                },
+                rr: TireCornerData {
+                    temp_l: 103.0,
+                    temp_m: 100.0,
+                    temp_r: 96.0,
+                    wear_l: 83.0,
+                    wear_m: 85.0,
+                    wear_r: 88.0,
+                    pressure: 199.9,
+                },
+                has_data: true,
+            };
+            (1, 20, sample, true)
+        };
+
+        let target_width = (448.0 * scale).round();
+        let target_height = (178.0 * scale).round();
+
+        let vp_id = egui::ViewportId::from_hash_of("s4s_tire_popup_overlay_hud");
+        let mut vp_builder = egui::ViewportBuilder::default()
+            .with_title("S4S Post-Pit Tire Popup")
+            .with_inner_size([target_width, target_height])
+            .with_min_inner_size([240.0 * scale, 100.0 * scale])
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_resizable(false)
+            .with_maximize_button(false)
+            .with_minimize_button(false)
+            .with_close_button(false)
+            .with_taskbar(false);
+
+        if let Some(pos) = self.settings.tire_popup_overlay.position {
+            vp_builder = vp_builder.with_position([pos[0], pos[1]]);
+        }
+
+        if always_on_top {
+            vp_builder = vp_builder.with_always_on_top();
+        }
+
+        let mut dismiss_clicked = false;
+
+        ctx.show_viewport_immediate(vp_id, vp_builder, |ctx, _class| {
+            let current_pos = ctx.input(|i| i.viewport().outer_rect.map(|r| [r.min.x, r.min.y]));
+            if let Some([new_x, new_y]) = current_pos {
+                if new_x > -10000.0 && new_y > -10000.0 && (new_x.abs() > 0.1 || new_y.abs() > 0.1) {
+                    let should_save = match self.settings.tire_popup_overlay.position {
+                        Some([old_x, old_y]) => (old_x - new_x).abs() > 2.0 || (old_y - new_y).abs() > 2.0,
+                        None => true,
+                    };
+                    if should_save {
+                        self.settings.tire_popup_overlay.position = Some([new_x, new_y]);
+                        self.settings.save();
+                    }
+                }
+            }
+
+            let outer_bg_alpha = (bg_opacity * 255.0).round() as u8;
+            let bg_color = if outer_bg_alpha == 0 {
+                egui::Color32::TRANSPARENT
+            } else {
+                egui::Color32::from_rgba_unmultiplied(11, 13, 18, outer_bg_alpha)
+            };
+            let outer_stroke = if outer_bg_alpha == 0 {
+                egui::Stroke::NONE
+            } else {
+                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (18.0 * bg_opacity).round() as u8))
+            };
+
+            let card_alpha = (opacity * 255.0).round() as u8;
+            let card_fill = egui::Color32::from_rgba_unmultiplied(19, 22, 29, card_alpha);
+            let inner_card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, (24.0 * opacity).round() as u8));
+
+            let mut measured_h = target_height;
+
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none().fill(bg_color).rounding(12.0).inner_margin(8.0 * scale).stroke(outer_stroke))
+                .show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0 * scale, 6.0 * scale);
+
+                    // Header bar
+                    egui::Frame::none()
+                        .fill(card_fill)
+                        .stroke(inner_card_stroke)
+                        .rounding(8.0)
+                        .inner_margin(egui::Margin::symmetric((10.0 * scale).max(6.0), (5.0 * scale).max(3.0)))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let title_str = if display_laps > 0 {
+                                    format!("● POST-PIT TIRES · S{} ({} LAPS)", display_stint_num, display_laps)
+                                } else {
+                                    format!("● POST-PIT TIRES · STINT S{}", display_stint_num)
+                                };
+                                ui.label(egui::RichText::new(title_str).color(primary).size((12.0 * scale).round()).strong());
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.add(
+                                        egui::Button::new(egui::RichText::new("X").color(muted).size((11.5 * scale).round()).strong())
+                                            .fill(egui::Color32::TRANSPARENT)
+                                            .frame(false)
+                                    ).on_hover_text("Dismiss tire popup").clicked() {
+                                        dismiss_clicked = true;
+                                    }
+
+                                    if let Some(rem) = remaining_secs {
+                                        ui.label(
+                                            egui::RichText::new(format!("{:.0}s", rem.ceil()))
+                                                .color(primary)
+                                                .size((11.5 * scale).round())
+                                                .strong(),
+                                        );
+                                    } else if self.preview_tire_popup_hud {
+                                        let badge = if is_sample_data { "PREVIEW · DRAG TO MOVE" } else { "LIVE PREVIEW · DRAG" };
+                                        ui.label(
+                                            egui::RichText::new(badge)
+                                                .color(amber)
+                                                .size((10.5 * scale).round())
+                                                .strong(),
+                                        );
+                                    }
+                                });
+                            });
+                        });
+
+                    // 2x2 Tire Corners Grid: Top Row (LF | RF), Bottom Row (LR | RR)
+                    let mut col_bottom_y = 0.0_f32;
+                    ui.columns(2, |cols| {
+                        cols[0].vertical(|ui| {
+                            render_overlay_tire_corner_card(
+                                ui,
+                                "LF · Left Front",
+                                &tires_data.lf,
+                                is_metric,
+                                scale,
+                                card_fill,
+                                opacity,
+                                primary,
+                                white,
+                                muted,
+                            );
+                            ui.add_space(6.0 * scale);
+                            render_overlay_tire_corner_card(
+                                ui,
+                                "LR · Left Rear",
+                                &tires_data.lr,
+                                is_metric,
+                                scale,
+                                card_fill,
+                                opacity,
+                                primary,
+                                white,
+                                muted,
+                            );
+                        });
+                        cols[1].vertical(|ui| {
+                            render_overlay_tire_corner_card(
+                                ui,
+                                "RF · Right Front",
+                                &tires_data.rf,
+                                is_metric,
+                                scale,
+                                card_fill,
+                                opacity,
+                                primary,
+                                white,
+                                muted,
+                            );
+                            ui.add_space(6.0 * scale);
+                            render_overlay_tire_corner_card(
+                                ui,
+                                "RR · Right Rear",
+                                &tires_data.rr,
+                                is_metric,
+                                scale,
+                                card_fill,
+                                opacity,
+                                primary,
+                                white,
+                                muted,
+                            );
+                        });
+                        col_bottom_y = cols[0].min_rect().max.y.max(cols[1].min_rect().max.y);
+                    });
+
+                    if col_bottom_y > 20.0 {
+                        measured_h = (col_bottom_y + 8.0 * scale).round().max(100.0 * scale);
+                    }
+                });
+
+            if !dismiss_clicked && ctx.input(|i| i.pointer.primary_down()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
 
             let current_size = ctx.input(|i| i.viewport().inner_rect.map(|r| [r.width(), r.height()]));
             if let Some([cw, ch]) = current_size {
-                if (cw - target_width).abs() > 2.0 || (ch - target_height).abs() > 2.0 {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(target_width, target_height)));
+                if (cw - target_width).abs() > 1.5 || (ch - measured_h).abs() > 1.5 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(target_width, measured_h)));
                 }
             }
+
+            ensure_overlay_hwnd_transparency("S4S Post-Pit Tire Popup", &mut self.tire_popup_hwnd);
         });
+
+        if dismiss_clicked {
+            self.tire_popup_active_until = None;
+            self.preview_tire_popup_hud = false;
+            self.tire_popup_hwnd = (0, 0);
+        }
     }
 }
 
+fn render_overlay_tire_corner_card(
+    ui: &mut egui::Ui,
+    corner_title: &str,
+    data: &TireCornerData,
+    use_metric: bool,
+    scale: f32,
+    card_fill: egui::Color32,
+    opacity: f32,
+    primary: egui::Color32,
+    white: egui::Color32,
+    muted: egui::Color32,
+) {
+    let avg_wear = if data.wear_m > 0.01 {
+        (data.wear_l + data.wear_m + data.wear_r) / 3.0
+    } else {
+        0.0
+    };
+
+    let wear_color = if avg_wear >= 90.0 {
+        egui::Color32::from_rgb(75, 225, 110)
+    } else if avg_wear >= 80.0 {
+        primary
+    } else if avg_wear >= 70.0 {
+        egui::Color32::from_rgb(255, 165, 50)
+    } else if avg_wear > 0.0 {
+        egui::Color32::from_rgb(255, 75, 75)
+    } else {
+        muted
+    };
+
+    let press_str = if data.pressure > 0.1 {
+        if use_metric {
+            format!("{:.2} bar", data.pressure / 100.0)
+        } else {
+            format!("{:.1} psi", data.pressure * 0.145038)
+        }
+    } else {
+        "— psi".to_string()
+    };
+
+    let is_left = corner_title.starts_with("LF") || corner_title.starts_with("LR");
+    let zone_label = if is_left { "O·M·I" } else { "I·M·O" };
+
+    let temp_str = if data.temp_m > 1.0 {
+        if use_metric {
+            format!("{:.0}° · {:.0}° · {:.0}°C", data.temp_l, data.temp_m, data.temp_r)
+        } else {
+            format!(
+                "{:.0}° · {:.0}° · {:.0}°F",
+                data.temp_l * 1.8 + 32.0,
+                data.temp_m * 1.8 + 32.0,
+                data.temp_r * 1.8 + 32.0
+            )
+        }
+    } else {
+        "— · — · —".to_string()
+    };
+
+    let wear_str = if data.wear_m > 0.01 {
+        format!("{:.0}% · {:.0}% · {:.0}%", data.wear_l, data.wear_m, data.wear_r)
+    } else {
+        "—% · —% · —%".to_string()
+    };
+
+    let border_alpha = ((if avg_wear > 0.0 { 85.0 } else { 22.0 }) * opacity).round() as u8;
+    let card_border = if avg_wear > 0.0 {
+        with_alpha(wear_color, border_alpha)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(255, 255, 255, border_alpha)
+    };
+
+    egui::Frame::none()
+        .fill(card_fill)
+        .stroke(egui::Stroke::new(1.0, card_border))
+        .rounding(egui::Rounding::same(8.0 * scale))
+        .inner_margin(egui::Margin::symmetric((8.0 * scale).max(5.0), (6.0 * scale).max(4.0)))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = (2.0 * scale).max(1.0);
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(corner_title).color(white).size((12.0 * scale).round()).strong());
+                if avg_wear > 0.0 {
+                    ui.label(egui::RichText::new(format!("{:.0}%", avg_wear)).color(wear_color).size((12.0 * scale).round()).strong());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(press_str).color(muted).size((11.0 * scale).round()));
+                });
+            });
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("WEAR ({})", zone_label)).color(muted).size((9.5 * scale).round()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(&wear_str).color(wear_color).size((12.5 * scale).round()).strong());
+                });
+            });
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("TEMP ({})", zone_label)).color(muted).size((9.5 * scale).round()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(&temp_str).color(white).size((12.0 * scale).round()).strong());
+                });
+            });
+        });
+}
+
 impl eframe::App for WarRoomApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        self.settings.bg_color().to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.updater.poll();
         let primary = self.settings.primary_accent();
@@ -7902,7 +8553,6 @@ impl eframe::App for WarRoomApp {
                         .rounding(egui::Rounding::same(6.0));
                         if ui.add(c_btn).clicked() {
                             self.settings.view_mode = ActiveViewMode::CockpitEngineer;
-                            self.settings.save();
                         }
 
                         let g_btn = egui::Button::new(
@@ -7914,7 +8564,6 @@ impl eframe::App for WarRoomApp {
                         .rounding(egui::Rounding::same(6.0));
                         if ui.add(g_btn).clicked() {
                             self.settings.view_mode = ActiveViewMode::GridTable;
-                            self.settings.save();
                         }
                     });
 
@@ -7944,7 +8593,6 @@ impl eframe::App for WarRoomApp {
                     .clicked()
                 {
                     self.settings.view_mode = ActiveViewMode::IbtTelemetry;
-                    self.settings.save();
                 }
 
                 ui.add_space(4.0);
@@ -8025,7 +8673,6 @@ impl eframe::App for WarRoomApp {
                         }
                         if ui.button("📊 Offline .IBT Telemetry Lab").clicked() {
                             self.settings.view_mode = ActiveViewMode::IbtTelemetry;
-                            self.settings.save();
                             ui.close_menu();
                         }
                         let dbg_label = if self.show_telemetry_debugger { "✓ Live Telemetry Debugger" } else { "Live Telemetry Debugger" };
@@ -8209,6 +8856,7 @@ impl eframe::App for WarRoomApp {
         self.render_stint_comparison_window(ctx, &current_state);
         self.render_release_notes_modal(ctx);
         self.render_floating_overlay_hud(ctx, &current_state);
+        self.render_tire_popup_overlay(ctx, &current_state);
 
         // Toast Notification Overlay
         if let Some((msg, time)) = &self.toast_message {
@@ -9783,6 +10431,39 @@ DriverInfo:
         assert_eq!(driver.total_laps_completed, 0, "Initial -1 CarIdxLapCompleted must be clamped to 0");
         assert_eq!(driver.stints[0].start_lap, 0);
         assert_eq!(driver.stints[0].end_lap, 0);
+    }
+
+    #[test]
+    fn test_tire_popup_trigger_and_overlay_transparency_settings() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.overlay.bg_opacity, 0.0, "Default outer HUD background box opacity should be 0.0 (transparent)");
+        assert!(!settings.tire_popup_overlay.enabled, "Tire popup overlay should default to disabled (opt-in like main overlay)");
+        assert_eq!(settings.tire_popup_overlay.duration_secs, 15.0);
+        assert_eq!(settings.tire_popup_overlay.scale, 1.0);
+        assert_eq!(settings.tire_popup_overlay.bg_opacity, 0.0);
+
+        // 1. Pressure-only tire set (sampled while driving on track) must NOT trigger popup
+        let mut on_track_tires = StintTireSet::default();
+        on_track_tires.lf.pressure = 195.0;
+        on_track_tires.rf.pressure = 205.0;
+        assert!(!StintTireSet::default().should_trigger_popup(&on_track_tires));
+
+        // 2. Post-pit tire set with wear & temps MUST trigger popup once
+        let mut post_pit_tires = on_track_tires.clone();
+        post_pit_tires.lf.wear_m = 91.0;
+        post_pit_tires.rf.wear_m = 82.0;
+        post_pit_tires.lf.temp_m = 94.0;
+        post_pit_tires.rf.temp_m = 105.0;
+        post_pit_tires.has_data = true;
+        assert!(on_track_tires.should_trigger_popup(&post_pit_tires));
+
+        // 3. Subsequent identical frames while sitting in pit stall must NOT re-trigger popup
+        assert!(!post_pit_tires.should_trigger_popup(&post_pit_tires));
+
+        // 4. Updated readings when pit crew finishes service or garage CarSetup arrives MUST re-trigger
+        let mut updated_pit_tires = post_pit_tires.clone();
+        updated_pit_tires.rf.wear_m = 76.0;
+        assert!(post_pit_tires.should_trigger_popup(&updated_pit_tires));
     }
 }
 

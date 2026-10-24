@@ -92,7 +92,9 @@ fn default_true() -> bool { true }
 fn default_false() -> bool { false }
 fn default_margin_laps() -> f32 { 1.0 }
 fn default_opacity() -> f32 { 0.88 }
+fn default_bg_opacity() -> f32 { 0.0 }
 fn default_hud_scale() -> f32 { 1.0 }
+fn default_tire_popup_duration() -> f32 { 15.0 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FuelHeroMetric {
@@ -132,6 +134,8 @@ pub struct OverlaySettings {
     pub shape: OverlayShape,
     #[serde(default = "default_opacity")]
     pub opacity: f32,
+    #[serde(default = "default_bg_opacity")]
+    pub bg_opacity: f32,
     #[serde(default = "default_true")]
     pub always_on_top: bool,
     #[serde(default = "default_margin_laps")]
@@ -162,6 +166,7 @@ impl Default for OverlaySettings {
             enabled: false,
             shape: OverlayShape::Square,
             opacity: 0.88,
+            bg_opacity: 0.0,
             always_on_top: true,
             safety_margin_laps: 1.0,
             show_pace_card: true,
@@ -172,6 +177,38 @@ impl Default for OverlaySettings {
             show_weather: true,
             show_fastest: true,
             show_averages: true,
+            position: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TirePopupOverlaySettings {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_tire_popup_duration")]
+    pub duration_secs: f32,
+    #[serde(default = "default_hud_scale")]
+    pub scale: f32,
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    #[serde(default = "default_bg_opacity")]
+    pub bg_opacity: f32,
+    #[serde(default = "default_true")]
+    pub always_on_top: bool,
+    #[serde(default)]
+    pub position: Option<[f32; 2]>,
+}
+
+impl Default for TirePopupOverlaySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            duration_secs: 15.0,
+            scale: 1.0,
+            opacity: 0.90,
+            bg_opacity: 0.0,
+            always_on_top: true,
             position: None,
         }
     }
@@ -252,12 +289,17 @@ impl Default for LayoutPreset {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default)]
     pub view_mode: ActiveViewMode,
+    #[serde(default)]
+    pub default_startup_view: ActiveViewMode,
     pub theme: ThemePreset,
     pub use_metric: bool,
     pub layout_preset: LayoutPreset,
     pub columns: ColumnVisibility,
     pub overlay: OverlaySettings,
+    #[serde(default)]
+    pub tire_popup_overlay: TirePopupOverlaySettings,
     pub font_size_offset: f32,
     #[serde(default = "default_custom_avg_buckets")]
     pub custom_avg_buckets: Vec<usize>,
@@ -279,11 +321,13 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             view_mode: ActiveViewMode::CockpitEngineer,
+            default_startup_view: ActiveViewMode::CockpitEngineer,
             theme: ThemePreset::S4SGoldBlue,
             use_metric: false,
             layout_preset: LayoutPreset::FullStint,
             columns: ColumnVisibility::default(),
             overlay: OverlaySettings::default(),
+            tire_popup_overlay: TirePopupOverlaySettings::default(),
             font_size_offset: 0.0,
             custom_avg_buckets: default_custom_avg_buckets(),
             active_avg_buckets: default_active_avg_buckets(),
@@ -305,6 +349,8 @@ impl AppSettings {
                     if settings.active_avg_buckets.is_empty() {
                         settings.active_avg_buckets = default_active_avg_buckets();
                     }
+                    // Always boot into the user's configured default startup view (defaults to Cockpit)
+                    settings.view_mode = settings.default_startup_view;
                     return settings;
                 }
             }
