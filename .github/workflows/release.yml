@@ -56,7 +56,7 @@ jobs:
           
           if ($isBeta) {
             Copy-Item target/release/SearchForSpeedAnalyzer.exe SearchForSpeedAnalyzer-Beta.exe
-            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppName="The Search For Speed Analyzer (Beta)" /DMyAppExeName="SearchForSpeedAnalyzer-Beta.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Beta-Setup" /DMyAppVersion="$tag" installer.iss
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DBetaBuild /DMyAppName="The Search For Speed Analyzer (Beta)" /DMyAppExeName="SearchForSpeedAnalyzer-Beta.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Beta-Setup" /DMyAppVersion="$tag" installer.iss
             Write-Output "BINARY_NAME=SearchForSpeedAnalyzer-Beta.exe" >> $env:GITHUB_ENV
             Write-Output "INSTALLER_NAME=SearchForSpeedAnalyzer-Beta-Setup.exe" >> $env:GITHUB_ENV
             Write-Output "IS_PRERELEASE=true" >> $env:GITHUB_ENV
@@ -78,6 +78,9 @@ jobs:
           draft: false
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
+          # The in-app updater downloads and runs the per-user installer (installs to %LOCALAPPDATA%, no admin).
+          # TRANSITION: the raw exe is published for this one release only, so v0.3.1-and-older clients
+          # (whose updater only knows the raw exe) can auto-update. Remove BINARY_NAME in the next release.
           files: |
             ${{ env.INSTALLER_NAME }}
             ${{ env.BINARY_NAME }}

@@ -1,3 +1,27 @@
+# The Search For Speed Analyzer — v0.3.2
+
+### ⏱️ In-Car HUD Overlay "Race Remain" & Lap Counter Calibration:
+* **🏁 Modern `SessionLapsRemainEx` Telemetry Synchronization:**
+  * Migrated live telemetry countdown ingestion from legacy `SessionLapsRemain` to `SessionLapsRemainEx`, eliminating iRacing's historical off-by-one telemetry calculation bug that caused the overlay to announce "1 to go" when 2 laps remained.
+* **🎯 Scheduled Race Distance Tracking (`SessionLapsTotal - player_lap`):**
+  * Added live ingestion of `SessionLapsTotal` from continuous telemetry frames and subsession YAML metadata.
+  * Laps remaining now calculate against individual driver line crossings (`SessionLapsTotal - player_lap`), ensuring your HUD ticks down accurately when you cross start/finish rather than fluctuating when the race leader crosses ahead.
+* **🏁 Clean Race Conclusion & Checkered Flag State:**
+  * Fixed telemetry parsing to allow 0 laps remaining to properly latch into state, completely eliminating the issue where the HUD remained stuck on "1 to go" through the checkered flag and cool-down lap.
+  * Transitions cleanly to **`Finished`** upon race conclusion instead of displaying `"Unlimited"` or staying stuck on `"1 to go"`.
+* **🚫 Zero-Clamped Completed Laps (Eliminated "Lap -1 done"):**
+  * Properly handled iRacing SDK's `-1` initialization for `CarIdxLapCompleted` during pre-race warmup, grid formation, and pace laps.
+  * Clamped completed laps to $\ge 0$ across all telemetry models and replaced the awkward `"Lap -1 done"` indicator with `"0 laps done"` and `"1 lap done"`.
+
+### 🔄 Updater & Install Fixes:
+* **No more "Run as administrator" needed to update:** "Update Now" now downloads and silently runs the installer, which installs per-user (no admin prompt) and relaunches the app automatically.
+* **Protected-folder fallback:** If a copy lives in a protected folder (e.g. Program Files), Windows will ask for permission (UAC) only for the file copy, and the app reopens normally afterwards.
+* **Settings now live in `%APPDATA%\SearchForSpeedAnalyzer`:** Existing settings are carried over automatically.
+* **Beta and stable now install side by side** without replacing each other in Windows' installed apps list.
+* **Recommended:** If you've been running the plain `.exe`, install with `SearchForSpeedAnalyzer-Setup.exe` going forward.
+
+---
+
 # The Search For Speed Analyzer — v0.3.1
 
 ### 🏁 NASCAR NextGen Calibration & Visual Tire Telemetry Suite:

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use eframe::egui::Color32;
 
 pub fn is_beta_mode() -> bool {
@@ -20,6 +20,45 @@ pub fn get_settings_file() -> &'static str {
         "settings-beta.json"
     } else {
         "settings.json"
+    }
+}
+
+/// Per-user settings folder: `%APPDATA%\SearchForSpeedAnalyzer`.
+/// Always writable without admin, and independent of where the exe lives or is launched from.
+/// Falls back to the exe's folder if `%APPDATA%` is unavailable.
+pub fn get_settings_dir() -> PathBuf {
+    if let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
+        return PathBuf::from(appdata).join("SearchForSpeedAnalyzer");
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+pub fn get_settings_path() -> PathBuf {
+    get_settings_dir().join(get_settings_file())
+}
+
+/// Older versions saved settings relative to the working directory (usually next to the exe).
+/// Copy the first one found into the new per-user location so users keep their setup.
+fn migrate_legacy_settings(target: &Path) {
+    if target.exists() {
+        return;
+    }
+    let file = get_settings_file();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        candidates.push(exe_dir.join(file));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(file));
+    }
+    if let Some(legacy) = candidates.into_iter().find(|c| c.is_file() && c != target) {
+        if let Some(dir) = target.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        let _ = fs::copy(&legacy, target);
     }
 }
 
@@ -255,9 +294,10 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub fn load() -> Self {
-        let file_path = get_settings_file();
-        if Path::new(file_path).exists() {
-            if let Ok(data) = fs::read_to_string(file_path) {
+        let file_path = get_settings_path();
+        migrate_legacy_settings(&file_path);
+        if file_path.exists() {
+            if let Ok(data) = fs::read_to_string(&file_path) {
                 if let Ok(mut settings) = serde_json::from_str::<AppSettings>(&data) {
                     if settings.custom_avg_buckets.is_empty() {
                         settings.custom_avg_buckets = default_custom_avg_buckets();
@@ -276,7 +316,11 @@ impl AppSettings {
 
     pub fn save(&self) {
         if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(get_settings_file(), json);
+            let path = get_settings_path();
+            if let Some(dir) = path.parent() {
+                let _ = fs::create_dir_all(dir);
+            }
+            let _ = fs::write(path, json);
         }
     }
 

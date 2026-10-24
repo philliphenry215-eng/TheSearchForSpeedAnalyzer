@@ -1,4 +1,6 @@
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -14,6 +16,10 @@ pub struct ReleaseInfo {
     pub is_prerelease: bool,
     pub binary_download_url: Option<String>,
     pub binary_size: u64,
+    #[serde(default)]
+    pub installer_download_url: Option<String>,
+    #[serde(default)]
+    pub installer_size: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,17 +79,18 @@ impl UpdateChecker {
             return;
         }
 
-        let url = match &info.binary_download_url {
-            Some(u) => u.clone(),
-            None => {
-                // If direct binary not found in release assets, fallback to browser
+        // Prefer the per-user installer; fall back to the raw binary for older releases.
+        let (url, kind, total_size) = match (&info.installer_download_url, &info.binary_download_url) {
+            (Some(u), _) => (u.clone(), PendingKind::Installer, info.installer_size),
+            (None, Some(u)) => (u.clone(), PendingKind::Binary, info.binary_size),
+            (None, None) => {
+                // No downloadable asset found in release, fallback to browser
                 open_browser(&info.html_url);
                 return;
             }
         };
 
         let tag = info.tag_name.clone();
-        let total_size = info.binary_size;
 
         self.status = UpdateStatus::Downloading {
             tag: tag.clone(),
@@ -96,7 +103,7 @@ impl UpdateChecker {
         self.receiver = Some(rx);
 
         thread::spawn(move || {
-            let res = download_binary(&url, &tag, total_size, &tx);
+            let res = download_update(&url, kind, &tag, total_size, &tx);
             let _ = tx.send(res);
         });
     }
@@ -202,6 +209,8 @@ fn parse_release_json(json: &serde_json::Value) -> UpdateStatus {
 
     let mut binary_download_url = None;
     let mut binary_size = 0u64;
+    let mut installer_download_url = None;
+    let mut installer_size = 0u64;
 
     if let Some(assets) = json["assets"].as_array() {
         let current_is_beta = std::env::current_exe()
@@ -209,29 +218,16 @@ fn parse_release_json(json: &serde_json::Value) -> UpdateStatus {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
             .map_or(false, |n| n.contains("beta"));
 
-        let target_asset = if current_is_beta {
-            assets.iter().find(|a| {
-                let name = a["name"].as_str().unwrap_or("").to_lowercase();
-                name.ends_with(".exe") && name.contains("beta") && !name.contains("setup")
-            }).or_else(|| {
-                assets.iter().find(|a| {
-                    let name = a["name"].as_str().unwrap_or("").to_lowercase();
-                    name.ends_with(".exe") && !name.contains("setup")
-                })
-            })
-        } else {
-            assets.iter().find(|a| {
-                let name = a["name"].as_str().unwrap_or("").to_lowercase();
-                name.ends_with(".exe") && !name.contains("setup") && !name.contains("beta")
-            }).or_else(|| {
-                assets.iter().find(|a| {
-                    let name = a["name"].as_str().unwrap_or("").to_lowercase();
-                    name.ends_with(".exe") && !name.contains("setup")
-                })
-            })
-        };
+        // Preferred: the per-user Inno Setup installer (installs to %LOCALAPPDATA%, never needs admin)
+        if let Some(asset) = pick_exe_asset(assets, true, current_is_beta) {
+            if let Some(url) = asset["browser_download_url"].as_str() {
+                installer_download_url = Some(url.to_string());
+                installer_size = asset["size"].as_u64().unwrap_or(0);
+            }
+        }
 
-        if let Some(asset) = target_asset {
+        // Legacy fallback: raw standalone binary (older releases)
+        if let Some(asset) = pick_exe_asset(assets, false, current_is_beta) {
             if let Some(url) = asset["browser_download_url"].as_str() {
                 binary_download_url = Some(url.to_string());
                 binary_size = asset["size"].as_u64().unwrap_or(0);
@@ -248,24 +244,75 @@ fn parse_release_json(json: &serde_json::Value) -> UpdateStatus {
             is_prerelease,
             binary_download_url,
             binary_size,
+            installer_download_url,
+            installer_size,
         })
     } else {
         UpdateStatus::UpToDate
     }
 }
 
-fn download_binary(
+/// Picks the best matching `.exe` release asset.
+/// `want_installer` selects `*-Setup.exe` assets; otherwise raw standalone binaries.
+/// Beta builds prefer `beta` assets, stable builds prefer non-beta assets, falling back to any match.
+fn pick_exe_asset<'a>(
+    assets: &'a [serde_json::Value],
+    want_installer: bool,
+    current_is_beta: bool,
+) -> Option<&'a serde_json::Value> {
+    let name_of = |a: &serde_json::Value| a["name"].as_str().unwrap_or("").to_lowercase();
+    let kind_matches = |n: &str| n.ends_with(".exe") && (n.contains("setup") == want_installer);
+
+    assets
+        .iter()
+        .find(|a| {
+            let n = name_of(a);
+            kind_matches(&n) && (n.contains("beta") == current_is_beta)
+        })
+        .or_else(|| assets.iter().find(|a| kind_matches(&name_of(a))))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PendingKind {
+    /// Per-user Inno Setup installer, run silently after the app exits.
+    Installer,
+    /// Raw standalone binary, swapped in place (elevating via UAC only if the folder is protected).
+    Binary,
+}
+
+#[derive(Debug, Clone)]
+struct PendingUpdate {
+    path: PathBuf,
+    kind: PendingKind,
+}
+
+static PENDING_UPDATE: Mutex<Option<PendingUpdate>> = Mutex::new(None);
+
+/// Scratch folder for downloaded updates. Always user-writable, regardless of install location.
+fn update_temp_dir() -> PathBuf {
+    std::env::temp_dir().join("SearchForSpeedAnalyzer-update")
+}
+
+fn download_update(
     url: &str,
+    kind: PendingKind,
     tag: &str,
     total_expected: u64,
     tx: &Sender<UpdateStatus>,
 ) -> UpdateStatus {
-    let current_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => return UpdateStatus::Error(format!("Cannot locate application: {}", e)),
-    };
+    let dir = update_temp_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return UpdateStatus::Error(format!("Cannot create update folder: {}", e));
+    }
 
-    let temp_exe = current_exe.with_extension("new.exe");
+    // Keep the original asset file name (e.g. SearchForSpeedAnalyzer-Setup.exe)
+    let file_name = url
+        .rsplit('/')
+        .next()
+        .filter(|n| n.to_lowercase().ends_with(".exe"))
+        .unwrap_or(if kind == PendingKind::Installer { "SearchForSpeedAnalyzer-Setup.exe" } else { "SearchForSpeedAnalyzer.exe" })
+        .to_string();
+    let temp_exe = dir.join(file_name);
     let _ = std::fs::remove_file(&temp_exe);
 
     let agent = ureq::AgentBuilder::new()
@@ -339,48 +386,168 @@ fn download_binary(
         return UpdateStatus::Error("Incomplete update downloaded".to_string());
     }
 
+    if let Ok(mut pending) = PENDING_UPDATE.lock() {
+        *pending = Some(PendingUpdate { path: temp_exe, kind });
+    }
+
     UpdateStatus::ReadyToRestart {
         tag: tag.to_string(),
     }
 }
 
+/// Applies the downloaded update and exits the current process.
+/// Only returns if something went wrong before handing off.
 pub fn apply_update_and_restart() -> Result<(), String> {
+    let pending = PENDING_UPDATE
+        .lock()
+        .ok()
+        .and_then(|p| p.clone())
+        .ok_or_else(|| "No downloaded update found. Please check for updates again.".to_string())?;
+
+    if !pending.path.exists() {
+        return Err("Update file not found. Please check for updates again.".to_string());
+    }
+
+    match pending.kind {
+        PendingKind::Installer => launch_installer(&pending.path),
+        PendingKind::Binary => apply_binary_swap(&pending.path),
+    }
+}
+
+/// Runs the per-user installer silently once this process has exited.
+/// `/RELAUNCH` is a custom switch handled in installer.iss that starts the app after install.
+fn launch_installer(setup_path: &Path) -> Result<(), String> {
+    let script = format!(
+        "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
+         Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/RELAUNCH'",
+        pid = std::process::id(),
+        setup = ps_quote(setup_path),
+    );
+    spawn_hidden_powershell(&script)
+        .map_err(|e| format!("Failed to launch installer: {}", e))?;
+    std::process::exit(0);
+}
+
+/// Legacy path: swaps the raw binary in place. If the install folder is protected
+/// (e.g. Program Files), a UAC prompt is shown only for the file copy, and the app
+/// is relaunched afterwards *without* admin rights.
+fn apply_binary_swap(new_exe: &Path) -> Result<(), String> {
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Cannot locate current executable: {}", e))?;
-    let temp_exe = current_exe.with_extension("new.exe");
-    let old_exe = current_exe.with_extension("old.exe");
+    let exe_dir = current_exe
+        .parent()
+        .ok_or_else(|| "Cannot locate application folder".to_string())?;
 
-    if !temp_exe.exists() {
-        return Err("Update file not found".to_string());
+    if is_dir_writable(exe_dir) {
+        let old_exe = current_exe.with_extension("old.exe");
+        let _ = std::fs::remove_file(&old_exe);
+        if std::fs::rename(&current_exe, &old_exe).is_ok() {
+            // copy (not rename): the download lives in %TEMP%, which may be on another drive
+            if std::fs::copy(new_exe, &current_exe).is_ok() {
+                let _ = std::fs::remove_file(new_exe);
+                let _ = std::process::Command::new(&current_exe).spawn();
+                std::process::exit(0);
+            }
+            // Roll back so the app is never left missing
+            let _ = std::fs::rename(&old_exe, &current_exe);
+        }
+        // Fall through to the helper (e.g. file locked) - it waits for this process to exit
     }
 
-    // Attempt direct in-process rename and swap
-    let _ = std::fs::remove_file(&old_exe);
-    if std::fs::rename(&current_exe, &old_exe).is_ok() && std::fs::rename(&temp_exe, &current_exe).is_ok() {
-        let _ = std::process::Command::new(&current_exe).spawn();
-        std::process::exit(0);
-    }
-
-    // Fallback: spawn hidden PowerShell helper script to wait, move, and relaunch
-    let pid = std::process::id();
-    let script = format!(
-        "Start-Sleep -Milliseconds 400; Wait-Process -Id {} -Timeout 10; Move-Item -Force -Path '{}' -Destination '{}'; Start-Process -FilePath '{}'",
-        pid,
-        temp_exe.to_string_lossy(),
-        current_exe.to_string_lossy(),
-        current_exe.to_string_lossy()
+    // Elevated copy step (runs as admin via UAC). Only does the file copy.
+    let elevated_script = format!(
+        "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
+         Start-Sleep -Milliseconds 300; \
+         Copy-Item -LiteralPath {new} -Destination {cur} -Force -ErrorAction Stop",
+        pid = std::process::id(),
+        new = ps_quote(new_exe),
+        cur = ps_quote(&current_exe),
     );
 
-    let res = std::process::Command::new("powershell")
-        .args(["-WindowStyle", "Hidden", "-Command", &script])
-        .spawn();
+    // Outer non-elevated helper: requests UAC only when needed, then relaunches unelevated.
+    let needs_admin = !is_dir_writable(exe_dir);
+    let verb = if needs_admin { "-Verb RunAs " } else { "" };
+    let outer_script = format!(
+        "try {{ \
+           $p = Start-Process -FilePath 'powershell.exe' {verb}-WindowStyle Hidden -Wait -PassThru \
+                -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner}'; \
+           if ($p.ExitCode -ne 0) {{ throw 'copy failed' }}; \
+           Remove-Item -LiteralPath {new} -Force -ErrorAction SilentlyContinue; \
+           Start-Process -FilePath {cur} \
+         }} catch {{ \
+           Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
+           Start-Process -FilePath {cur} -ArgumentList '{cancel_flag}' \
+         }}",
+        verb = verb,
+        inner = encode_ps_command(&elevated_script),
+        new = ps_quote(new_exe),
+        cur = ps_quote(&current_exe),
+        pid = std::process::id(),
+        cancel_flag = UPDATE_CANCELLED_ARG,
+    );
 
-    match res {
+    spawn_hidden_powershell(&outer_script)
+        .map_err(|e| format!("Failed to launch updater process: {}", e))?;
+    std::process::exit(0);
+}
+
+/// Command-line flag passed back to the app when an elevated update was declined or failed.
+pub const UPDATE_CANCELLED_ARG: &str = "--update-cancelled";
+
+fn is_dir_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".s4s_write_test_{}", std::process::id()));
+    match std::fs::File::create(&probe) {
         Ok(_) => {
-            std::process::exit(0);
+            let _ = std::fs::remove_file(&probe);
+            true
         }
-        Err(e) => Err(format!("Failed to launch updater process: {}", e)),
+        Err(_) => false,
     }
+}
+
+/// Wraps a path in a PowerShell single-quoted literal.
+fn ps_quote(p: &Path) -> String {
+    format!("'{}'", p.to_string_lossy().replace('\'', "''"))
+}
+
+/// Encodes a script for `powershell -EncodedCommand` (Base64 of UTF-16LE), avoiding all quoting issues.
+fn encode_ps_command(script: &str) -> String {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    base64_encode(&bytes)
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn spawn_hidden_powershell(script: &str) -> std::io::Result<std::process::Child> {
+    let mut cmd = std::process::Command::new("powershell.exe");
+    cmd.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-EncodedCommand",
+        &encode_ps_command(script),
+    ]);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn()
 }
 
 pub fn cleanup_old_updates() {
@@ -394,6 +561,7 @@ pub fn cleanup_old_updates() {
             let _ = std::fs::remove_file(temp_exe);
         }
     }
+    let _ = std::fs::remove_dir_all(update_temp_dir());
 }
 
 pub fn is_newer_version(remote: &str, current: &str) -> bool {
@@ -514,8 +682,39 @@ mod tests {
                 assert_eq!(info.tag_name, "v9.9.9");
                 assert_eq!(info.binary_download_url.as_deref(), Some("https://example.com/SearchForSpeedAnalyzer.exe"));
                 assert_eq!(info.binary_size, 8800000);
+                assert_eq!(info.installer_download_url.as_deref(), Some("https://example.com/SearchForSpeedAnalyzer-Setup.exe"));
+                assert_eq!(info.installer_size, 5000000);
             }
             other => panic!("Expected UpdateAvailable, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_parse_release_json_installer_only() {
+        let json = serde_json::json!({
+            "tag_name": "v9.9.9",
+            "prerelease": false,
+            "assets": [
+                { "name": "SearchForSpeedAnalyzer-Beta-Setup.exe", "size": 4000000, "browser_download_url": "https://example.com/beta-setup.exe" },
+                { "name": "SearchForSpeedAnalyzer-Setup.exe", "size": 5000000, "browser_download_url": "https://example.com/setup.exe" }
+            ]
+        });
+
+        match parse_release_json(&json) {
+            UpdateStatus::UpdateAvailable(info) => {
+                assert_eq!(info.binary_download_url, None);
+                assert_eq!(info.installer_download_url.as_deref(), Some("https://example.com/setup.exe"));
+            }
+            other => panic!("Expected UpdateAvailable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_base64_encode() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
     }
 }

@@ -5,6 +5,26 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.3.2] — 2026-10-23
+
+### Fixed & Improved
+* **Overlay HUD "RACE REMAIN" Countdown & Race Conclusion Fix:**
+  * **Upgraded to `SessionLapsRemainEx` Telemetry:** Switched live telemetry remaining-laps channel from legacy/deprecated `SessionLapsRemain` to `SessionLapsRemainEx`, eliminating iRacing's known off-by-one telemetry calculation bug that caused the display to prematurely announce "1 to go" with 2 laps to go.
+  * **Live `SessionLapsTotal` Integration:** Ingested scheduled total race distance (`SessionLapsTotal`) from 60 Hz telemetry and subsession YAML metadata to calculate car-specific remaining laps (`SessionLapsTotal - player_lap`), ensuring individual line crossings accurately tick down remaining laps for the player rather than jumping whenever the leader crosses.
+  * **Zero Laps Remaining & Race Finish Propagation:** Corrected `remain >= 0` guard in live telemetry parser so that 0 laps remaining properly updates `session_laps_remain`. Eliminated stuck "1 to go" condition across checkered flag and finish states, transitioning cleanly to `"Finished"`.
+  * **Singular/Plural & Finish State Label Formatting:** Formatted remaining lap strings cleanly (`"X laps"`, `"1 lap"`, `"Finished"`), replacing awkward `"1 laps"` or showing `"Unlimited"` after completing a scheduled race.
+* **Eliminated Negative Completed Laps ("Lap -1 done"):**
+  * Clamped `CarIdxLapCompleted` -1 initialization (emitted by iRacing prior to lap 1 completion during pre-race, grid, and pace laps) to `0` across all driver telemetry models and UI representations.
+  * Replaced `"Lap -1 done"` with `"0 laps done"` during warmup and lap 1, ensuring no negative lap counts ever appear on the in-car HUD overlay or header bars.
+* **Updater no longer requires administrator rights:**
+  * In-app updates now download `*-Setup.exe` to `%TEMP%` and run it silently (`/SILENT /RELAUNCH`), installing per-user to `%LOCALAPPDATA%` and relaunching the app.
+  * Legacy raw-exe fallback swaps the binary in place, requesting UAC elevation only when the install folder is not writable, then relaunches unelevated.
+  * Update errors are now surfaced in the UI instead of being silently ignored.
+* **Settings moved to `%APPDATA%\SearchForSpeedAnalyzer`** with automatic migration of legacy `settings.json` / `settings-beta.json`.
+* **Installer:** Beta builds now use a separate AppId and install folder (`SearchForSpeedAnalyzer-Beta`), so beta and stable no longer overwrite each other.
+
+---
+
 ## [0.2.5] — 2026-10-22
 
 ### Fixed & Improved

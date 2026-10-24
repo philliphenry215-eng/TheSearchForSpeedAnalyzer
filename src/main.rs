@@ -986,7 +986,7 @@ impl WarRoomState {
             if !driver.is_initialized {
                 driver.is_initialized = true;
                 driver.last_processed_lap = current_lap_sdk;
-                driver.total_laps_completed = current_lap_sdk;
+                driver.total_laps_completed = current_lap_sdk.max(0);
                 driver.last_known_lap_time = last_lap_time;
                 driver.is_on_pit_road = is_pit;
                 driver.is_in_world = in_world;
@@ -1001,8 +1001,8 @@ impl WarRoomState {
 
                     driver.stints.push(StintData {
                         stint_number: 1,
-                        start_lap: current_lap_sdk,
-                        end_lap: current_lap_sdk,
+                        start_lap: current_lap_sdk.max(0),
+                        end_lap: current_lap_sdk.max(0),
                         out_lap_completed: current_lap_sdk > 0 || is_race_session,
                         awaiting_pace_lap_sf: false,
                         awaiting_pit_out_lap_sf: false,
@@ -1156,8 +1156,8 @@ impl WarRoomState {
 
                 driver.stints.push(StintData {
                     stint_number: new_stint_num,
-                    start_lap: current_lap_sdk,
-                    end_lap: current_lap_sdk,
+                    start_lap: current_lap_sdk.max(0),
+                    end_lap: current_lap_sdk.max(0),
                     out_lap_completed: !awaiting_pace_lap_sf && !awaiting_pit_out_lap_sf,
                     awaiting_pace_lap_sf,
                     awaiting_pit_out_lap_sf,
@@ -1181,7 +1181,7 @@ impl WarRoomState {
                     prev_crossing_fuel: current_fuel_sample,
                 });
                 driver.last_processed_lap = current_lap_sdk;
-                driver.total_laps_completed = current_lap_sdk;
+                driver.total_laps_completed = current_lap_sdk.max(0);
                 driver.last_known_lap_time = last_lap_time;
 
                 if idx == player_idx {
@@ -1195,7 +1195,7 @@ impl WarRoomState {
                 if is_race_green && !green_just_started {
                     if let Some(active) = driver.stints.last_mut() {
                         active.is_active = false;
-                        active.end_lap = current_lap_sdk;
+                        active.end_lap = current_lap_sdk.max(0);
                     }
 
                     // Discard previous 0-lap stint if aborted before completing any timed laps
@@ -1215,8 +1215,8 @@ impl WarRoomState {
 
                     driver.stints.push(StintData {
                         stint_number: new_stint_num,
-                        start_lap: current_lap_sdk,
-                        end_lap: current_lap_sdk,
+                        start_lap: current_lap_sdk.max(0),
+                        end_lap: current_lap_sdk.max(0),
                         out_lap_completed: false,
                         awaiting_pace_lap_sf: false,
                         awaiting_pit_out_lap_sf,
@@ -1243,7 +1243,7 @@ impl WarRoomState {
                         pending_logs.push(format!("[PIT EXIT] Stint S{} Started at Lap {}", new_stint_num, current_lap_sdk));
                     }
                     driver.last_processed_lap = current_lap_sdk;
-                    driver.total_laps_completed = current_lap_sdk;
+                    driver.total_laps_completed = current_lap_sdk.max(0);
                     driver.last_known_lap_time = last_lap_time;
                 }
                 state_changed = true;
@@ -1284,7 +1284,7 @@ impl WarRoomState {
 
                 if is_race_green {
                     driver.last_processed_lap = current_lap_sdk;
-                    driver.total_laps_completed = current_lap_sdk;
+                    driver.total_laps_completed = current_lap_sdk.max(0);
                     driver.last_known_lap_time = last_lap_time;
                 }
                 state_changed = true;
@@ -1326,14 +1326,14 @@ impl WarRoomState {
                     }
                     driver.last_known_lap_time = last_lap_time;
                     driver.last_processed_lap = current_lap_sdk;
-                    driver.total_laps_completed = current_lap_sdk;
+                    driver.total_laps_completed = current_lap_sdk.max(0);
                     state_changed = true;
                 }
             } else if current_lap_sdk > 0 && current_lap_sdk == driver.ignored_lap_sdk && (is_new_lap_time || is_new_lap_count) {
                 // 3B. Delayed last_lap_time update for a caution/pace/out-lap that was already ignored at S/F
                 driver.last_known_lap_time = last_lap_time;
                 driver.last_processed_lap = current_lap_sdk;
-                driver.total_laps_completed = current_lap_sdk;
+                driver.total_laps_completed = current_lap_sdk.max(0);
             } else if (is_new_lap_count || is_new_lap_time) && !is_pit && in_world && driver.stints.last().map_or(false, |st| st.is_active && (st.awaiting_pace_lap_sf || st.awaiting_pit_out_lap_sf)) {
                 // 3C. First S/F crossing after a caution restart (finishing pace lap) or race green-flag pit exit (finishing pit out-lap)
                 if let Some(active) = driver.stints.last_mut() {
@@ -1341,8 +1341,8 @@ impl WarRoomState {
                     active.awaiting_pace_lap_sf = false;
                     active.awaiting_pit_out_lap_sf = false;
                     active.out_lap_completed = true;
-                    active.start_lap = current_lap_sdk;
-                    active.end_lap = current_lap_sdk;
+                    active.start_lap = current_lap_sdk.max(0);
+                    active.end_lap = current_lap_sdk.max(0);
                     if current_lap_sdk > 0 {
                         driver.ignored_lap_sdk = current_lap_sdk;
                     }
@@ -1365,7 +1365,7 @@ impl WarRoomState {
                 }
                 driver.last_known_lap_time = last_lap_time;
                 driver.last_processed_lap = current_lap_sdk;
-                driver.total_laps_completed = current_lap_sdk;
+                driver.total_laps_completed = current_lap_sdk.max(0);
                 state_changed = true;
             } else {
                 // 3D. UNTIMED OUT-LAP COMPLETION (Start/Finish crossed for the first time since pit exit in Practice/Qualifying)
@@ -1379,7 +1379,7 @@ impl WarRoomState {
                                 active.laps_of_fuel_crossing = (current_fuel_sample / active.latched_fuel_burn_rate).max(0.0);
                             }
                             driver.last_processed_lap = current_lap_sdk;
-                            driver.total_laps_completed = current_lap_sdk;
+                            driver.total_laps_completed = current_lap_sdk.max(0);
                             if idx == player_idx {
                                 pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Crossed start/finish at Lap {}. Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, current_lap_sdk, current_fuel_sample));
                             }
@@ -1399,8 +1399,8 @@ impl WarRoomState {
 
                         driver.stints.push(StintData {
                             stint_number: new_stint_num,
-                            start_lap: current_lap_sdk - 1,
-                            end_lap: current_lap_sdk,
+                            start_lap: (current_lap_sdk - 1).max(0),
+                            end_lap: current_lap_sdk.max(0),
                             out_lap_completed: true,
                             awaiting_pace_lap_sf: false,
                             awaiting_pit_out_lap_sf: false,
@@ -1432,7 +1432,7 @@ impl WarRoomState {
                             active.lap_times.push(last_lap_time);
                             active.last_lap = last_lap_time;
                             active.laps_completed = active.lap_times.len() as i32;
-                            active.end_lap = current_lap_sdk;
+                            active.end_lap = current_lap_sdk.max(0);
 
                             if active.fast_lap <= 0.0 || last_lap_time < active.fast_lap {
                                 active.fast_lap = last_lap_time;
@@ -1484,7 +1484,7 @@ impl WarRoomState {
                     }
                     driver.last_known_lap_time = last_lap_time;
                     driver.last_processed_lap = current_lap_sdk;
-                    driver.total_laps_completed = current_lap_sdk;
+                    driver.total_laps_completed = current_lap_sdk.max(0);
                 }
             }
 
@@ -1966,6 +1966,27 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
             }
             if let Some(rstate) = first_sess["SessionTrackRubberState"].as_str() {
                 s.track_state = format_track_state(rstate, s.track_wetness);
+            }
+        }
+
+        let cur_sess = if s.session_num >= 0 {
+            sessions.iter().find(|sess| sess["SessionNum"].as_i64().unwrap_or(-1) as i32 == s.session_num)
+        } else {
+            sessions.first()
+        };
+        if let Some(sess) = cur_sess {
+            if s.session_laps_total == 0 {
+                if let Some(laps_val) = sess["SessionLaps"].as_i64() {
+                    if laps_val > 0 && laps_val < 10000 {
+                        s.session_laps_total = laps_val as i32;
+                    }
+                } else if let Some(laps_str) = sess["SessionLaps"].as_str() {
+                    if let Ok(laps_val) = laps_str.trim().parse::<i32>() {
+                        if laps_val > 0 && laps_val < 10000 {
+                            s.session_laps_total = laps_val;
+                        }
+                    }
+                }
             }
         }
     }
@@ -3396,10 +3417,25 @@ impl WarRoomApp {
                                 }
                             }
 
-                            // Read Session Laps Remaining
-                            if let Ok(Value::INT(remain)) = live.get("SessionLapsRemain") {
-                                if remain > 0 && remain < 10000 {
+                            // Read Session Laps Remaining: prefer SessionLapsRemainEx (modern, accurate variable)
+                            // over SessionLapsRemain (legacy variable which has known off-by-one errors)
+                            let remain_val = live.get("SessionLapsRemainEx")
+                                .or_else(|_| live.get("SessionLapsRemain"));
+                            if let Ok(Value::INT(remain)) = remain_val {
+                                if remain >= 0 && remain < 10000 {
                                     s.session_laps_remain = remain;
+                                } else if remain >= 10000 {
+                                    // 32767 sentinel value represents unlimited laps / timed session
+                                    s.session_laps_remain = 0;
+                                }
+                            }
+
+                            // Read Session Laps Total (scheduled total laps for the session)
+                            if let Ok(Value::INT(total)) = live.get("SessionLapsTotal") {
+                                if total > 0 && total < 10000 {
+                                    s.session_laps_total = total;
+                                } else if total >= 10000 {
+                                    s.session_laps_total = 0;
                                 }
                             }
 
@@ -3546,7 +3582,14 @@ impl WarRoomApp {
         });
         
         let mut updater = updater::UpdateChecker::new();
-        if settings.updates.check_on_startup {
+        if std::env::args().any(|a| a == updater::UPDATE_CANCELLED_ARG) {
+            // Relaunched by the update helper after the UAC prompt was declined or the copy failed
+            updater.status = updater::UpdateStatus::Error(
+                "Update cancelled: administrator permission is required because this copy is in a protected folder. \
+                 Install with SearchForSpeedAnalyzer-Setup.exe to get updates without admin prompts."
+                    .to_string(),
+            );
+        } else if settings.updates.check_on_startup {
             updater.trigger_check(settings.updates.include_prereleases);
         }
 
@@ -3844,7 +3887,7 @@ impl WarRoomApp {
                                     egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(12.0)
                                 ).fill(self.settings.status_green());
                                 if ui.add(restart_btn).clicked() {
-                                    let _ = updater::apply_update_and_restart();
+                                    if let Err(e) = updater::apply_update_and_restart() { self.updater.status = updater::UpdateStatus::Error(e); }
                                 }
                             }
                             _ => {}
@@ -4200,7 +4243,7 @@ impl WarRoomApp {
                         },
                         updater::UpdateStatus::ReadyToRestart { .. } => {
                             if ui.add(egui::Button::new(egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(11.5)).fill(self.settings.status_green())).clicked() {
-                                let _ = updater::apply_update_and_restart();
+                                if let Err(e) = updater::apply_update_and_restart() { self.updater.status = updater::UpdateStatus::Error(e); }
                             }
                         },
                         updater::UpdateStatus::Error(err) => {
@@ -7097,7 +7140,62 @@ impl WarRoomApp {
             self.grid_sort_dir = new_d;
         }
     }
+}
 
+pub fn compute_overlay_laps_remain(
+    session_laps_total: i32,
+    session_laps_remain: i32,
+    player_lap: i32,
+    is_white: bool,
+    is_checkered: bool,
+) -> i32 {
+    if is_checkered {
+        if session_laps_total > 0 && player_lap >= session_laps_total {
+            0
+        } else if session_laps_remain == 0 {
+            0
+        } else {
+            1
+        }
+    } else if is_white {
+        1
+    } else if session_laps_total > 0 && session_laps_total < 10000 {
+        (session_laps_total - player_lap).max(0)
+    } else if session_laps_remain > 0 && session_laps_remain < 10000 {
+        session_laps_remain
+    } else {
+        0
+    }
+}
+
+pub fn format_overlay_race_remain_strings(
+    laps_remain: i32,
+    player_lap: i32,
+    is_checkered: bool,
+    session_laps_total: i32,
+) -> (String, String) {
+    let rem_str = if laps_remain > 1 {
+        format!("{} laps", laps_remain)
+    } else if laps_remain == 1 {
+        "1 lap".to_string()
+    } else if is_checkered || (session_laps_total > 0 && player_lap >= session_laps_total) {
+        "Finished".to_string()
+    } else {
+        "Unlimited".to_string()
+    };
+
+    let lap_done_str = if player_lap <= 0 {
+        "0 laps done".to_string()
+    } else if player_lap == 1 {
+        "1 lap done".to_string()
+    } else {
+        format!("Lap {} done", player_lap)
+    };
+
+    (rem_str, lap_done_str)
+}
+
+impl WarRoomApp {
     fn render_floating_overlay_hud(&mut self, ctx: &egui::Context, state: &WarRoomState) {
         if !self.settings.overlay.enabled && !self.preview_overlay_hud {
             return;
@@ -7203,14 +7301,22 @@ impl WarRoomApp {
                     }
                 });
 
-            let player_lap = player.map_or(0, |p| p.total_laps_completed);
+            let player_lap = player.map_or(0, |p| p.total_laps_completed.max(0));
             let pit_target_lap = player_lap + (laps_of_fuel as i32).max(0);
 
-            let laps_remain = if state.session_laps_remain > 0 && state.session_laps_remain < 10000 {
-                state.session_laps_remain
-            } else {
-                (state.session_laps_total - player_lap).max(0)
-            };
+            let is_checkered = state.session_flag_name == "CHECKERED"
+                || (state.debug_session_flags & FLAG_CHECKERED) != 0
+                || state.debug_session_state == STATE_CHECKERED;
+            let is_white = state.session_flag_name == "WHITE FLAG"
+                || (state.debug_session_flags & FLAG_WHITE) != 0;
+
+            let laps_remain = compute_overlay_laps_remain(
+                state.session_laps_total,
+                state.session_laps_remain,
+                player_lap,
+                is_white,
+                is_checkered,
+            );
 
             let latched_fuel = active_stint
                 .filter(|st| st.is_active && !state.is_under_caution && !state.debug_on_pit_road)
@@ -7495,13 +7601,17 @@ impl WarRoomApp {
                                     cols[2].vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = (2.0 * scale).max(1.0);
                                         ui.label(egui::RichText::new("RACE REMAIN").color(muted).size(hdr_font_size).extra_letter_spacing(0.8));
-                                        let rem_str = if laps_remain > 0 {
-                                            format!("{} laps", laps_remain)
-                                        } else {
-                                            "Unlimited".to_string()
-                                        };
+                                        let is_checkered_flag = state.session_flag_name == "CHECKERED"
+                                            || (state.debug_session_flags & FLAG_CHECKERED) != 0
+                                            || state.debug_session_state == STATE_CHECKERED;
+                                        let (rem_str, lap_done_str) = format_overlay_race_remain_strings(
+                                            laps_remain,
+                                            player_lap,
+                                            is_checkered_flag,
+                                            state.session_laps_total,
+                                        );
                                         ui.label(egui::RichText::new(rem_str).font(display_font(hero_font_size)).color(white));
-                                        ui.label(egui::RichText::new(format!("Lap {} done", player_lap)).color(muted).size(sub_font_size));
+                                        ui.label(egui::RichText::new(lap_done_str).color(muted).size(sub_font_size));
                                     });
 
                                     cols[3].vertical(|ui| {
@@ -7950,7 +8060,7 @@ impl eframe::App for WarRoomApp {
                                         egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(12.0)
                                     ).fill(self.settings.status_green());
                                     if ui.add(restart_btn).clicked() {
-                                        let _ = updater::apply_update_and_restart();
+                                        if let Err(e) = updater::apply_update_and_restart() { self.updater.status = updater::UpdateStatus::Error(e); }
                                     }
                                 });
                             }
@@ -9452,6 +9562,119 @@ DriverInfo:
         assert_eq!(app_two.stint_compare_slots.len(), 2, "Should pair player stint with competitor stint");
         assert_eq!(app_two.stint_compare_slots[0].car_idx, 0);
         assert_eq!(app_two.stint_compare_slots[1].car_idx, 1);
+    }
+
+    #[test]
+    fn test_overlay_laps_remain_and_done_formatting_no_negative_laps() {
+        // 1. Negative lap (pre-race / pace lap / grid) must NEVER display "Lap -1 done"
+        let (rem_str, done_str) = format_overlay_race_remain_strings(50, -1, false, 50);
+        assert_eq!(done_str, "0 laps done", "Negative player lap must cleanly format as '0 laps done'");
+        assert_eq!(rem_str, "50 laps");
+
+        // 2. Lap 0 (on lap 1 before line crossing)
+        let (rem_str0, done_str0) = format_overlay_race_remain_strings(50, 0, false, 50);
+        assert_eq!(done_str0, "0 laps done");
+        assert_eq!(rem_str0, "50 laps");
+
+        // 3. Lap 1 completed
+        let (_, done_str1) = format_overlay_race_remain_strings(49, 1, false, 50);
+        assert_eq!(done_str1, "1 lap done");
+
+        // 4. Lap 15 completed
+        let (_, done_str15) = format_overlay_race_remain_strings(35, 15, false, 50);
+        assert_eq!(done_str15, "Lap 15 done");
+    }
+
+    #[test]
+    fn test_overlay_laps_remain_countdown_and_finish_states() {
+        // Scheduled 50-lap race
+        let total = 50;
+
+        // Start of race (0 laps completed)
+        let rem_start = compute_overlay_laps_remain(total, 50, 0, false, false);
+        assert_eq!(rem_start, 50);
+        let (hero_start, _) = format_overlay_race_remain_strings(rem_start, 0, false, total);
+        assert_eq!(hero_start, "50 laps");
+
+        // 2 TO GO: 48 laps completed out of 50
+        // Must show 2 laps, NEVER prematurely show "1 to go" / "1 lap"
+        let rem_2togo = compute_overlay_laps_remain(total, 1, 48, false, false);
+        assert_eq!(rem_2togo, 2, "At 2 to go (48/50), remaining laps must be 2 even if legacy telemetry jumped to 1");
+        let (hero_2togo, done_2togo) = format_overlay_race_remain_strings(rem_2togo, 48, false, total);
+        assert_eq!(hero_2togo, "2 laps");
+        assert_eq!(done_2togo, "Lap 48 done");
+
+        // 1 TO GO (White Flag): 49 laps completed out of 50
+        let rem_1togo = compute_overlay_laps_remain(total, 1, 49, true, false);
+        assert_eq!(rem_1togo, 1);
+        let (hero_1togo, done_1togo) = format_overlay_race_remain_strings(rem_1togo, 49, false, total);
+        assert_eq!(hero_1togo, "1 lap", "1 lap remaining must format as '1 lap' rather than '1 laps'");
+        assert_eq!(done_1togo, "Lap 49 done");
+
+        // FINISH (Checkered Flag): 50 laps completed out of 50
+        // Must transition to Finished, NEVER stay stuck on "1 to go"
+        let rem_finish = compute_overlay_laps_remain(total, 0, 50, false, true);
+        assert_eq!(rem_finish, 0);
+        let (hero_finish, done_finish) = format_overlay_race_remain_strings(rem_finish, 50, true, total);
+        assert_eq!(hero_finish, "Finished", "Race end must transition to Finished rather than staying stuck or Unlimited");
+        assert_eq!(done_finish, "Lap 50 done");
+
+        // Unlimited / Practice session (total = 0, remain = 0)
+        let rem_unlimited = compute_overlay_laps_remain(0, 0, 5, false, false);
+        assert_eq!(rem_unlimited, 0);
+        let (hero_unlimited, _) = format_overlay_race_remain_strings(rem_unlimited, 5, false, 0);
+        assert_eq!(hero_unlimited, "Unlimited");
+
+        // Timed race with 14 laps left
+        let rem_timed = compute_overlay_laps_remain(0, 14, 10, false, false);
+        assert_eq!(rem_timed, 14);
+        let (hero_timed, _) = format_overlay_race_remain_strings(rem_timed, 10, false, 0);
+        assert_eq!(hero_timed, "14 laps");
+
+        // Timed race checkered flag
+        let rem_timed_finish = compute_overlay_laps_remain(0, 0, 25, false, true);
+        assert_eq!(rem_timed_finish, 0);
+        let (hero_timed_finish, _) = format_overlay_race_remain_strings(rem_timed_finish, 25, true, 0);
+        assert_eq!(hero_timed_finish, "Finished");
+    }
+
+    #[test]
+    fn test_driver_lap_completed_negative_one_sanitized_to_zero() {
+        let mut state = WarRoomState::default();
+        state.session_type = "RACE".to_string();
+        state.player_car_idx = 1;
+
+        let pit_road = vec![false; 4];
+        let laps_comp = vec![-1; 4];
+        let last_laps = vec![0.0; 4];
+        let fast_laps = vec![0.0; 4];
+        let positions = vec![0, 1, 2, 0];
+        let surfaces = vec![0, 3, 3, 0];
+        let lap_dist_pcts = vec![0.0; 4];
+
+        let frame = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 100.0,
+            current_fuel_sample: 60.0,
+            player_live_pressures: [200.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+
+        state.process_telemetry_frame(&frame, None, false);
+
+        let driver = state.drivers.get(&1).unwrap();
+        assert_eq!(driver.total_laps_completed, 0, "Initial -1 CarIdxLapCompleted must be clamped to 0");
+        assert_eq!(driver.stints[0].start_lap, 0);
+        assert_eq!(driver.stints[0].end_lap, 0);
     }
 }
 
