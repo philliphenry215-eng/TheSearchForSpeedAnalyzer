@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+pub mod discord_card;
 pub mod ibt;
 pub mod ibt_ui;
 mod settings;
@@ -4892,7 +4893,34 @@ impl WarRoomApp {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("COMPARE UP TO 3 STINTS SIDE-BY-SIDE").color(muted).size(11.0).extra_letter_spacing(0.8));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new(egui::RichText::new("Copy Comparison Table (TSV)").color(egui::Color32::BLACK).size(11.5).strong()).fill(primary)).clicked() {
+                    if ui.add(
+                        egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(11.5).strong())
+                            .fill(primary)
+                    ).on_hover_text("Generate a Stint Comparison graphic card and copy to clipboard for pasting (Ctrl+V) into Discord").clicked() {
+                        let card_entries: Vec<discord_card::DiscordStintEntry> = resolved.iter().map(|e| {
+                            discord_card::DiscordStintEntry {
+                                slot_label: Some(e.slot_label),
+                                driver_name: e.driver_name,
+                                car_num: e.car_num,
+                                setup_name: e.setup_name,
+                                is_player: e.is_player,
+                                stint: e.stint,
+                                accent_rgb: [e.color.r(), e.color.g(), e.color.b()],
+                            }
+                        }).collect();
+                        match discord_card::render_discord_stint_card(&card_entries, s, &self.settings)
+                            .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
+                        {
+                            Ok(()) => {
+                                self.toast_message = Some(("📸 Copied Stint Comparison image — press Ctrl+V in Discord!".to_string(), std::time::Instant::now()));
+                            }
+                            Err(err) => {
+                                self.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
+                            }
+                        }
+                    }
+
+                    if ui.add(egui::Button::new(egui::RichText::new("Copy Comparison Table (TSV)").color(white).size(11.5)).fill(elevated)).clicked() {
                         let export_info: Vec<(&StintData, &str, &str, &str, &str, bool)> = resolved.iter().map(|e| {
                             (e.stint, e.slot_label, e.driver_name, e.car_num, e.setup_name, e.is_player)
                         }).collect();
@@ -5351,7 +5379,7 @@ impl WarRoomApp {
 
             ui.add_space(12.0);
 
-            // 5. Post-Stint 4-Corner Tire Data Comparison
+            // 5. Post-Stint 4-Corner Tire Data Comparison (2x2 Side-by-Side: Fronts on top row, Rears on bottom row)
             ui.label(egui::RichText::new("POST-STINT TIRE WEAR & TEMPERATURES").color(muted).size(11.0).extra_letter_spacing(0.8));
             ui.add_space(6.0);
 
@@ -5366,13 +5394,24 @@ impl WarRoomApp {
 
                         if entry.is_player {
                             if entry.stint.tires.has_data && entry.stint.laps_completed > 0 {
-                                render_tire_corner_card(ui, "LF · Left Front", &entry.stint.tires.lf, is_metric, primary, secondary, white);
-                                ui.add_space(4.0);
-                                render_tire_corner_card(ui, "RF · Right Front", &entry.stint.tires.rf, is_metric, primary, secondary, white);
-                                ui.add_space(4.0);
-                                render_tire_corner_card(ui, "LR · Left Rear", &entry.stint.tires.lr, is_metric, primary, secondary, white);
-                                ui.add_space(4.0);
-                                render_tire_corner_card(ui, "RR · Right Rear", &entry.stint.tires.rr, is_metric, primary, secondary, white);
+                                let compact_titles = ui.available_width() < 420.0;
+                                let (lf_lbl, rf_lbl, lr_lbl, rr_lbl) = if compact_titles {
+                                    ("LF", "RF", "LR", "RR")
+                                } else {
+                                    ("LF · Left Front", "RF · Right Front", "LR · Left Rear", "RR · Right Rear")
+                                };
+                                ui.columns(2, |corner_cols| {
+                                    corner_cols[0].vertical(|ui| {
+                                        render_tire_corner_card(ui, lf_lbl, &entry.stint.tires.lf, is_metric, primary, secondary, white);
+                                        ui.add_space(6.0);
+                                        render_tire_corner_card(ui, lr_lbl, &entry.stint.tires.lr, is_metric, primary, secondary, white);
+                                    });
+                                    corner_cols[1].vertical(|ui| {
+                                        render_tire_corner_card(ui, rf_lbl, &entry.stint.tires.rf, is_metric, primary, secondary, white);
+                                        ui.add_space(6.0);
+                                        render_tire_corner_card(ui, rr_lbl, &entry.stint.tires.rr, is_metric, primary, secondary, white);
+                                    });
+                                });
                             } else {
                                 egui::Frame::none()
                                     .fill(egui::Color32::from_rgb(20, 24, 32))
@@ -5600,6 +5639,15 @@ impl WarRoomApp {
         });
 
         let stint = player_stints.iter().find(|st| st.stint_number == selected_num).unwrap_or_else(|| player_stints.last().unwrap());
+        let single_setup_display = if !stint.setup_name.is_empty() && stint.setup_name != "—" && stint.setup_name != "Baseline" {
+            stint.setup_name.as_str()
+        } else if !drv_ref.setup_name.is_empty() && drv_ref.setup_name != "—" && drv_ref.setup_name != "Baseline" {
+            drv_ref.setup_name.as_str()
+        } else if target_car_idx == s.player_car_idx && !s.player_setup_name.is_empty() && s.player_setup_name != "Baseline" {
+            s.player_setup_name.as_str()
+        } else {
+            "Baseline"
+        };
 
         let screen_rect = ctx.screen_rect();
         let win_w = if is_compare {
@@ -5691,6 +5739,16 @@ impl WarRoomApp {
                         }
                     }
 
+                    let single_setup_display = if !stint.setup_name.is_empty() && stint.setup_name != "—" && stint.setup_name != "Baseline" {
+                        stint.setup_name.as_str()
+                    } else if !drv_ref.setup_name.is_empty() && drv_ref.setup_name != "—" && drv_ref.setup_name != "Baseline" {
+                        drv_ref.setup_name.as_str()
+                    } else if target_car_idx == s.player_car_idx && !s.player_setup_name.is_empty() && s.player_setup_name != "Baseline" {
+                        s.player_setup_name.as_str()
+                    } else {
+                        "Baseline"
+                    };
+
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add_sized(egui::vec2(72.0, 26.0), egui::Button::new(egui::RichText::new("✕ Close").color(white).size(12.0)).fill(elevated)).clicked() {
                             close_modal = true;
@@ -5700,6 +5758,33 @@ impl WarRoomApp {
                             self.ensure_compare_slots_populated(s);
                             self.show_stint_comparison_window = true;
                             self.show_stint_analyzer_modal = false;
+                        }
+
+                        if !is_compare {
+                            if ui.add_sized(
+                                egui::vec2(148.0, 26.0),
+                                egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(11.5).strong()).fill(primary)
+                            ).on_hover_text("Generate a Stint Summary graphic card and copy to clipboard for pasting (Ctrl+V) into Discord").clicked() {
+                                let single_entry = [discord_card::DiscordStintEntry {
+                                    slot_label: None,
+                                    driver_name: &drv_ref.driver_name,
+                                    car_num: &drv_ref.car_num,
+                                    setup_name: single_setup_display,
+                                    is_player: target_car_idx == s.player_car_idx,
+                                    stint,
+                                    accent_rgb: [primary.r(), primary.g(), primary.b()],
+                                }];
+                                match discord_card::render_discord_stint_card(&single_entry, s, &self.settings)
+                                    .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
+                                {
+                                    Ok(()) => {
+                                        self.toast_message = Some((format!("📸 Copied Stint S{} image — press Ctrl+V in Discord!", stint.stint_number), std::time::Instant::now()));
+                                    }
+                                    Err(err) => {
+                                        self.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
+                                    }
+                                }
+                            }
                         }
                     });
                 });
@@ -5941,6 +6026,29 @@ impl WarRoomApp {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(header_lbl).color(muted).size(11.0).extra_letter_spacing(0.8));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(
+                                egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(11.0).strong()).fill(primary)
+                            ).on_hover_text("Copy Stint S{} summary graphic card to clipboard for Discord (Ctrl+V)").clicked() {
+                                let single_entry = [discord_card::DiscordStintEntry {
+                                    slot_label: None,
+                                    driver_name: &drv_ref.driver_name,
+                                    car_num: &drv_ref.car_num,
+                                    setup_name: single_setup_display,
+                                    is_player: target_car_idx == s.player_car_idx,
+                                    stint,
+                                    accent_rgb: [primary.r(), primary.g(), primary.b()],
+                                }];
+                                match discord_card::render_discord_stint_card(&single_entry, s, &self.settings)
+                                    .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
+                                {
+                                    Ok(()) => {
+                                        self.toast_message = Some((format!("📸 Copied Stint S{} image — press Ctrl+V in Discord!", stint.stint_number), std::time::Instant::now()));
+                                    }
+                                    Err(err) => {
+                                        self.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
+                                    }
+                                }
+                            }
                             if ui.add(egui::Button::new(egui::RichText::new("Copy Full Stint").color(white).size(11.0)).fill(elevated)).clicked() {
                                 let tsv = format_full_stint_excel_tsv(stint, &self.settings.active_avg_buckets, is_metric);
                                 ui.output_mut(|o| o.copied_text = tsv);

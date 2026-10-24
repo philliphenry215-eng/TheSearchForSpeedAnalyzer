@@ -1,3 +1,19 @@
+# The Search For Speed Analyzer — v0.3.3
+
+### 📸 1-Click Discord Share Cards & 2x2 Stint Comparison Tire Layout:
+* **📸 1-Click Discord Image Card Export (`Copy Discord Image`):**
+  * Added **`📸 Copy Discord Image`** buttons to both the **Single Stint** analyzer and **Side-by-Side Stint Comparison** views.
+  * Generates a high-contrast telemetry summary graphic card in memory and copies it directly to the Windows clipboard (both lossless `PNG` and `CF_DIB` bitmap formats) so you can immediately press `Ctrl+V` in Discord to share or compare runs.
+  * **Shared Session & Weather Header:** Top header bar displays Track, Car, Session Type, Track Rubber State (`Moderate Rubber`, `Clean Track`, etc.), Weather Type, Track Temp, Air Temp, Wind Speed/Direction, and Humidity without repeating session weather inside each stint column.
+  * **Complete Stint Breakdown:** Displays Driver, Stint Number, Laps Completed, Setup Name, Fastest Lap (with `★ BEST PACE` and delta callouts in comparison mode), Last Lap, Full Average, Consistency ($\sigma$), Fall-off, Fuel/Lap, Rolling Averages (`Avg 5` through `Avg 30`), and 4-corner Post-Stint Tire Wear & Temperatures.
+* **🛞 2x2 Side-by-Side Tire Layout on Stint Comparison:**
+  * Re-arranged the **Post-Stint Tire Wear & Temperatures** cards on the Stint Comparison page into a 2x2 chassis grid within each stint column: **Fronts (`LF` | `RF`) side-by-side on the top row**, and **Rears (`LR` | `RR`) side-by-side on the bottom row**, cutting vertical scrolling in half.
+* **🔄 Custom Drive (`C:`, `D:`, `E:`) & Protected Folder Updater Improvements:**
+  * Standalone portable `.exe` installs placed on any drive (`C:`, `D:`, `E:`, Desktop) now update directly in place without creating a second installation in `%LOCALAPPDATA%`.
+  * Setup installations in custom folders pass `/DIR=<current_folder>` during silent updates and automatically request Windows UAC administrator permission (`RunAs`) only if installed inside a protected system folder (such as `C:\Program Files`).
+
+---
+
 # The Search For Speed Analyzer — v0.3.2
 
 ### ⏱️ In-Car HUD Overlay "Race Remain" & Lap Counter Calibration:

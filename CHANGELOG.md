@@ -5,6 +5,21 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.3.3] — 2026-10-24
+
+### Added & Improved
+* **1-Click Discord Stint & Comparison Image Card Export (`📸 Copy Discord Image`):**
+  * Added native offscreen graphic card rendering (`discord_card.rs`) for both **Single Stint** and **Side-by-Side Stint Comparison** (1–3 stints).
+  * Shared top session banner displays Track, Car, Session Type, Track Rubber State, Weather, Track/Air Temps, Wind Speed & Direction, and Relative Humidity.
+  * Per-stint columns display Driver, Car #, Stint #, Laps Completed, Setup Name, Fastest Lap, Last Lap, Full Average, Consistency ($\sigma$), Pace Fall-off, Fuel/Lap, Rolling Averages (`Avg 5`–`Avg 30`), and 2x2 Post-Stint Tire Wear & Temps.
+  * Copies both `PNG` and `CF_DIB` clipboard formats directly to the Windows clipboard for instant `Ctrl+V` pasting into Discord.
+* **2x2 Side-by-Side Tire Orientation on Stint Comparison:**
+  * Updated Stint Comparison tire cards so Fronts (`LF`, `RF`) sit side-by-side on the top row and Rears (`LR`, `RR`) sit side-by-side on the bottom row inside each stint column.
+* **Custom Drive (`C:`, `D:`, `E:`) & Admin Elevation Auto-Updater Improvements:**
+  * Standalone `.exe` installs on custom drives update directly in place via binary swap, while Setup installs preserve custom target folders via `/DIR=` and request UAC elevation (`-Verb RunAs`) if the folder is write-protected.
+
+---
+
 ## [0.3.2] — 2026-10-23
 
 ### Fixed & Improved

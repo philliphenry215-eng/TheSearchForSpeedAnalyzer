@@ -330,7 +330,7 @@ pub struct SuspensionAnalysis {
     // Derived dynamic pitch & roll arrays (in mm)
     pub front_rh_mm: Option<Vec<f32>>,   // (LF + RF) / 2
     pub rear_rh_mm: Option<Vec<f32>>,    // (LR + RR) / 2
-    pub rake_mm: Option<Vec<f32>>,       // Rear RH - Front RH (+ = tail-up / nose-down)
+    pub rake_mm: Option<Vec<f32>>,       // ((LR + RR)/2) - Center Splitter (+ = tail-up / nose-down)
     pub left_rh_mm: Option<Vec<f32>>,    // (LF + LR) / 2
     pub right_rh_mm: Option<Vec<f32>>,   // (RF + RR) / 2
     pub side_rake_mm: Option<Vec<f32>>,  // Left RH - Right RH
@@ -977,7 +977,8 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
     let full_rf_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("RFrideHeight"));
     let mut full_lr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LRrideHeight"));
     let full_rr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("RRrideHeight"));
-    let full_cfsr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("CFSRrideHeight"));
+    let full_cfsr_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("CFSRrideHeight"))
+        .or_else(|| extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("CFrideHeight")));
 
     // Check if car is a NASCAR NextGen cup car (requires -0.50" / -0.0127m Left Rear ride height datum calibration)
     let is_nextgen = is_nascar_nextgen(&metadata.car_name, &yaml_str);
@@ -2059,7 +2060,8 @@ pub fn compute_driver_inputs(
 /// Formulas:
 /// - Front RH = (LF + RF) / 2
 /// - Rear RH = (LR + RR) / 2
-/// - Rake = Rear RH - Front RH  (Positive = tail-up / nose-down rake)
+/// - Rake = ((LR Ride Height + RR Ride Height) / 2) - Center Splitter Height
+///          (Positive = tail-up / nose-down rake; falls back to Rear RH - Front RH if splitter is not logged)
 /// - Left RH = (LF + LR) / 2
 /// - Right RH = (RF + RR) / 2
 /// - Side Rake = Left RH - Right RH
@@ -2102,8 +2104,15 @@ pub fn compute_suspension_dynamics(
         _ => None,
     };
 
-    let rake_mm = match (&rear_rh_mm, &front_rh_mm) {
-        (Some(rear), Some(front)) => Some(
+    // Rake equation: ((LR Ride Height + RR Ride Height) / 2) - Center Splitter Height
+    let rake_mm = match (&rear_rh_mm, &cfsr_rh_mm, &front_rh_mm) {
+        (Some(rear), Some(cfsr), _) => Some(
+            rear.iter()
+                .zip(cfsr.iter())
+                .map(|(&r, &c)| r - c)
+                .collect::<Vec<f32>>(),
+        ),
+        (Some(rear), None, Some(front)) => Some(
             rear.iter()
                 .zip(front.iter())
                 .map(|(&r, &f)| r - f)
@@ -3535,11 +3544,11 @@ mod tests {
     /// 2. Confirms sign conventions on longitudinal rake (nose-down compression vs. rebound) & side rake
     #[test]
     fn test_rake_and_side_rake_sign_conventions() {
-        // Tick 0: Nose-down compression under braking (LF=25mm, RF=25mm -> Front=25mm; LR=60mm, RR=60mm -> Rear=60mm)
-        // Expected Longitudinal Rake = Rear(60) - Front(25) = +35.0 mm (Positive = tail-up / nose-down)
-        // Tick 1: Nose-up under hard acceleration / crest rebound (LF=55mm, RF=55mm -> Front=55mm; LR=40mm, RR=40mm -> Rear=40mm)
-        // Expected Longitudinal Rake = Rear(40) - Front(55) = -15.0 mm (Negative = nose-up / squat)
-        // Tick 2: Left-turn lateral roll (right side compressed: LF=45mm, LR=55mm -> Left=50mm; RF=25mm, RR=35mm -> Right=30mm)
+        // Tick 0: Nose-down compression under braking (LF=25mm, RF=25mm -> Front=25mm; LR=60mm, RR=60mm -> Rear=60mm; Splitter=20mm)
+        // Expected Longitudinal Rake = Rear(60) - Center Splitter(20) = +40.0 mm (Positive = tail-up / nose-down)
+        // Tick 1: Nose-up under hard acceleration / crest rebound (LF=55mm, RF=55mm -> Front=55mm; LR=40mm, RR=40mm -> Rear=40mm; Splitter=50mm)
+        // Expected Longitudinal Rake = Rear(40) - Center Splitter(50) = -10.0 mm (Negative = nose-up / squat)
+        // Tick 2: Left-turn lateral roll (right side compressed: LF=45mm, LR=55mm -> Left=50mm; RF=25mm, RR=35mm -> Right=30mm; Splitter=30mm)
         // Expected Side Rake = Left(50) - Right(30) = +20.0 mm; Front Split = 45 - 25 = +20.0 mm; Rear Split = 55 - 35 = +20.0 mm
         let lf_m = Some(vec![0.025, 0.055, 0.045]);
         let rf_m = Some(vec![0.025, 0.055, 0.025]);
@@ -3547,18 +3556,32 @@ mod tests {
         let rr_m = Some(vec![0.060, 0.040, 0.035]);
         let cfsr_m = Some(vec![0.020, 0.050, 0.030]);
 
-        let susp = compute_suspension_dynamics(lf_m, rf_m, lr_m, rr_m, cfsr_m);
+        let susp = compute_suspension_dynamics(lf_m.clone(), rf_m.clone(), lr_m.clone(), rr_m.clone(), cfsr_m);
 
         let rake = susp.rake_mm.as_ref().expect("Rake must be computed");
         assert!(
-            (rake[0] - 35.0).abs() < 1e-3,
-            "Nose-down compression must yield positive rake (+35mm), got {}",
+            (rake[0] - 40.0).abs() < 1e-3,
+            "Nose-down compression with splitter must yield positive rake (+40mm), got {}",
             rake[0]
         );
         assert!(
-            (rake[1] - (-15.0)).abs() < 1e-3,
-            "Nose-up rebound/squat must yield negative rake (-15mm), got {}",
+            (rake[1] - (-10.0)).abs() < 1e-3,
+            "Nose-up rebound/squat with splitter must yield negative rake (-10mm), got {}",
             rake[1]
+        );
+
+        // Fallback test: when splitter height is not logged, fallback to Rear RH - Front RH
+        let susp_fallback = compute_suspension_dynamics(lf_m, rf_m, lr_m, rr_m, None);
+        let rake_fallback = susp_fallback.rake_mm.as_ref().expect("Fallback rake must be computed");
+        assert!(
+            (rake_fallback[0] - 35.0).abs() < 1e-3,
+            "Fallback without splitter must yield Rear(60) - Front(25) = +35mm, got {}",
+            rake_fallback[0]
+        );
+        assert!(
+            (rake_fallback[1] - (-15.0)).abs() < 1e-3,
+            "Fallback without splitter must yield Rear(40) - Front(55) = -15mm, got {}",
+            rake_fallback[1]
         );
 
         let side_rake = susp.side_rake_mm.as_ref().expect("Side rake must be computed");
@@ -3569,6 +3592,34 @@ mod tests {
         assert!((front_split[2] - 20.0).abs() < 1e-3);
         assert!((rear_split[2] - 20.0).abs() < 1e-3);
         assert!(susp.cfsr_rh_mm.is_some());
+    }
+
+    /// Confirms exact rake equation: ((LR Ride Height [in] + RR Ride Height [in]) / 2) - Center Splitter Height [in]
+    #[test]
+    fn test_rake_equation_lr_rr_avg_minus_center_splitter() {
+        // Sample in inches:
+        // LR = 3.50 in (0.0889 m), RR = 3.70 in (0.09398 m) -> Rear Avg = 3.60 in (0.09144 m = 91.44 mm)
+        // Center Splitter = 1.10 in (0.02794 m = 27.94 mm)
+        // Expected Rake = 3.60 in - 1.10 in = +2.50 in = 63.50 mm
+        let lr_m = Some(vec![0.0889]);
+        let rr_m = Some(vec![0.09398]);
+        let cfsr_m = Some(vec![0.02794]);
+        let lf_m = Some(vec![0.050]);
+        let rf_m = Some(vec![0.050]);
+
+        let susp = compute_suspension_dynamics(lf_m, rf_m, lr_m, rr_m, cfsr_m);
+        let rake = susp.rake_mm.expect("Rake must be computed");
+        let rake_inches = rake[0] * MM_TO_INCHES;
+        assert!(
+            (rake_inches - 2.50).abs() < 1e-3,
+            "Rake in inches must equal ((3.5 + 3.7)/2) - 1.1 = 2.50 in, got {:.4}",
+            rake_inches
+        );
+        assert!(
+            (rake[0] - 63.50).abs() < 1e-2,
+            "Rake in mm must equal 63.50 mm, got {:.4}",
+            rake[0]
+        );
     }
 
     /// 3. Confirms total shock histogram percentages sum to 100% (± 0.01%) per corner

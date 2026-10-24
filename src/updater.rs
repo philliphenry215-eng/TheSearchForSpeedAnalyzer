@@ -79,14 +79,31 @@ impl UpdateChecker {
             return;
         }
 
-        // Prefer the per-user installer; fall back to the raw binary for older releases.
-        let (url, kind, total_size) = match (&info.installer_download_url, &info.binary_download_url) {
-            (Some(u), _) => (u.clone(), PendingKind::Installer, info.installer_size),
-            (None, Some(u)) => (u.clone(), PendingKind::Binary, info.binary_size),
-            (None, None) => {
-                // No downloadable asset found in release, fallback to browser
-                open_browser(&info.html_url);
-                return;
+        // If the current folder was installed by Inno Setup (unins000.exe present), prefer the
+        // installer (which will be given /DIR=<current_dir> so custom C:/D:/E: paths stay in place).
+        // If running as a standalone portable .exe on C:/D:/E:/Desktop, prefer in-place binary swap.
+        let is_setup_install = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("unins000.exe").exists() || d.join("unins001.exe").exists()))
+            .unwrap_or(false);
+
+        let (url, kind, total_size) = if is_setup_install {
+            match (&info.installer_download_url, &info.binary_download_url) {
+                (Some(u), _) => (u.clone(), PendingKind::Installer, info.installer_size),
+                (None, Some(u)) => (u.clone(), PendingKind::Binary, info.binary_size),
+                (None, None) => {
+                    open_browser(&info.html_url);
+                    return;
+                }
+            }
+        } else {
+            match (&info.binary_download_url, &info.installer_download_url) {
+                (Some(u), _) => (u.clone(), PendingKind::Binary, info.binary_size),
+                (None, Some(u)) => (u.clone(), PendingKind::Installer, info.installer_size),
+                (None, None) => {
+                    open_browser(&info.html_url);
+                    return;
+                }
             }
         };
 
@@ -414,15 +431,48 @@ pub fn apply_update_and_restart() -> Result<(), String> {
     }
 }
 
-/// Runs the per-user installer silently once this process has exited.
-/// `/RELAUNCH` is a custom switch handled in installer.iss that starts the app after install.
+/// Runs the Inno Setup installer silently once this process has exited, targeting the
+/// current application directory (`/DIR=...`) so custom C:/D:/E: drive installs stay in place.
+/// If the target directory is protected (e.g. `C:\Program Files`), elevates via UAC (`-Verb RunAs`)
+/// for the install step and then relaunches the app unelevated.
 fn launch_installer(setup_path: &Path) -> Result<(), String> {
-    let script = format!(
-        "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
-         Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/RELAUNCH'",
-        pid = std::process::id(),
-        setup = ps_quote(setup_path),
-    );
+    let current_exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot locate current executable: {}", e))?;
+    let exe_dir = current_exe
+        .parent()
+        .ok_or_else(|| "Cannot locate application folder".to_string())?;
+
+    let dir_arg = format!("/DIR={}", exe_dir.to_string_lossy());
+    let dir_arg_quoted = format!("'{}'", dir_arg.replace('\'', "''"));
+    let needs_admin = !is_dir_writable(exe_dir);
+
+    let script = if needs_admin {
+        format!(
+            "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
+             try {{ \
+               $p = Start-Process -FilePath {setup} -Verb RunAs -Wait -PassThru \
+                    -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART',{dir_arg}; \
+               if ($p.ExitCode -ne 0) {{ throw 'installer failed' }}; \
+               Start-Process -FilePath {cur} \
+             }} catch {{ \
+               Start-Process -FilePath {cur} -ArgumentList '{cancel_flag}' \
+             }}",
+            pid = std::process::id(),
+            setup = ps_quote(setup_path),
+            dir_arg = dir_arg_quoted,
+            cur = ps_quote(&current_exe),
+            cancel_flag = UPDATE_CANCELLED_ARG,
+        )
+    } else {
+        format!(
+            "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
+             Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/RELAUNCH',{dir_arg}",
+            pid = std::process::id(),
+            setup = ps_quote(setup_path),
+            dir_arg = dir_arg_quoted,
+        )
+    };
+
     spawn_hidden_powershell(&script)
         .map_err(|e| format!("Failed to launch installer: {}", e))?;
     std::process::exit(0);

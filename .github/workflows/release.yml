@@ -78,9 +78,8 @@ jobs:
           draft: false
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
-          # The in-app updater downloads and runs the per-user installer (installs to %LOCALAPPDATA%, no admin).
-          # TRANSITION: the raw exe is published for this one release only, so v0.3.1-and-older clients
-          # (whose updater only knows the raw exe) can auto-update. Remove BINARY_NAME in the next release.
+          # Publish both the Inno Setup installer (*-Setup.exe) and standalone portable binary (*.exe)
+          # so both Setup installs and standalone C:/D:/E: portable installs can auto-update in place.
           files: |
             ${{ env.INSTALLER_NAME }}
             ${{ env.BINARY_NAME }}

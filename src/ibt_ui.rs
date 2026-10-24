@@ -1263,10 +1263,15 @@ impl IbtTelemetryLabState {
                 green,
             );
 
+            let rake_card_title = if susp.cfsr_stats_mm.is_some() {
+                "DYNAMIC PITCH RAKE (REAR - SPLITTER)"
+            } else {
+                "DYNAMIC PITCH RAKE (REAR - FRONT)"
+            };
             draw_kpi_card(
                 &mut cols[2],
                 settings,
-                "DYNAMIC PITCH RAKE (REAR - FRONT)",
+                rake_card_title,
                 &format!("{:+.2} {}", susp.rake_stats_mm.avg * scale, unit),
                 &format!(
                     "Range: {:+.2} to {:+.2} {} (+Nose-Down)",
@@ -1456,19 +1461,29 @@ impl IbtTelemetryLabState {
             ui.add_space(6.0);
         }
 
-        // Lane 3: Dynamic Pitch / Longitudinal Rake = Rear RH - Front RH
+        // Lane 3: Dynamic Pitch / Longitudinal Rake = ((LR + RR)/2) - Center Splitter
         let rake_a_s = scale_vec(&norm_a.rake_mm);
         let rake_b_s = comparison.and_then(|c| scale_vec(&c.lap_b.rake_mm));
         if let Some(ref ra) = rake_a_s {
+            let trace_label_a = if norm_a.cfsr_rh_mm.is_some() {
+                "Longitudinal Rake [A] (Rear - Splitter)"
+            } else {
+                "Longitudinal Rake [A] (Rear - Front)"
+            };
             let mut series = vec![TraceSeries {
-                label: "Longitudinal Rake [A] (Rear - Front)",
+                label: trace_label_a,
                 data: ra,
                 color: primary,
                 stroke_width: 2.0,
             }];
             if let Some(ref rb) = rake_b_s {
+                let trace_label_b = if comparison.as_ref().and_then(|c| c.lap_b.cfsr_rh_mm.as_ref()).is_some() {
+                    "Longitudinal Rake [B] (Rear - Splitter)"
+                } else {
+                    "Longitudinal Rake [B] (Rear - Front)"
+                };
                 series.push(TraceSeries {
-                    label: "Longitudinal Rake [B]",
+                    label: trace_label_b,
                     data: rb,
                     color: secondary,
                     stroke_width: 1.5,
@@ -2959,16 +2974,26 @@ pub fn format_ibt_engineering_report_tsv(
     out.push_str("\nSUSPENSION RIDE HEIGHTS & RAKE (MM)\n");
     out.push_str("Metric\tMin (mm)\tAvg (mm)\tMax (mm)\n");
     let s = &lap_a.suspension;
-    for (name, st) in [
+    let rake_metric_name = if s.cfsr_stats_mm.is_some() {
+        "Pitch Rake (Rear - Splitter)"
+    } else {
+        "Pitch Rake (Rear - Front)"
+    };
+    let mut metrics = vec![
         ("LF Ride Height", s.lf_stats_mm),
         ("RF Ride Height", s.rf_stats_mm),
         ("LR Ride Height", s.lr_stats_mm),
         ("RR Ride Height", s.rr_stats_mm),
-        ("Front RH Avg", s.front_rh_stats_mm),
-        ("Rear RH Avg", s.rear_rh_stats_mm),
-        ("Pitch Rake (Rear - Front)", s.rake_stats_mm),
-        ("Side Rake (Left - Right)", s.side_rake_stats_mm),
-    ] {
+    ];
+    if let Some(cfsr) = s.cfsr_stats_mm {
+        metrics.push(("Center Splitter (CFSR)", cfsr));
+    }
+    metrics.push(("Front RH Avg", s.front_rh_stats_mm));
+    metrics.push(("Rear RH Avg", s.rear_rh_stats_mm));
+    metrics.push((rake_metric_name, s.rake_stats_mm));
+    metrics.push(("Side Rake (Left - Right)", s.side_rake_stats_mm));
+
+    for (name, st) in metrics {
         out.push_str(&format!("{}\t{:.2}\t{:.2}\t{:.2}\n", name, st.min, st.avg, st.max));
     }
 
