@@ -1,8 +1,8 @@
 use crate::ibt::{
-    build_demo_ibt_session, compare_laps, default_telemetry_dir, normalize_lap, parse_ibt_file,
-    scan_ibt_directory, DamperRegime, IbtFileEntry, IbtSession, LapAnalysis, LapComparisonReport,
-    NormalizedLapTrace, ShockCornerData, TireCornerAnalysis, TireTempSource, KPA_TO_PSI,
-    MM_TO_INCHES,
+    build_demo_ibt_session, check_ibt_comparison_compatibility, compare_laps, default_telemetry_dir,
+    normalize_lap, parse_ibt_file, scan_ibt_directory, DamperRegime, IbtFileEntry, IbtSession,
+    LapAnalysis, LapComparisonReport, NormalizedLapTrace, ShockCornerData, TireCornerAnalysis,
+    TireTempSource, KPA_TO_PSI, MM_TO_INCHES,
 };
 use crate::settings::AppSettings;
 use crate::{display_font, format_time, with_alpha};
@@ -26,9 +26,16 @@ pub enum XAxisMode {
     LapDistMeters,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoadTarget {
+    Primary,
+    Reference,
+}
+
 enum LoadWorkerState {
     Idle,
     Loading {
+        target: LoadTarget,
         file_name: String,
         rx: Receiver<Result<IbtSession, String>>,
     },
@@ -54,6 +61,8 @@ pub struct IbtTelemetryLabState {
     pub file_filter: String,
     pub selected_file_path: Option<PathBuf>,
     pub session: Option<IbtSession>,
+    pub reference_file_path: Option<PathBuf>,
+    pub reference_session: Option<IbtSession>,
     pub active_tab: IbtAnalysisTab,
     pub selected_lap_a_idx: usize,
     pub compare_enabled: bool,
@@ -76,6 +85,8 @@ impl Default for IbtTelemetryLabState {
             file_filter: String::new(),
             selected_file_path: None,
             session: None,
+            reference_file_path: None,
+            reference_session: None,
             active_tab: IbtAnalysisTab::InputsAndSpeed,
             selected_lap_a_idx: 0,
             compare_enabled: false,
@@ -104,18 +115,29 @@ impl IbtTelemetryLabState {
         self.scanned_files = scan_ibt_directory(&path);
     }
 
-    pub fn trigger_load_file(&mut self, path: PathBuf, ctx: egui::Context) {
+    pub fn trigger_load_file(&mut self, path: PathBuf, target: LoadTarget, ctx: egui::Context) {
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("telemetry.ibt")
             .to_string();
 
-        self.selected_file_path = Some(path.clone());
+        match target {
+            LoadTarget::Primary => {
+                self.selected_file_path = Some(path.clone());
+            }
+            LoadTarget::Reference => {
+                self.reference_file_path = Some(path.clone());
+            }
+        }
         self.status_error = None;
 
         let (tx, rx) = channel();
-        self.worker = LoadWorkerState::Loading { file_name, rx };
+        self.worker = LoadWorkerState::Loading {
+            target,
+            file_name,
+            rx,
+        };
 
         thread::spawn(move || {
             let res = parse_ibt_file(&path);
@@ -124,12 +146,20 @@ impl IbtTelemetryLabState {
         });
     }
 
-    pub fn trigger_load_demo(&mut self, ctx: egui::Context) {
-        self.selected_file_path = None;
+    pub fn trigger_load_demo(&mut self, target: LoadTarget, ctx: egui::Context) {
+        match target {
+            LoadTarget::Primary => {
+                self.selected_file_path = None;
+            }
+            LoadTarget::Reference => {
+                self.reference_file_path = None;
+            }
+        }
         self.status_error = None;
 
         let (tx, rx) = channel();
         self.worker = LoadWorkerState::Loading {
+            target,
             file_name: "porsche963gtp_watkinsglen_demo.ibt".to_string(),
             rx,
         };
@@ -141,38 +171,69 @@ impl IbtTelemetryLabState {
         });
     }
 
+    pub fn clear_reference_session(&mut self) {
+        self.reference_session = None;
+        self.reference_file_path = None;
+        if let Some(ref sess) = self.session {
+            self.selected_lap_b_idx = sess
+                .fastest_lap_idx
+                .unwrap_or(0)
+                .min(sess.analyzed_laps.len().saturating_sub(1));
+        }
+    }
+
+    pub fn swap_sessions(&mut self) {
+        std::mem::swap(&mut self.session, &mut self.reference_session);
+        std::mem::swap(&mut self.selected_file_path, &mut self.reference_file_path);
+        std::mem::swap(&mut self.selected_lap_a_idx, &mut self.selected_lap_b_idx);
+    }
+
     fn poll_worker(&mut self) {
-        if let LoadWorkerState::Loading { ref rx, .. } = self.worker {
+        if let LoadWorkerState::Loading { target, ref rx, .. } = self.worker {
             if let Ok(result) = rx.try_recv() {
                 match result {
                     Ok(sess) => {
-                        let pb_idx = sess.fastest_lap_idx.unwrap_or(0);
-                        self.selected_lap_a_idx = pb_idx.min(sess.analyzed_laps.len().saturating_sub(1));
+                        match target {
+                            LoadTarget::Primary => {
+                                let pb_idx = sess.fastest_lap_idx.unwrap_or(0);
+                                self.selected_lap_a_idx = pb_idx.min(sess.analyzed_laps.len().saturating_sub(1));
 
-                        // Pick a different valid lap for Lap B comparison if possible
-                        let second_idx = sess
-                            .laps
-                            .iter()
-                            .filter(|l| l.lap_index != self.selected_lap_a_idx && l.is_complete && !l.is_out_lap)
-                            .min_by(|a, b| {
-                                a.duration_secs
-                                    .partial_cmp(&b.duration_secs)
-                                    .unwrap_or(std::cmp::Ordering::Equal)
-                            })
-                            .map(|l| l.lap_index)
-                            .unwrap_or_else(|| {
-                                if self.selected_lap_a_idx > 0 {
-                                    self.selected_lap_a_idx - 1
-                                } else {
-                                    (self.selected_lap_a_idx + 1)
-                                        .min(sess.analyzed_laps.len().saturating_sub(1))
+                                // If no reference session is loaded, default Lap B to second best lap of Session A
+                                if self.reference_session.is_none() {
+                                    let second_idx = sess
+                                        .laps
+                                        .iter()
+                                        .filter(|l| l.lap_index != self.selected_lap_a_idx && l.is_complete && !l.is_out_lap)
+                                        .min_by(|a, b| {
+                                            a.duration_secs
+                                                .partial_cmp(&b.duration_secs)
+                                                .unwrap_or(std::cmp::Ordering::Equal)
+                                        })
+                                        .map(|l| l.lap_index)
+                                        .unwrap_or_else(|| {
+                                            if self.selected_lap_a_idx > 0 {
+                                                self.selected_lap_a_idx - 1
+                                            } else {
+                                                (self.selected_lap_a_idx + 1)
+                                                    .min(sess.analyzed_laps.len().saturating_sub(1))
+                                            }
+                                        });
+
+                                    self.selected_lap_b_idx = second_idx;
+                                    self.compare_enabled = sess.analyzed_laps.len() >= 2 && second_idx != self.selected_lap_a_idx;
                                 }
-                            });
 
-                        self.selected_lap_b_idx = second_idx;
-                        self.compare_enabled = sess.analyzed_laps.len() >= 2 && second_idx != self.selected_lap_a_idx;
-                        self.session = Some(sess);
-                        self.status_error = None;
+                                self.session = Some(sess);
+                                self.status_error = None;
+                            }
+                            LoadTarget::Reference => {
+                                let pb_idx = sess.fastest_lap_idx.unwrap_or(0);
+                                self.selected_lap_b_idx = pb_idx.min(sess.analyzed_laps.len().saturating_sub(1));
+                                self.compare_enabled = true;
+                                self.reference_session = Some(sess);
+                                self.status_error = None;
+                            }
+                        }
                     }
                     Err(e) => {
                         self.status_error = Some(e);
@@ -310,7 +371,7 @@ impl IbtTelemetryLabState {
                                                     .on_hover_text("Generate and load a complete 3-lap 60Hz .ibt telemetry dataset in memory")
                                                     .clicked()
                                                 {
-                                                    self.trigger_load_demo(ctx.clone());
+                                                    self.trigger_load_demo(LoadTarget::Primary, ctx.clone());
                                                 }
                                             },
                                         );
@@ -400,20 +461,33 @@ impl IbtTelemetryLabState {
                                             .max_height(155.0)
                                             .show(ui, |ui| {
                                                 for entry in matching_files {
-                                                    let is_sel = self
+                                                    let is_sel_a = self
                                                         .selected_file_path
                                                         .as_ref()
                                                         .map_or(false, |p| p == &entry.path);
-                                                    let row_bg = if is_sel {
+                                                    let is_sel_b = self
+                                                        .reference_file_path
+                                                        .as_ref()
+                                                        .map_or(false, |p| p == &entry.path);
+
+                                                    let row_bg = if is_sel_a && is_sel_b {
+                                                        with_alpha(primary, 42)
+                                                    } else if is_sel_a {
                                                         with_alpha(primary, 32)
+                                                    } else if is_sel_b {
+                                                        with_alpha(secondary, 32)
                                                     } else {
                                                         elevated
                                                     };
-                                                    let stroke = if is_sel {
+                                                    let stroke = if is_sel_a {
                                                         egui::Stroke::new(1.0, primary)
+                                                    } else if is_sel_b {
+                                                        egui::Stroke::new(1.0, secondary)
                                                     } else {
                                                         egui::Stroke::NONE
                                                     };
+
+                                                    let mut click_load_b = false;
 
                                                     let resp = egui::Frame::none()
                                                         .fill(row_bg)
@@ -421,34 +495,171 @@ impl IbtTelemetryLabState {
                                                         .rounding(egui::Rounding::same(6.0))
                                                         .inner_margin(egui::Margin::symmetric(8.0, 5.0))
                                                         .show(ui, |ui| {
-                                                            ui.set_width(ui.available_width());
-                                                            ui.label(
-                                                                egui::RichText::new(&entry.file_name)
-                                                                    .color(if is_sel { primary } else { white })
-                                                                    .size(11.5)
-                                                                    .strong(),
-                                                            );
                                                             ui.horizontal(|ui| {
-                                                                ui.label(
-                                                                    egui::RichText::new(format!(
-                                                                        "{:.1} MB · {}",
-                                                                        entry.size_mb(),
-                                                                        entry.modified_display
-                                                                    ))
-                                                                    .color(muted)
-                                                                    .size(10.5),
-                                                                );
+                                                                ui.vertical(|ui| {
+                                                                    ui.horizontal(|ui| {
+                                                                        if is_sel_a {
+                                                                            egui::Frame::none()
+                                                                                .fill(with_alpha(primary, 60))
+                                                                                .rounding(egui::Rounding::same(3.0))
+                                                                                .inner_margin(egui::Margin::symmetric(4.0, 1.0))
+                                                                                .show(ui, |ui| {
+                                                                                    ui.label(
+                                                                                        egui::RichText::new("A")
+                                                                                            .color(primary)
+                                                                                            .strong()
+                                                                                            .size(10.0),
+                                                                                    );
+                                                                                });
+                                                                        }
+                                                                        if is_sel_b {
+                                                                            egui::Frame::none()
+                                                                                .fill(with_alpha(secondary, 60))
+                                                                                .rounding(egui::Rounding::same(3.0))
+                                                                                .inner_margin(egui::Margin::symmetric(4.0, 1.0))
+                                                                                .show(ui, |ui| {
+                                                                                    ui.label(
+                                                                                        egui::RichText::new("B")
+                                                                                            .color(secondary)
+                                                                                            .strong()
+                                                                                            .size(10.0),
+                                                                                    );
+                                                                                });
+                                                                        }
+                                                                        ui.label(
+                                                                            egui::RichText::new(&entry.file_name)
+                                                                                .color(if is_sel_a {
+                                                                                    primary
+                                                                                } else if is_sel_b {
+                                                                                    secondary
+                                                                                } else {
+                                                                                    white
+                                                                                })
+                                                                                .size(11.5)
+                                                                                .strong(),
+                                                                        );
+                                                                    });
+                                                                    ui.horizontal(|ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(format!(
+                                                                                "{:.1} MB · {}",
+                                                                                entry.size_mb(),
+                                                                                entry.modified_display
+                                                                            ))
+                                                                            .color(muted)
+                                                                            .size(10.5),
+                                                                        );
+                                                                    });
+                                                                });
+
+                                                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                                    let b_label = if is_sel_b { "Ref B ✓" } else { "Ref B" };
+                                                                    let b_btn = egui::Button::new(
+                                                                        egui::RichText::new(b_label)
+                                                                            .size(10.0)
+                                                                            .color(if is_sel_b { white } else { muted })
+                                                                            .strong(),
+                                                                    )
+                                                                    .fill(if is_sel_b {
+                                                                        with_alpha(secondary, 180)
+                                                                    } else {
+                                                                        with_alpha(elevated, 200)
+                                                                    })
+                                                                    .rounding(egui::Rounding::same(4.0));
+
+                                                                    if ui
+                                                                        .add(b_btn)
+                                                                        .on_hover_text("Load this file as Reference Session (Lap B comparison)")
+                                                                        .clicked()
+                                                                    {
+                                                                        click_load_b = true;
+                                                                    }
+                                                                });
                                                             });
                                                         })
                                                         .response
                                                         .interact(egui::Sense::click());
 
-                                                    if resp.clicked() {
-                                                        self.trigger_load_file(entry.path.clone(), ctx.clone());
+                                                    if click_load_b {
+                                                        self.trigger_load_file(entry.path.clone(), LoadTarget::Reference, ctx.clone());
+                                                    } else if resp.clicked() {
+                                                        self.trigger_load_file(entry.path.clone(), LoadTarget::Primary, ctx.clone());
                                                     }
+
+                                                    resp.context_menu(|ui| {
+                                                        if ui.button("Load as Session A (Primary)").clicked() {
+                                                            self.trigger_load_file(entry.path.clone(), LoadTarget::Primary, ctx.clone());
+                                                            ui.close_menu();
+                                                        }
+                                                        if ui.button("Load as Reference Session (B)").clicked() {
+                                                            self.trigger_load_file(entry.path.clone(), LoadTarget::Reference, ctx.clone());
+                                                            ui.close_menu();
+                                                        }
+                                                    });
+
                                                     ui.add_space(3.0);
                                                 }
                                             });
+
+                                        let mut do_clear_ref = false;
+                                        let mut do_swap = false;
+
+                                        if self.reference_session.is_some() {
+                                            let ref_name = self
+                                                .reference_file_path
+                                                .as_ref()
+                                                .and_then(|p| p.file_name().and_then(|n| n.to_str()))
+                                                .unwrap_or("Demo Reference")
+                                                .to_string();
+
+                                            ui.add_space(4.0);
+                                            egui::Frame::none()
+                                                .fill(with_alpha(secondary, 28))
+                                                .stroke(egui::Stroke::new(1.0, with_alpha(secondary, 140)))
+                                                .rounding(egui::Rounding::same(6.0))
+                                                .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                                                .show(ui, |ui| {
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(
+                                                            egui::RichText::new("Ref B:")
+                                                                .color(secondary)
+                                                                .strong()
+                                                                .size(11.0),
+                                                        );
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                egui::RichText::new(&ref_name)
+                                                                    .color(white)
+                                                                    .size(11.0),
+                                                            )
+                                                            .truncate(true),
+                                                        );
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            if ui
+                                                                .button(egui::RichText::new("×").color(muted).size(12.0))
+                                                                .on_hover_text("Unload Reference Session")
+                                                                .clicked()
+                                                            {
+                                                                do_clear_ref = true;
+                                                            }
+                                                            if ui
+                                                                .button(egui::RichText::new("Swap").color(white).size(11.0))
+                                                                .on_hover_text("Swap Session A and Reference Session B")
+                                                                .clicked()
+                                                            {
+                                                                do_swap = true;
+                                                            }
+                                                        });
+                                                    });
+                                                });
+                                        }
+
+                                        if do_clear_ref {
+                                            self.clear_reference_session();
+                                        }
+                                        if do_swap {
+                                            self.swap_sessions();
+                                        }
                                     }
                                 });
 
@@ -607,44 +818,76 @@ impl IbtTelemetryLabState {
                                             }
                                         });
 
-                                        if self.compare_enabled && sess.laps.len() >= 2 {
+                                        let is_cross_file = self.reference_session.is_some();
+                                        if self.compare_enabled && (is_cross_file || sess.laps.len() >= 2) {
                                             ui.add_space(4.0);
                                             ui.horizontal(|ui| {
+                                                let label = if is_cross_file { "Target (Ref B):" } else { "Target (Lap B):" };
                                                 ui.label(
-                                                    egui::RichText::new("Target (Lap B):")
+                                                    egui::RichText::new(label)
                                                         .color(secondary)
                                                         .size(11.5)
                                                         .strong(),
                                                 );
-                                                let cur_b_label = sess
-                                                    .laps
-                                                    .get(self.selected_lap_b_idx)
-                                                    .map(|l| {
-                                                        format!(
-                                                            "Lap {} ({}) [{}]",
-                                                            l.lap_number,
-                                                            format_time(l.duration_secs),
-                                                            l.status_badge()
-                                                        )
-                                                    })
-                                                    .unwrap_or_else(|| "Select Lap B".to_string());
+                                                let cur_b_label = if let Some(ref ref_sess) = self.reference_session {
+                                                    ref_sess
+                                                        .laps
+                                                        .get(self.selected_lap_b_idx)
+                                                        .map(|l| {
+                                                            format!(
+                                                                "[Ref] L{} ({}) [{}]",
+                                                                l.lap_number,
+                                                                format_time(l.duration_secs),
+                                                                l.status_badge()
+                                                            )
+                                                        })
+                                                        .unwrap_or_else(|| "Select Ref Lap B".to_string())
+                                                } else {
+                                                    sess.laps
+                                                        .get(self.selected_lap_b_idx)
+                                                        .map(|l| {
+                                                            format!(
+                                                                "Lap {} ({}) [{}]",
+                                                                l.lap_number,
+                                                                format_time(l.duration_secs),
+                                                                l.status_badge()
+                                                            )
+                                                        })
+                                                        .unwrap_or_else(|| "Select Lap B".to_string())
+                                                };
 
                                                 egui::ComboBox::from_id_source("ibt_lap_b_combo")
                                                     .selected_text(cur_b_label)
                                                     .width(185.0)
                                                     .show_ui(ui, |ui| {
-                                                        for l in &sess.laps {
-                                                            let text = format!(
-                                                                "Lap {} · {} ({})",
-                                                                l.lap_number,
-                                                                format_time(l.duration_secs),
-                                                                l.status_badge()
-                                                            );
-                                                            ui.selectable_value(
-                                                                &mut self.selected_lap_b_idx,
-                                                                l.lap_index,
-                                                                text,
-                                                            );
+                                                        if let Some(ref ref_sess) = self.reference_session {
+                                                            for l in &ref_sess.laps {
+                                                                let text = format!(
+                                                                    "[Ref] Lap {} · {} ({})",
+                                                                    l.lap_number,
+                                                                    format_time(l.duration_secs),
+                                                                    l.status_badge()
+                                                                );
+                                                                ui.selectable_value(
+                                                                    &mut self.selected_lap_b_idx,
+                                                                    l.lap_index,
+                                                                    text,
+                                                                );
+                                                            }
+                                                        } else {
+                                                            for l in &sess.laps {
+                                                                let text = format!(
+                                                                    "Lap {} · {} ({})",
+                                                                    l.lap_number,
+                                                                    format_time(l.duration_secs),
+                                                                    l.status_badge()
+                                                                );
+                                                                ui.selectable_value(
+                                                                    &mut self.selected_lap_b_idx,
+                                                                    l.lap_index,
+                                                                    text,
+                                                                );
+                                                            }
                                                         }
                                                     });
                                             });
@@ -812,7 +1055,7 @@ impl IbtTelemetryLabState {
                                         .fill(primary)
                                         .min_size(egui::vec2(340.0, 38.0));
                                         if ui.add(btn).clicked() {
-                                            self.trigger_load_demo(ctx.clone());
+                                            self.trigger_load_demo(LoadTarget::Primary, ctx.clone());
                                         }
                                         ui.add_space(40.0);
                                     });
@@ -821,13 +1064,28 @@ impl IbtTelemetryLabState {
                         }
                     };
 
+                    let ref_sess_opt = self.reference_session.clone();
+                    let mut do_clear_ref = false;
+                    let mut do_swap = false;
+
                     let lap_a_idx = self.selected_lap_a_idx.min(sess.analyzed_laps.len() - 1);
                     let lap_a = &sess.analyzed_laps[lap_a_idx];
-                    let lap_b = if self.compare_enabled && sess.analyzed_laps.len() >= 2 {
+
+                    let (lap_b, compatibility_warning) = if let Some(ref ref_sess) = ref_sess_opt {
+                        let compat = check_ibt_comparison_compatibility(&sess, ref_sess);
+                        if let Some(warn) = compat.warning_message() {
+                            (None, Some(warn))
+                        } else if self.compare_enabled && !ref_sess.analyzed_laps.is_empty() {
+                            let b_idx = self.selected_lap_b_idx.min(ref_sess.analyzed_laps.len() - 1);
+                            (Some(&ref_sess.analyzed_laps[b_idx]), None)
+                        } else {
+                            (None, None)
+                        }
+                    } else if self.compare_enabled && sess.analyzed_laps.len() >= 2 {
                         let b_idx = self.selected_lap_b_idx.min(sess.analyzed_laps.len() - 1);
-                        Some(&sess.analyzed_laps[b_idx])
+                        (Some(&sess.analyzed_laps[b_idx]), None)
                     } else {
-                        None
+                        (None, None)
                     };
 
                     let norm_a = normalize_lap(lap_a, 300);
@@ -837,6 +1095,60 @@ impl IbtTelemetryLabState {
                         .id_source("ibt_right_canvas_scroll")
                         .max_height(avail_h)
                         .show(ui, |ui| {
+                            if let Some(ref warn) = compatibility_warning {
+                                egui::Frame::none()
+                                    .fill(with_alpha(amber, 24))
+                                    .stroke(egui::Stroke::new(1.0, amber))
+                                    .rounding(egui::Rounding::same(8.0))
+                                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new("⚠").size(16.0));
+                                            ui.vertical(|ui| {
+                                                ui.label(egui::RichText::new(warn).color(white).size(12.0).strong());
+                                                ui.label(
+                                                    egui::RichText::new("Telemetry comparison overlay disabled until compatible files are loaded. Primary Session A is still displayed below.")
+                                                        .color(muted)
+                                                        .size(11.0),
+                                                );
+                                            });
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                if ui.button(egui::RichText::new("× Unload Ref").color(white).size(11.5)).clicked() {
+                                                    do_clear_ref = true;
+                                                }
+                                            });
+                                        });
+                                    });
+                                ui.add_space(8.0);
+                            } else if let Some(ref ref_sess) = ref_sess_opt {
+                                if let Some(lb) = lap_b {
+                                    let ref_meta = &ref_sess.metadata;
+                                    egui::Frame::none()
+                                        .fill(with_alpha(secondary, 22))
+                                        .stroke(egui::Stroke::new(1.0, with_alpha(secondary, 120)))
+                                        .rounding(egui::Rounding::same(8.0))
+                                        .inner_margin(egui::Margin::symmetric(12.0, 7.0))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new("⚖ CROSS-FILE COMPARISON ACTIVE:").color(secondary).strong().size(11.5));
+                                                ui.label(egui::RichText::new(format!(
+                                                    "Session A [Gold]: {} (L{} · {}) vs Ref B [Blue]: {} (L{} · {})",
+                                                    sess.metadata.setup_name, lap_a.descriptor.lap_number, format_time(lap_a.descriptor.duration_secs),
+                                                    ref_meta.setup_name, lb.descriptor.lap_number, format_time(lb.descriptor.duration_secs),
+                                                )).color(white).size(11.5));
+                                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                    if ui.button(egui::RichText::new("× Unload Ref").color(muted).size(11.0)).clicked() {
+                                                        do_clear_ref = true;
+                                                    }
+                                                    if ui.button(egui::RichText::new("Swap A / B").color(white).size(11.0)).clicked() {
+                                                        do_swap = true;
+                                                    }
+                                                });
+                                            });
+                                        });
+                                    ui.add_space(8.0);
+                                }
+                            }
                             match self.active_tab {
                                 IbtAnalysisTab::InputsAndSpeed => {
                                     self.render_inputs_and_speed_tab(

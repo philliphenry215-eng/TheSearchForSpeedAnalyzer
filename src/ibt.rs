@@ -208,6 +208,7 @@ pub struct IbtSessionMetadata {
     pub session_duration_secs: f64,
     pub channel_count: usize,
     pub is_nextgen_lr_offset_applied: bool,
+    pub raw_yaml: String,
 }
 
 #[derive(Clone, Debug)]
@@ -698,6 +699,116 @@ pub fn is_nascar_nextgen(car_name: &str, yaml_str: &str) -> bool {
         || (cn.contains("nascar")
             && (cn.contains("camaro") || cn.contains("mustang") || cn.contains("camry") || cn.contains("cup"))
             && yl.contains("tiresaero"))
+}
+
+/// Returns true if the vehicle in this session is a NASCAR Xfinity Series car.
+pub fn is_nascar_xfinity(car_name: &str, yaml_str: &str) -> bool {
+    let cn = car_name.to_lowercase();
+    let yl = yaml_str.to_lowercase();
+    cn.contains("xfinity")
+        || yl.contains("xfinity")
+        || (cn.contains("nascar")
+            && (cn.contains("supra") || cn.contains("camaro") || cn.contains("mustang"))
+            && (yl.contains("stockcar_") || yl.contains("xfinity")))
+}
+
+/// Returns true if the vehicle in this session is a NASCAR Craftsman Truck Series vehicle.
+pub fn is_nascar_trucks(car_name: &str, yaml_str: &str) -> bool {
+    let cn = car_name.to_lowercase();
+    let yl = yaml_str.to_lowercase();
+    (cn.contains("truck") || yl.contains("truck") || cn.contains("silverado") || cn.contains("tundra") || cn.contains("f150") || cn.contains("f-150"))
+        && (cn.contains("nascar") || yl.contains("truck") || cn.contains("craftsman") || cn.contains("camping world"))
+}
+
+/// Returns true if the vehicle in this session is a NASCAR ARCA Menards car.
+pub fn is_nascar_arca(car_name: &str, yaml_str: &str) -> bool {
+    let cn = car_name.to_lowercase();
+    let yl = yaml_str.to_lowercase();
+    cn.contains("arca") || yl.contains("arca")
+}
+
+/// Evaluates whether two car models are compatible for vehicle dynamics & telemetry overlay.
+/// When comparing telemetry, the cars must be the same vehicle model, UNLESS they belong to a
+/// spec motorsport chassis series (like NASCAR NextGen Cup, NASCAR Xfinity, Craftsman Trucks, or ARCA)
+/// where the manufacturer badge differs (Chevy, Ford, Toyota) but the underlying Dallara/NASCAR spec
+/// chassis, suspension, ride heights, rake, and aerodynamic geometries are identical.
+pub fn are_cars_compatible(car_a: &str, yaml_a: &str, car_b: &str, yaml_b: &str) -> bool {
+    if crate::stint_db::cars_match(car_a, car_b) {
+        return true;
+    }
+    // NASCAR NextGen Cup cars (Chevy Camaro ZL1, Ford Mustang Dark Horse, Toyota Camry XSE)
+    if is_nascar_nextgen(car_a, yaml_a) && is_nascar_nextgen(car_b, yaml_b) {
+        return true;
+    }
+    // NASCAR Xfinity Series (Chevy Camaro, Ford Mustang, Toyota Supra)
+    if is_nascar_xfinity(car_a, yaml_a) && is_nascar_xfinity(car_b, yaml_b) {
+        return true;
+    }
+    // NASCAR Craftsman Truck Series (Silverado, F-150, Tundra)
+    if is_nascar_trucks(car_a, yaml_a) && is_nascar_trucks(car_b, yaml_b) {
+        return true;
+    }
+    // NASCAR ARCA Menards Series
+    if is_nascar_arca(car_a, yaml_a) && is_nascar_arca(car_b, yaml_b) {
+        return true;
+    }
+    false
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IbtComparisonCompatibility {
+    Compatible,
+    DifferentTracks { track_a: String, track_b: String },
+    DifferentCars { car_a: String, car_b: String },
+}
+
+impl IbtComparisonCompatibility {
+    pub fn is_compatible(&self) -> bool {
+        matches!(self, Self::Compatible)
+    }
+
+    pub fn warning_message(&self) -> Option<String> {
+        match self {
+            Self::Compatible => None,
+            Self::DifferentTracks { track_a, track_b } => Some(format!(
+                "Cannot compare telemetry: Files are from different tracks (Session A: \"{}\" vs Ref B: \"{}\"). Telemetry comparison requires the same circuit.",
+                track_a, track_b
+            )),
+            Self::DifferentCars { car_a, car_b } => Some(format!(
+                "Cannot compare telemetry: Files are from different vehicle platforms (Session A: \"{}\" vs Ref B: \"{}\"). Telemetry comparison requires the same vehicle or NASCAR spec series.",
+                car_a, car_b
+            )),
+        }
+    }
+}
+
+/// Checks compatibility between two loaded .IBT sessions for telemetry comparison.
+/// Requires both files to share the same track, and the same car model (or matching NASCAR spec series).
+pub fn check_ibt_comparison_compatibility(
+    sess_a: &IbtSession,
+    sess_b: &IbtSession,
+) -> IbtComparisonCompatibility {
+    let track_a = &sess_a.metadata.track_display_name;
+    let track_b = &sess_b.metadata.track_display_name;
+
+    if !crate::stint_db::tracks_match(track_a, track_b) {
+        return IbtComparisonCompatibility::DifferentTracks {
+            track_a: track_a.clone(),
+            track_b: track_b.clone(),
+        };
+    }
+
+    let car_a = &sess_a.metadata.car_name;
+    let car_b = &sess_b.metadata.car_name;
+
+    if !are_cars_compatible(car_a, &sess_a.metadata.raw_yaml, car_b, &sess_b.metadata.raw_yaml) {
+        return IbtComparisonCompatibility::DifferentCars {
+            car_a: car_a.clone(),
+            car_b: car_b.clone(),
+        };
+    }
+
+    IbtComparisonCompatibility::Compatible
 }
 
 /// Classifies the track location (turn, apex, straightaway) from track distance percentage and optional lateral acceleration.
@@ -1370,6 +1481,7 @@ fn parse_yaml_metadata(yaml_str: &str) -> IbtSessionMetadata {
         wind_speed: "—".to_string(),
         wind_dir: "—".to_string(),
         relative_humidity: "—".to_string(),
+        raw_yaml: yaml_str.to_string(),
         ..Default::default()
     };
 
@@ -3938,5 +4050,201 @@ CarSetup:
             "Peak track loc must reflect peak cornering load, got '{}'",
             rf.peak_track_loc
         );
+    }
+
+    #[test]
+    fn test_spec_series_car_compatibility() {
+        // 1. Identical cars
+        assert!(are_cars_compatible("porsche963gtp", "", "porsche963gtp", ""));
+        assert!(are_cars_compatible("ferrari 296 gt3", "", "ferrari 296 gt3", ""));
+
+        // 2. NASCAR NextGen Cup cars (Camaro, Mustang, Camry)
+        let camaro_cup = "NASCAR Cup Series Next Gen Chevrolet Camaro ZL1";
+        let mustang_cup = "NASCAR Cup Series Next Gen Ford Mustang";
+        let camry_cup = "NASCAR Cup Series Next Gen Toyota Camry";
+        let nextgen_yaml_chevy = "CarPath: stockcar2022_chevy\nTiresAero:";
+        let nextgen_yaml_ford = "CarPath: stockcar2022_ford\nTiresAero:";
+        let nextgen_yaml_toyota = "CarPath: stockcar2022_toyota\nTiresAero:";
+
+        assert!(are_cars_compatible(camaro_cup, nextgen_yaml_chevy, mustang_cup, nextgen_yaml_ford));
+        assert!(are_cars_compatible(mustang_cup, nextgen_yaml_ford, camry_cup, nextgen_yaml_toyota));
+        assert!(are_cars_compatible(camaro_cup, nextgen_yaml_chevy, camry_cup, nextgen_yaml_toyota));
+
+        // 3. NASCAR Xfinity Series (Camaro, Mustang, Supra)
+        let camaro_xfin = "NASCAR XFINITY Series Chevrolet Camaro";
+        let supra_xfin = "NASCAR XFINITY Series Toyota Supra";
+        let xfin_yaml = "xfinity_car";
+        assert!(are_cars_compatible(camaro_xfin, xfin_yaml, supra_xfin, xfin_yaml));
+
+        // 4. NASCAR Craftsman Trucks (Silverado, Tundra, F-150)
+        let truck_chevy = "NASCAR Craftsman Truck Series Chevrolet Silverado";
+        let truck_toyota = "NASCAR Camping World Truck Series Toyota Tundra";
+        let truck_yaml = "nascar_truck";
+        assert!(are_cars_compatible(truck_chevy, truck_yaml, truck_toyota, truck_yaml));
+
+        // 5. NASCAR ARCA Menards Series
+        let arca_chevy = "ARCA Menards Chevrolet Impala";
+        let arca_toyota = "ARCA Menards Toyota Camry";
+        let arca_yaml = "arca_stockcar";
+        assert!(are_cars_compatible(arca_chevy, arca_yaml, arca_toyota, arca_yaml));
+
+        // 6. Incompatible platforms across disciplines
+        assert!(!are_cars_compatible("Porsche 963 GTP", "", "Ferrari 296 GT3", ""));
+        assert!(!are_cars_compatible("Dallara IR18", "", "Super Formula SF23", ""));
+
+        // 7. Incompatible across different NASCAR tiers (Cup NextGen vs Xfinity vs Trucks)
+        assert!(!are_cars_compatible(camaro_cup, nextgen_yaml_chevy, camaro_xfin, xfin_yaml));
+        assert!(!are_cars_compatible(truck_chevy, truck_yaml, arca_chevy, arca_yaml));
+        assert!(!are_cars_compatible(camaro_cup, nextgen_yaml_chevy, truck_chevy, truck_yaml));
+    }
+
+    #[test]
+    fn test_check_ibt_comparison_compatibility() {
+        let defs = [
+            ("SessionTime", "Time", "s", IbtVarType::Double),
+            ("Lap", "Lap", "", IbtVarType::Int),
+            ("LapDistPct", "Pct", "%", IbtVarType::Float),
+            ("PlayerTrackSurface", "Surf", "", IbtVarType::Int),
+            ("Speed", "Speed", "m/s", IbtVarType::Float),
+        ];
+
+        let build_sess = |track: &str, car_name: &str, car_path: &str| -> IbtSession {
+            let yaml = format!(
+                "---\nWeekendInfo:\n  TrackDisplayName: \"{}\"\nDriverInfo:\n  Drivers:\n    - CarIdx: 0\n      CarScreenName: \"{}\"\n      CarPath: \"{}\"\n...\n",
+                track, car_name, car_path
+            );
+            let mut builder = SyntheticIbtBuilder::new(60, &yaml, &defs);
+            for i in 0..60 {
+                let mut row = builder.new_row();
+                builder.set_f64(&mut row, "SessionTime", i as f64 / 60.0);
+                builder.set_i32(&mut row, "Lap", 1);
+                builder.set_f32(&mut row, "LapDistPct", i as f32 / 59.0);
+                builder.set_i32(&mut row, "PlayerTrackSurface", 3);
+                builder.set_f32(&mut row, "Speed", 50.0);
+                builder.push_row(&row);
+            }
+            let bytes = builder.finish(1700000000, 0.0, 1.0, 1);
+            parse_ibt_bytes(&bytes, "test.ibt").expect("Must parse")
+        };
+
+        // Same track & car -> Compatible
+        let sess1 = build_sess("Daytona International Speedway", "Porsche 963 GTP", "porsche963gtp");
+        let sess2 = build_sess("Daytona International Speedway", "Porsche 963 GTP", "porsche963gtp");
+        let compat = check_ibt_comparison_compatibility(&sess1, &sess2);
+        assert_eq!(compat, IbtComparisonCompatibility::Compatible);
+        assert!(compat.is_compatible());
+        assert!(compat.warning_message().is_none());
+
+        // Different tracks -> DifferentTracks
+        let sess_sebring = build_sess("Sebring International Raceway", "Porsche 963 GTP", "porsche963gtp");
+        let compat_track = check_ibt_comparison_compatibility(&sess1, &sess_sebring);
+        assert!(matches!(compat_track, IbtComparisonCompatibility::DifferentTracks { .. }));
+        assert!(!compat_track.is_compatible());
+        let warn = compat_track.warning_message().expect("Warning expected");
+        assert!(warn.contains("different tracks"));
+        assert!(warn.contains("Daytona"));
+        assert!(warn.contains("Sebring"));
+
+        // Same track, different car platforms -> DifferentCars
+        let sess_ferrari = build_sess("Daytona International Speedway", "Ferrari 296 GT3", "ferrari296gt3");
+        let compat_car = check_ibt_comparison_compatibility(&sess1, &sess_ferrari);
+        assert!(matches!(compat_car, IbtComparisonCompatibility::DifferentCars { .. }));
+        assert!(!compat_car.is_compatible());
+        let warn_car = compat_car.warning_message().expect("Warning expected");
+        assert!(warn_car.contains("different vehicle platforms"));
+
+        // Same track, different NASCAR NextGen models (Camaro vs Mustang) -> Compatible
+        let sess_chevy_cup = build_sess(
+            "Daytona International Speedway",
+            "NASCAR Cup Series Next Gen Chevrolet Camaro ZL1",
+            "stockcar2022_chevy",
+        );
+        let sess_ford_cup = build_sess(
+            "Daytona International Speedway",
+            "NASCAR Cup Series Next Gen Ford Mustang",
+            "stockcar2022_ford",
+        );
+        let compat_nascar = check_ibt_comparison_compatibility(&sess_chevy_cup, &sess_ford_cup);
+        assert_eq!(compat_nascar, IbtComparisonCompatibility::Compatible);
+        assert!(compat_nascar.is_compatible());
+    }
+
+    #[test]
+    fn test_cross_file_telemetry_lap_comparison() {
+        let defs = [
+            ("SessionTime", "Time", "s", IbtVarType::Double),
+            ("Lap", "Lap", "", IbtVarType::Int),
+            ("LapDistPct", "Pct", "%", IbtVarType::Float),
+            ("PlayerTrackSurface", "Surf", "", IbtVarType::Int),
+            ("Speed", "Speed", "m/s", IbtVarType::Float),
+            ("Throttle", "Throttle", "%", IbtVarType::Float),
+            ("Brake", "Brake", "%", IbtVarType::Float),
+            ("LFrideHeight", "LF RH", "m", IbtVarType::Float),
+            ("RFrideHeight", "RF RH", "m", IbtVarType::Float),
+            ("LRrideHeight", "LR RH", "m", IbtVarType::Float),
+            ("RRrideHeight", "RR RH", "m", IbtVarType::Float),
+        ];
+
+        // Session A: 60 ticks, speed 40.0 m/s
+        let yaml_a = "---\nWeekendInfo:\n  TrackDisplayName: \"Watkins Glen\"\nDriverInfo:\n  Drivers:\n    - CarIdx: 0\n      CarScreenName: \"Porsche 963 GTP\"\n...\n";
+        let mut builder_a = SyntheticIbtBuilder::new(60, yaml_a, &defs);
+        for i in 0..60 {
+            let mut row = builder_a.new_row();
+            builder_a.set_f64(&mut row, "SessionTime", i as f64 / 60.0);
+            builder_a.set_i32(&mut row, "Lap", 1);
+            builder_a.set_f32(&mut row, "LapDistPct", i as f32 / 59.0);
+            builder_a.set_i32(&mut row, "PlayerTrackSurface", 3);
+            builder_a.set_f32(&mut row, "Speed", 40.0);
+            builder_a.set_f32(&mut row, "Throttle", 1.0);
+            builder_a.set_f32(&mut row, "Brake", 0.0);
+            builder_a.set_f32(&mut row, "LFrideHeight", 0.030);
+            builder_a.set_f32(&mut row, "RFrideHeight", 0.030);
+            builder_a.set_f32(&mut row, "LRrideHeight", 0.050);
+            builder_a.set_f32(&mut row, "RRrideHeight", 0.050);
+            builder_a.push_row(&row);
+        }
+        let bytes_a = builder_a.finish(1700000000, 0.0, 1.0, 1);
+        let sess_a = parse_ibt_bytes(&bytes_a, "session_a.ibt").expect("Sess A must parse");
+
+        // Session B (Reference): 60 ticks, speed 50.0 m/s, higher rear ride height
+        let yaml_b = "---\nWeekendInfo:\n  TrackDisplayName: \"Watkins Glen\"\nDriverInfo:\n  Drivers:\n    - CarIdx: 0\n      CarScreenName: \"Porsche 963 GTP\"\n...\n";
+        let mut builder_b = SyntheticIbtBuilder::new(60, yaml_b, &defs);
+        for i in 0..60 {
+            let mut row = builder_b.new_row();
+            builder_b.set_f64(&mut row, "SessionTime", i as f64 / 60.0);
+            builder_b.set_i32(&mut row, "Lap", 2);
+            builder_b.set_f32(&mut row, "LapDistPct", i as f32 / 59.0);
+            builder_b.set_i32(&mut row, "PlayerTrackSurface", 3);
+            builder_b.set_f32(&mut row, "Speed", 50.0);
+            builder_b.set_f32(&mut row, "Throttle", 1.0);
+            builder_b.set_f32(&mut row, "Brake", 0.0);
+            builder_b.set_f32(&mut row, "LFrideHeight", 0.030);
+            builder_b.set_f32(&mut row, "RFrideHeight", 0.030);
+            builder_b.set_f32(&mut row, "LRrideHeight", 0.060);
+            builder_b.set_f32(&mut row, "RRrideHeight", 0.060);
+            builder_b.push_row(&row);
+        }
+        let bytes_b = builder_b.finish(1700000000, 0.0, 1.0, 1);
+        let sess_b = parse_ibt_bytes(&bytes_b, "session_b.ibt").expect("Sess B must parse");
+
+        assert_eq!(sess_a.analyzed_laps.len(), 1);
+        assert_eq!(sess_b.analyzed_laps.len(), 1);
+
+        let report = compare_laps(&sess_a.analyzed_laps[0], &sess_b.analyzed_laps[0], 50);
+        assert_eq!(report.grid_dist_pct.len(), 50);
+        assert_eq!(report.lap_a.speed_mph.as_ref().unwrap().len(), 50);
+        assert_eq!(report.lap_b.speed_mph.as_ref().unwrap().len(), 50);
+
+        // Speed comparison: Lap B was 50 m/s (~111.8 mph) vs Lap A 40 m/s (~89.5 mph) -> delta ~ +22.4 mph
+        let speed_delta = report.speed_delta_mph.as_ref().expect("Speed delta computed");
+        for &d in speed_delta {
+            assert!(d > 20.0 && d < 25.0, "Delta must be ~22.37 mph, got {}", d);
+        }
+
+        // Rake delta: Lap B had Rear RH 60mm vs Lap A 50mm -> Rake delta ~ +10mm
+        let rake_delta = report.rake_delta_mm.as_ref().expect("Rake delta computed");
+        for &rd in rake_delta {
+            assert!((rd - 10.0).abs() < 1.0, "Rake delta must be ~10mm, got {}", rd);
+        }
     }
 }

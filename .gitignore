@@ -5,7 +5,6 @@
 
 # User settings and local backups
 settings*.json
-backup_pre_redesign/
 SearchForSpeedAnalyzer*.exe
 
 # IDE / OS files

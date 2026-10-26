@@ -2905,7 +2905,7 @@ dependencies = [
 
 [[package]]
 name = "search_for_speed_analyzer"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "ab_glyph",
  "clipboard-win",

@@ -326,6 +326,8 @@ impl Default for StintData {
     }
 }
 
+pub const MAX_VALID_LAP_TIME_SECS: f32 = 1800.0; // 30 minutes: accommodates Nürburgring Nordschleife, Le Mans, wet conditions & incident limps
+
 impl StintData {
     pub fn short_label(&self) -> String {
         if self.is_imported {
@@ -341,7 +343,7 @@ impl StintData {
     }
 
     pub fn valid_laps(&self) -> Vec<f32> {
-        self.lap_times.iter().copied().filter(|&t| t > 5.0 && t < 360.0).collect()
+        self.lap_times.iter().copied().filter(|&t| t > 5.0 && t < MAX_VALID_LAP_TIME_SECS).collect()
     }
 
     /// Same laps as `valid_laps()`, paired with the iRacing session lap number each time belongs to.
@@ -351,7 +353,7 @@ impl StintData {
             .iter()
             .copied()
             .enumerate()
-            .filter(|&(_, t)| t > 5.0 && t < 360.0)
+            .filter(|&(_, t)| t > 5.0 && t < MAX_VALID_LAP_TIME_SECS)
             .map(|(i, t)| {
                 let lap_num = if has_numbers { self.lap_numbers[i] } else { self.start_lap + (i as i32) + 1 };
                 (lap_num, t)
@@ -1719,7 +1721,7 @@ impl WarRoomState {
                     }
 
                     if let Some(active) = driver.stints.iter_mut().rev().find(|st| !st.is_imported) {
-                        if last_lap_time > 3.0 && last_lap_time < 360.0 {
+                        if last_lap_time > 3.0 && last_lap_time < MAX_VALID_LAP_TIME_SECS {
                             let was_uncompleted_out_lap = !active.out_lap_completed;
                             active.out_lap_completed = true;
                             active.end_lap = completed_lap_num.max(0);

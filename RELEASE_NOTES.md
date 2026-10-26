@@ -1,3 +1,35 @@
+# The Search For Speed Analyzer — v0.3.8
+
+### 📊 Cross-File Telemetry Comparison (.IBT Lab):
+* **Dual-Session File Browser & Tagging:**
+  * The left `.ibt` browser allows loading files as either **Session A (Primary)** or **Reference B (Secondary)**.
+  * Files in the list display distinctive status tags: `[A]` (Gold) and `[B]` (Electric Blue).
+  * Direct `Ref B` button on each file row, right-click context menu options (*Load as Primary Session A*, *Load as Reference Session B*), and an active Reference Session status pill with 1-click `[Swap A / B]` and `[× Unload Ref]`.
+* **Cross-Session Lap Slicing & Overlays:**
+  * Card 3 lap selector enables selecting any lap from Reference Session B to compare directly against Session A.
+  * Distance-normalized overlay charts display $\Delta t$ time delta, speed comparisons, longitudinal rake, and side rake side-by-side.
+
+### 🛡 Track & Vehicle Platform Compatibility with NASCAR Spec Series Exemptions:
+* **Circuit & Platform Validation:**
+  * Compares track display names and vehicle models between files to safeguard telemetry overlays.
+  * Telemetry comparison requires the **same circuit** and the **same vehicle platform**, *with built-in spec-series exemptions* for:
+    * **NASCAR Cup NextGen**: Chevrolet Camaro ZL1, Ford Mustang Dark Horse, Toyota Camry XSE.
+    * **NASCAR Xfinity Series**: Chevrolet Camaro, Ford Mustang, Toyota Supra.
+    * **NASCAR Craftsman Trucks**: Chevrolet Silverado, Ford F-150, Toyota Tundra.
+    * **NASCAR ARCA Menards**: Chevrolet Impala, Toyota Camry.
+  * If files have different tracks or non-spec car platforms (e.g. Porsche 963 GTP vs Ferrari 296 GT3), an amber alert banner displays the exact mismatch and disables comparison overlay while keeping primary Session A fully accessible.
+
+### ⏱ 30-Minute Max Lap Time Threshold:
+* **Large Circuit & Wet Stint Support:**
+  * Replaced the hardcoded `360.0s` limit with `MAX_VALID_LAP_TIME_SECS = 1800.0s` (30 minutes) across stint rolling averages (`valid_laps`, `numbered_valid_laps`) and live lap crossings.
+  * Accommodates full-length laps at Circuit de la Sarthe (Le Mans), Nürburgring Nordschleife, historic Hockenheim, wet stints, and incident recovery limps without dropping valid laps from rolling averages or fuel calculations.
+
+### ⚙ Repository Hygiene & Test Suite:
+* Removed legacy `backup_pre_redesign` archive from repository root.
+* Expanded test coverage to 46 automated unit tests verifying spec series exemptions, compatibility checkers, cross-file lap normalization, and font glyph resilience.
+
+---
+
 # The Search For Speed Analyzer — v0.3.7
 
 ### 📂 Documents Folder Default & Frictionless Setup:

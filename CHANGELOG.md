@@ -5,6 +5,31 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.3.8] — 2026-10-25
+
+### Added & Improved
+* **Cross-File Telemetry Comparison (.IBT Lab):**
+  * Left file browser supports loading both **Session A (Primary)** and **Reference B (Secondary)** with color-coded tags: `[A]` (gold) and `[B]` (electric blue).
+  * Direct `Ref B` button on file list rows, right-click context menu options (*Load as Primary Session A*, *Load as Reference Session B*), and active Reference Session status bar with `[Swap A / B]` and `[× Unload Ref]`.
+  * Card 3 Lap Slicing allows selecting any lap from Reference Session B to compare against Session A.
+  * Synchronized distance-normalized delta telemetry traces ($\Delta t$, speed, rake, side rake).
+* **Circuit & Vehicle Platform Validation with NASCAR Spec Exemptions:**
+  * Added `are_cars_compatible` and `check_ibt_comparison_compatibility` to safeguard telemetry overlays.
+  * Automatically detects and permits cross-comparison between manufacturer badges within spec chassis series:
+    * **NASCAR Cup NextGen**: Chevrolet Camaro ZL1, Ford Mustang Dark Horse, Toyota Camry XSE.
+    * **NASCAR Xfinity Series**: Chevrolet Camaro, Ford Mustang, Toyota Supra.
+    * **NASCAR Craftsman Truck Series**: Chevrolet Silverado, Ford F-150, Toyota Tundra.
+    * **NASCAR ARCA Menards Series**: Chevrolet Impala, Toyota Camry.
+  * Alerts drivers with an amber warning banner if files originate from different circuits or conflicting car platforms, disabling comparison overlay while keeping Session A fully accessible.
+* **Extended Max Lap Time Threshold (30 Minutes):**
+  * Replaced the hardcoded `360.0s` limit with `MAX_VALID_LAP_TIME_SECS = 1800.0s` across stint rolling averages (`valid_laps`, `numbered_valid_laps`) and live lap crossings.
+  * Large circuits (Circuit de la Sarthe / Le Mans, Nürburgring Nordschleife, Hockenheim historic), wet stints, and incident limps are cleanly incorporated into stint rolling averages and fuel calculations.
+* **Code Clean-Up & Test Suite:**
+  * Removed legacy unversioned `backup_pre_redesign` archive from repository root.
+  * Expanded test coverage to 46 unit tests verifying spec series exemptions, compatibility checkers, and cross-file lap normalization.
+
+---
+
 ## [0.3.7] — 2026-10-25
 
 ### Added & Improved
