@@ -1,3 +1,18 @@
+# The Search For Speed Analyzer — v0.3.7
+
+### 📂 Documents Folder Default & Frictionless Setup:
+* **Frictionless Windows Setup Installer (`installer.iss`):**
+  * Default installation directory moved to `{userdocs}\The Search For Speed Analyzer` (`C:\Users\<Username>\Documents\SearchForSpeedAnalyzer`).
+  * Eliminated the confusing "Install for all users vs me only" prompt on startup so setup launches straight into the install wizard.
+  * Added `ArchitecturesInstallIn64BitMode=x64compatible` to ensure native 64-bit architecture and eliminate incorrect `Program Files (x86)` paths if users choose to install to Program Files.
+  * Requires **zero Windows administrator elevation or UAC prompts**—clean, instant installation without permission errors.
+* **Visible User Stints & Data in Documents (`src/settings.rs` & `src/stint_db.rs`):**
+  * Stint files (`stints/*.s4s.json`), the stint database (`stint_database.json`), and settings (`settings.json`) now default to `C:\Users\<Username>\Documents\SearchForSpeedAnalyzer`.
+  * Sits right beside `Documents\iRacing\telemetry` and `Documents\iRacing\setups`—highly visible, easy to back up, and effortless to share or drop teammate stint files.
+  * **Automatic Legacy Migration:** Seamlessly detects and migrates existing stints, database records, and settings from `%APPDATA%\SearchForSpeedAnalyzer` on first launch so no historical runs are lost.
+
+---
+
 # The Search For Speed Analyzer — v0.3.6
 
 ### 🛡 Dual-Mode Setup Installer & Custom Drive Flexibility (`C:\Program Files`):

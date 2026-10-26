@@ -5,6 +5,21 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.3.7] — 2026-10-25
+
+### Added & Improved
+* **Documents Installation Default & Frictionless Setup:**
+  * Default installer directory moved to `{userdocs}\The Search For Speed Analyzer` (`C:\Users\<Username>\Documents\SearchForSpeedAnalyzer`).
+  * Eliminated initial "Install for all users vs me only" prompt on startup so setup launches straight into the install wizard.
+  * Added `ArchitecturesInstallIn64BitMode=x64compatible` to ensure 64-bit architecture and eliminate `Program Files (x86)` redirection.
+  * Completely eliminates Windows UAC administrator elevation requirements and permission errors.
+* **Visible User Stints & Data in Documents:**
+  * Stint files (`stints/*.s4s.json`), the stint database (`stint_database.json`), and settings (`settings.json`) now default to `C:\Users\<Username>\Documents\SearchForSpeedAnalyzer`.
+  * Sits right beside `Documents\iRacing\telemetry` and `Documents\iRacing\setups`—highly visible and easy to share.
+  * Added automatic migration from legacy `%APPDATA%\SearchForSpeedAnalyzer` on first launch.
+
+---
+
 ## [0.3.6] — 2026-10-25
 
 ### Added & Fixed

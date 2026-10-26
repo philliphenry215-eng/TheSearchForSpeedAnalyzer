@@ -451,7 +451,7 @@ fn launch_installer(setup_path: &Path) -> Result<(), String> {
             "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
              try {{ \
                $p = Start-Process -FilePath {setup} -Verb RunAs -Wait -PassThru \
-                    -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',{dir_arg}; \
+                    -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART',{dir_arg}; \
                if ($p.ExitCode -ne 0) {{ throw 'installer failed' }}; \
                Start-Process -FilePath {cur} \
              }} catch {{ \
@@ -466,7 +466,7 @@ fn launch_installer(setup_path: &Path) -> Result<(), String> {
     } else {
         format!(
             "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
-             Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/RELAUNCH',{dir_arg}",
+             Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/RELAUNCH',{dir_arg}",
             pid = std::process::id(),
             setup = ps_quote(setup_path),
             dir_arg = dir_arg_quoted,

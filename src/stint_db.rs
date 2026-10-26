@@ -369,7 +369,12 @@ impl StintDatabase {
     }
 
     pub fn load() -> Self {
-        Self::load_from_dir(get_settings_dir())
+        let base = get_settings_dir();
+        let path = base.join("stint_database.json");
+        if !path.exists() {
+            migrate_legacy_stint_db(&base);
+        }
+        Self::load_from_dir(base)
     }
 
     pub fn load_from_dir(dir: PathBuf) -> Self {
@@ -734,6 +739,52 @@ pub fn auto_save_session_player_stints(s: &WarRoomState) {
     let _ = db.sync_player_stints_from_state(s);
 }
 
+/// Migrates existing stint_database.json and stints/ folder from legacy locations
+/// (%APPDATA%\SearchForSpeedAnalyzer, next to exe, or CWD) to the new target folder (e.g. Documents).
+fn migrate_legacy_stint_db(target_base: &Path) {
+    let mut candidate_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
+        candidate_dirs.push(PathBuf::from(appdata).join("SearchForSpeedAnalyzer"));
+    }
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        candidate_dirs.push(exe_dir);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidate_dirs.push(cwd);
+    }
+
+    for cand in candidate_dirs {
+        if cand == target_base {
+            continue;
+        }
+        let legacy_db = cand.join("stint_database.json");
+        let target_db = target_base.join("stint_database.json");
+        if legacy_db.is_file() && !target_db.exists() {
+            let _ = fs::create_dir_all(target_base);
+            let _ = fs::copy(&legacy_db, &target_db);
+        }
+
+        let legacy_stints = cand.join("stints");
+        let target_stints = target_base.join("stints");
+        if legacy_stints.is_dir() {
+            let _ = fs::create_dir_all(&target_stints);
+            if let Ok(entries) = fs::read_dir(&legacy_stints) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("json") {
+                        if let Some(fname) = path.file_name() {
+                            let dest = target_stints.join(fname);
+                            if !dest.exists() {
+                                let _ = fs::copy(&path, &dest);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,5 +890,48 @@ mod tests {
         assert_eq!(db.records.len(), 0);
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_legacy_stint_migration() {
+        let root = std::env::temp_dir().join(format!("s4s_test_mig_{}", std::process::id()));
+        let legacy = root.join("legacy");
+        let target = root.join("target");
+        let _ = fs::create_dir_all(&legacy);
+        let _ = fs::create_dir_all(&target);
+
+        let legacy_file = legacy.join("stint_database.json");
+        let dummy = r#"{"version":1,"records":[]}"#;
+        let _ = fs::write(&legacy_file, dummy);
+
+        let legacy_stints = legacy.join("stints");
+        let _ = fs::create_dir_all(&legacy_stints);
+        let _ = fs::write(legacy_stints.join("track_test_S1.s4s.json"), r#"{"id":"test"}"#);
+
+        let cand = vec![legacy.clone()];
+        for c in cand {
+            let l_db = c.join("stint_database.json");
+            let t_db = target.join("stint_database.json");
+            if l_db.is_file() && !t_db.exists() {
+                let _ = fs::copy(&l_db, &t_db);
+            }
+            let l_stints = c.join("stints");
+            let t_stints = target.join("stints");
+            if l_stints.is_dir() {
+                let _ = fs::create_dir_all(&t_stints);
+                if let Ok(entries) = fs::read_dir(&l_stints) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Some(fname) = path.file_name() {
+                            let _ = fs::copy(&path, t_stints.join(fname));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(target.join("stint_database.json").exists());
+        assert!(target.join("stints").join("track_test_S1.s4s.json").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -23,10 +23,27 @@ pub fn get_settings_file() -> &'static str {
     }
 }
 
-/// Per-user settings folder: `%APPDATA%\SearchForSpeedAnalyzer`.
-/// Always writable without admin, and independent of where the exe lives or is launched from.
-/// Falls back to the exe's folder if `%APPDATA%` is unavailable.
+/// Resolves the user's Documents folder (`%USERPROFILE%\Documents` or `%HOMEDRIVE%%HOMEPATH%\Documents`).
+pub fn get_user_documents_dir() -> Option<PathBuf> {
+    if let Some(profile) = std::env::var("USERPROFILE").ok().filter(|v| !v.is_empty()) {
+        let p = PathBuf::from(profile).join("Documents");
+        return Some(p);
+    }
+    if let (Ok(drive), Ok(path)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+        if !drive.is_empty() && !path.is_empty() {
+            return Some(PathBuf::from(format!("{}{}", drive, path)).join("Documents"));
+        }
+    }
+    None
+}
+
+/// Primary user data and settings directory: `%USERPROFILE%\Documents\SearchForSpeedAnalyzer`.
+/// Highly visible, familiar, and easy to access right beside `Documents\iRacing`.
+/// Falls back to `%APPDATA%\SearchForSpeedAnalyzer`, then the exe's folder.
 pub fn get_settings_dir() -> PathBuf {
+    if let Some(docs) = get_user_documents_dir() {
+        return docs.join("SearchForSpeedAnalyzer");
+    }
     if let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
         return PathBuf::from(appdata).join("SearchForSpeedAnalyzer");
     }
@@ -40,14 +57,17 @@ pub fn get_settings_path() -> PathBuf {
     get_settings_dir().join(get_settings_file())
 }
 
-/// Older versions saved settings relative to the working directory (usually next to the exe).
-/// Copy the first one found into the new per-user location so users keep their setup.
+/// Copies settings from legacy locations (%APPDATA%\SearchForSpeedAnalyzer, next to exe, or CWD)
+/// into the new Documents\SearchForSpeedAnalyzer folder so users seamlessly keep their setup.
 fn migrate_legacy_settings(target: &Path) {
     if target.exists() {
         return;
     }
     let file = get_settings_file();
     let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
+        candidates.push(PathBuf::from(appdata).join("SearchForSpeedAnalyzer").join(file));
+    }
     if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
         candidates.push(exe_dir.join(file));
     }
