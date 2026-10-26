@@ -244,7 +244,7 @@ impl IbtTelemetryLabState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let tabs = [
                             (IbtAnalysisTab::ChannelsAndExport, "📋 Channels & Export"),
-                            (IbtAnalysisTab::TiresAndPressures, "🛞 Tires & Pressures"),
+                            (IbtAnalysisTab::TiresAndPressures, "Tires & Pressures"),
                             (IbtAnalysisTab::ShockHistograms, "📊 Shock Histograms"),
                             (IbtAnalysisTab::RideHeightAndRake, "📐 Ride Height & Rake"),
                             (IbtAnalysisTab::InputsAndSpeed, "📈 Inputs & Speed"),
@@ -299,7 +299,7 @@ impl IbtTelemetryLabState {
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
                                                 let demo_btn = egui::Button::new(
-                                                    egui::RichText::new("🧪 Load Demo .IBT")
+                                                    egui::RichText::new("▶ Load Demo .IBT")
                                                         .size(11.0)
                                                         .color(white)
                                                         .strong(),
@@ -334,7 +334,7 @@ impl IbtTelemetryLabState {
                                             self.refresh_directory();
                                         }
                                         if ui
-                                            .add(egui::Button::new("⌂").fill(elevated))
+                                            .add(egui::Button::new("Reset").fill(elevated))
                                             .on_hover_text("Reset to default iRacing telemetry directory")
                                             .clicked()
                                         {
@@ -388,7 +388,7 @@ impl IbtTelemetryLabState {
                                             .show(ui, |ui| {
                                                 ui.label(
                                                     egui::RichText::new(
-                                                        "No .ibt files found in this folder.\nClick '🧪 Load Demo .IBT' above to test with a 60Hz multi-lap dataset, or enter a custom path.",
+                                                        "No .ibt files found in this folder.\nClick '▶ Load Demo .IBT' above to test with a 60Hz multi-lap dataset, or enter a custom path.",
                                                     )
                                                     .color(muted)
                                                     .size(11.0),
@@ -804,7 +804,7 @@ impl IbtTelemetryLabState {
                                         );
                                         ui.add_space(22.0);
                                         let btn = egui::Button::new(
-                                            egui::RichText::new("🧪 Load 3-Lap 60Hz Demo .IBT Telemetry Session")
+                                            egui::RichText::new("▶ Load 3-Lap 60Hz Demo .IBT Telemetry Session")
                                                 .color(egui::Color32::BLACK)
                                                 .size(14.0)
                                                 .strong(),
@@ -1761,13 +1761,13 @@ impl IbtTelemetryLabState {
                         if mode_btn(ui, TireChartMode::Pressures, "📊 Pressures (PSI)", self.tire_chart_mode) {
                             self.tire_chart_mode = TireChartMode::Pressures;
                         }
-                        if mode_btn(ui, TireChartMode::RearAxle, "🛡️ Rear Axle", self.tire_chart_mode) {
+                        if mode_btn(ui, TireChartMode::RearAxle, "🛡 Rear Axle", self.tire_chart_mode) {
                             self.tire_chart_mode = TireChartMode::RearAxle;
                         }
                         if mode_btn(ui, TireChartMode::FrontAxle, "⚡ Front Axle", self.tire_chart_mode) {
                             self.tire_chart_mode = TireChartMode::FrontAxle;
                         }
-                        if mode_btn(ui, TireChartMode::AllCorners, "🏎️ 4-Corners", self.tire_chart_mode) {
+                        if mode_btn(ui, TireChartMode::AllCorners, "4-Corners", self.tire_chart_mode) {
                             self.tire_chart_mode = TireChartMode::AllCorners;
                         }
                     });
@@ -1916,7 +1916,7 @@ impl IbtTelemetryLabState {
                         ui.label(egui::RichText::new("Track Sectors:").color(muted).size(10.5));
                         draw_legend_pill(ui, egui::Color32::from_rgb(71, 85, 105), "🏁 Frontstretch (0-15%)", white);
                         draw_legend_pill(ui, egui::Color32::from_rgb(30, 64, 175), "↩ Turn 1 / 2 (15-35%)", white);
-                        draw_legend_pill(ui, egui::Color32::from_rgb(71, 85, 105), "➡️ Backstretch (35-65%)", white);
+                        draw_legend_pill(ui, egui::Color32::from_rgb(71, 85, 105), "➡ Backstretch (35-65%)", white);
                         draw_legend_pill(ui, egui::Color32::from_rgb(180, 83, 9), "↩ Turn 3 / 4 (65-85%)", white);
                         draw_legend_pill(ui, egui::Color32::from_rgb(71, 85, 105), "🏁 Tri-Oval (85-100%)", white);
 
@@ -1941,7 +1941,7 @@ impl IbtTelemetryLabState {
         // 3. Visual 4-Wheel Top-Down Chassis Heatmap Cards
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("🏎️ 4-CORNER CHASSIS HEATMAP & TREAD WEAR")
+                egui::RichText::new("4-CORNER CHASSIS HEATMAP & TREAD WEAR")
                     .color(primary)
                     .size(12.0)
                     .strong(),
@@ -2946,7 +2946,7 @@ pub fn format_ibt_engineering_report_tsv(
     let trk_c = crate::convert_unit(&m.track_temp, use_metric);
     let wnd_c = crate::convert_unit(&m.wind_speed, use_metric);
     let wdir_c = crate::format_wind_dir(&m.wind_dir);
-    out.push_str("SEARCH FOR SPEED — OFFLINE .IBT TELEMETRY ENGINEERING REPORT\n");
+    out.push_str("THE SEARCH FOR SPEED — OFFLINE .IBT TELEMETRY ENGINEERING REPORT\n");
     out.push_str(&format!(
         "File\t{}\nTrack\t{}\nCar\t#{} {}\nDriver\t{} ({} iR)\nSetup\t{}\nWeather\tAir {} / Track {} / Wind {} {}\n",
         m.file_name, m.track_display_name, m.car_number, m.car_name, m.driver_name, m.irating, m.setup_name, air_c, trk_c, wnd_c, wdir_c

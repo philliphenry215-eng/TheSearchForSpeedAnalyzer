@@ -1,3 +1,31 @@
+# The Search For Speed Analyzer — v0.3.6
+
+### 🛡 Dual-Mode Setup Installer & Custom Drive Flexibility (`C:\Program Files`):
+* **Dual-Mode All-Users vs Per-User Installation (`installer.iss`):**
+  * Configured Inno Setup with `PrivilegesRequiredOverridesAllowed=dialog commandline` and dynamic `{autopf}` path resolution.
+  * Completely eliminated the **`Error 5: Access is denied`** when selecting `C:\Program Files\SearchForSpeedAnalyzer`.
+  * The setup wizard now presents a clean choice on startup:
+    * **Install for all users (recommended):** Requests standard Windows UAC administrator elevation and installs to `C:\Program Files\SearchForSpeedAnalyzer` (or any custom directory) with verified write permissions.
+    * **Install for me only:** Runs without UAC prompts, defaulting to `%LOCALAPPDATA%\Programs\SearchForSpeedAnalyzer` for users without administrative credentials.
+  * Custom folder support: Users can freely install to secondary drives (`D:\`, `E:\`, etc.) or custom paths.
+* **Intelligent In-App Auto-Updater (`src/updater.rs`):**
+  * Silent in-app updates now detect whether the application is running from a protected system directory (`C:\Program Files`) and automatically pass `/ALLUSERS` with administrative elevation (`-Verb RunAs`), or `/CURRENTUSER` when installed per-user.
+
+### ⏱ Session Lap Number Tracking & Robust Stint Ingestion:
+* **Session Lap Number Synchronization:**
+  * Saved stints now store the exact iRacing session lap number (`CarIdxLapCompleted` at the start/finish crossing) alongside each lap time.
+  * Spreadsheet TSV exports now output both the stint-relative lap number and the official session lap number.
+* **Timing & Edge-Case Telemetry Handling:**
+  * Added resilient ingestion for identical consecutive lap times, out-lap transitions, and timing frames where iRacing increments the lap counter slightly before emitting the final lap time.
+
+### 🔤 UI Glyphs & Branding:
+* **Font Fallback Architecture:**
+  * Enhanced font definition stacks to ensure all UI icons and telemetry symbols render cleanly without missing `?` glyphs across Windows configurations.
+* **Branding Consistency:**
+  * Standardized window titles and export headers to **The Search For Speed Analyzer**.
+
+---
+
 # The Search For Speed Analyzer — v0.3.5
 
 ### 📂 Local Stint Database, Track-Matched Re-Import & Teammate Sharing:
@@ -5,7 +33,7 @@
   * Completed player stints (`1+` green-flag laps) are automatically saved locally in real time and before session transitions (`Practice` $\rightarrow$ `Qualifying` $\rightarrow$ `Race`) so you never lose a Practice or Qualifying stint when iRacing advances the server.
   * Each saved stint is ultra-lightweight (~2 KB) and stores lap times, per-lap fuel burn, 4-corner post-pit tire wear/temps/pressures, setup name, weather snapshot, and engineer notes.
 * **📂 Saved Stints Database Manager (`Re-Import` & `Compare`):**
-  * Open **`📂 Saved Stints`** from the Cockpit `STINT LOG` header, Grid View top bar, Stint Analyzer / Compare window, or the `⋯` menu.
+  * Open **`📂 Saved Stints`** from the Cockpit `STINT LOG` header, Grid View top bar, Stint Analyzer / Compare window, or the `…` menu.
   * Automatically filters to **🏁 Current Track** when connected to iRacing (with a green `MATCH` badge) or **🌎 All Saved Stints**, with instant search across Track, Car, Setup, Driver, and Notes.
   * Click **`📥 Re-Import`** to load any saved stint into your active session as `IMP 1`, `IMP 2`, etc. (`Ref` badge) without interfering with live `S1`, `S2` lap counting or pit tire latching, or click **`⚖ Compare`** to open it directly in a Side-by-Side Stint Comparison slot.
 * **⛽ Automatic Lap 0 Historical Fuel Burn Seeding:**
@@ -17,13 +45,13 @@
 
 # The Search For Speed Analyzer — v0.3.4
 
-### 🛞 Post-Pit 4-Corner Tire Popup Overlay & Dual-Layer HUD Transparency:
-* **🛞 Post-Pit 4-Corner Tire Popup Overlay:**
+### 🏁 Post-Pit 4-Corner Tire Popup Overlay & Dual-Layer HUD Transparency:
+* **🏁 Post-Pit 4-Corner Tire Popup Overlay:**
   * Added an optional in-car floating overlay that automatically pops up for a configurable duration (`3s–60s`, default `15s`) whenever new post-pit or garage 4-corner tire wear and temperatures are latched.
   * Displays `LF`, `RF`, `LR`, and `RR` 3-zone tread wear (`O·M·I` / `I·M·O`), carcass temperatures, and hot pressures, with independent position, scale (`75%–150%`), and **`👁 Preview / Move Popup`** controls in Settings.
 * **✨ True Transparent Outer HUD Background (`Outer Background Box` vs `Inner Card Opacity`):**
   * Added Win32 DWM per-pixel alpha compositing (`DwmEnableBlurBehindWindow` + `DWMWA_BORDER_COLOR`) and separate **Inner Card Opacity** and **Outer Background Box** sliders (`0%` fully transparent by default) for both the main HUD overlay and the Tire Popup overlay, eliminating the solid black bounding box and bottom dead space.
-* **🏎️ Default Startup View Setting:**
+* **🏁 Default Startup View Setting:**
   * Added a **Default Startup View** selector in Settings (`Cockpit Stint & Fuel Analyzer` by default, `Multi-Driver Stint Grid`, or `Offline .IBT Telemetry Lab`).
 
 ---
@@ -36,7 +64,7 @@
   * Generates a high-contrast telemetry summary graphic card in memory and copies it directly to the Windows clipboard (both lossless `PNG` and `CF_DIB` bitmap formats) so you can immediately press `Ctrl+V` in Discord to share or compare runs.
   * **Shared Session & Weather Header:** Top header bar displays Track, Car, Session Type, Track Rubber State (`Moderate Rubber`, `Clean Track`, etc.), Weather Type, Track Temp, Air Temp, Wind Speed/Direction, and Humidity without repeating session weather inside each stint column.
   * **Complete Stint Breakdown:** Displays Driver, Stint Number, Laps Completed, Setup Name, Fastest Lap (with `★ BEST PACE` and delta callouts in comparison mode), Last Lap, Full Average, Consistency ($\sigma$), Fall-off, Fuel/Lap, Rolling Averages (`Avg 5` through `Avg 30`), and 4-corner Post-Stint Tire Wear & Temperatures.
-* **🛞 2x2 Side-by-Side Tire Layout on Stint Comparison:**
+* **🏁 2x2 Side-by-Side Tire Layout on Stint Comparison:**
   * Re-arranged the **Post-Stint Tire Wear & Temperatures** cards on the Stint Comparison page into a 2x2 chassis grid within each stint column: **Fronts (`LF` | `RF`) side-by-side on the top row**, and **Rears (`LR` | `RR`) side-by-side on the bottom row**, cutting vertical scrolling in half.
 * **🔄 Custom Drive (`C:`, `D:`, `E:`) & Protected Folder Updater Improvements:**
   * Standalone portable `.exe` installs placed on any drive (`C:`, `D:`, `E:`, Desktop) now update directly in place without creating a second installation in `%LOCALAPPDATA%`.
@@ -46,7 +74,7 @@
 
 # The Search For Speed Analyzer — v0.3.2
 
-### ⏱️ In-Car HUD Overlay "Race Remain" & Lap Counter Calibration:
+### ⏱ In-Car HUD Overlay "Race Remain" & Lap Counter Calibration:
 * **🏁 Modern `SessionLapsRemainEx` Telemetry Synchronization:**
   * Migrated live telemetry countdown ingestion from legacy `SessionLapsRemain` to `SessionLapsRemainEx`, eliminating iRacing's historical off-by-one telemetry calculation bug that caused the overlay to announce "1 to go" when 2 laps remained.
 * **🎯 Scheduled Race Distance Tracking (`SessionLapsTotal - player_lap`):**
@@ -71,17 +99,17 @@
 # The Search For Speed Analyzer — v0.3.1
 
 ### 🏁 NASCAR NextGen Calibration & Visual Tire Telemetry Suite:
-* **🏷️ NASCAR NextGen Left Rear Ride Height Calibration ($-0.50^{\prime\prime}$ / $-12.7\text{ mm}$):**
+* **🏷 NASCAR NextGen Left Rear Ride Height Calibration ($-0.50^{\prime\prime}$ / $-12.7\text{ mm}$):**
   * Automatically detects NASCAR NextGen Cup cars (`Chevrolet Camaro ZL1`, `Ford Mustang`, `Toyota Camry`) from session metadata and setup schema.
   * Corrects iRacing's known $+0.50^{\prime\prime}$ sensor datum offset by subtracting $0.50^{\prime\prime}$ ($0.0127\text{ m}$) across all continuous samples, aligning LR ride height, dynamic longitudinal pitch rake, roll / side rake, and rear splits with physical garage setup sheets.
   * Prominent calibration banner in the **`📐 Ride Height & Rake`** tab confirms active calibration.
 * **📈 Synchronized Color Telemetry Graphs for Tires & Pressures (0–100% Lap Distance):**
-  * Added dedicated multi-trace telemetry chart with view toggles: **`🏎️ 4-Corners`** (LF, RF, LR, RR center temps), **`⚡ Front Axle`** (LF vs RF 3-zone), **`🛡️ Rear Axle`** (LR vs RR 3-zone), and **`📊 Pressures (PSI / kPa)`**.
+  * Added dedicated multi-trace telemetry chart with view toggles: **`4-Corners`** (LF, RF, LR, RR center temps), **`⚡ Front Axle`** (LF vs RF 3-zone), **`🛡 Rear Axle`** (LR vs RR 3-zone), and **`📊 Pressures (PSI / kPa)`**.
   * Synchronized cursor scrubbing displaying live temperature, pressure, speed, and track distance.
-* **🗺️ Track Sector Reference Bar & Peak Location Callouts:**
+* **📍 Track Sector Reference Bar & Peak Location Callouts:**
   * Interactive track sector timeline directly below the chart identifies corner locations: Frontstretch ($0\text{–}15\%$), Turn 1/2 ($15\text{–}35\%$), Backstretch ($35\text{–}65\%$), Turn 3/4 ($65\text{–}85\%$), and Tri-Oval ($85\text{–}100\%$).
   * Prominent **Peak Thermal Badges** (`🔥 Peak: 233.6°F · 📍 Turn 3/4 Apex 74% Dist`) identify exactly where on track and on which tire corner maximum thermal stress occurred.
-* **🏎️ Top-Down 4-Wheel Chassis Heatmap Cards:**
+* **🏁 Top-Down 4-Wheel Chassis Heatmap Cards:**
   * Re-architected corner cards into a top-down car chassis layout (Front Axle $\rightarrow$ Chassis Divider $\rightarrow$ Rear Axle) with dynamic temperature heat-tinting (Cool Blue, Optimal Green, Warm Amber, Overheating Red).
 * **🏁 Stint Run Progression Table:**
   * Full session overview table listing completed laps, lap times, status badges, 4-corner peak temperatures, hottest tire callouts, and hot pressures with 1-click lap selection.
@@ -93,7 +121,7 @@
 ### 📊 Offline iRacing `.IBT` Telemetry Analysis Engine & Lab View:
 * **Dedicated `.IBT` Telemetry Lab:** Added a full offline `.ibt` binary telemetry ingestion engine and interactive analysis view (`📊 .IBT Telemetry Lab`), automatically scanning `%USERPROFILE%\Documents\iRacing\telemetry\` on a background worker thread without requiring an active iRacing session.
 * **Lap Slicing, Classification & Lap-to-Lap Overlay (`Lap A vs. Lap B`):** Automatically indexes all session laps, flags Out-Laps, In-Laps, Off-Track/Incomplete laps, and Valid flying laps (`PB ★`), and normalizes `LapDistPct` (`0–100%`) across a 1,000-point grid for direct `Lap A vs. Lap B` trace comparison and time delta ($\Delta t$) analysis.
-* **🏎️ Driver Inputs & Vehicle Dynamics Tab:** Synchronized 4-trace telemetry charts for **Speed**, **Throttle % & Brake %**, **Steering Wheel Angle (°)**, and **Gear / RPM**, complete with interactive cursor scrubbing and Lap A vs. Lap B comparison table.
+* **🏁 Driver Inputs & Vehicle Dynamics Tab:** Synchronized 4-trace telemetry charts for **Speed**, **Throttle % & Brake %**, **Steering Wheel Angle (°)**, and **Gear / RPM**, complete with interactive cursor scrubbing and Lap A vs. Lap B comparison table.
 * **📐 Ride Height & Rake Tab (5 Dedicated Scrollable Charts):**
   * **Front Ride Heights & Center Splitter:** Dedicated trace panel for `LF`, `RF`, and `CFSR` (Center Front Splitter) ride heights with bottoming/ground-strike warning lines.
   * **Rear Ride Heights:** Dedicated trace panel for `LR` and `RR` ride heights.
@@ -101,23 +129,23 @@
   * **Dynamic Roll / Side Rake:** Vectorized trace for $\text{Left RH} - \text{Right RH}$ lateral roll attitude.
   * **Lateral Corner Splits:** Dedicated trace panel comparing Front Split ($\text{LF} - \text{RF}$) and Rear Split ($\text{LR} - \text{RR}$).
 * **📉 Shock Velocity Histograms Tab:** 4-corner (`LF`, `RF`, `LR`, `RR`) damper velocity distribution histograms with native `*shockVel` extraction or Savitzky-Golay / moving-average smoothed numerical differentiation ($\Delta \text{Defl} / \Delta t$), low/high-speed compression & rebound breakdowns, and asymmetry diagnostics.
-* **🛞 Tires & Pressures Tab:** 4-corner tire analysis cards pulling definitive hot tire surface/carcass temperatures (`O · M · I` for Left tires, `I · M · O` for Right tires), 3-zone tread wear percentages, and Cold $\rightarrow$ Hot pressure build from `CarSetup` YAML, pit-stall latches, and `.ibt` channels, plus inside-to-outside spread ($\Delta T_{\text{I-O}}$) and crown bias diagnostics.
+* **Tires & Pressures Tab:** 4-corner tire analysis cards pulling definitive hot tire surface/carcass temperatures (`O · M · I` for Left tires, `I · M · O` for Right tires), 3-zone tread wear percentages, and Cold $\rightarrow$ Hot pressure build from `CarSetup` YAML, pit-stall latches, and `.ibt` channels, plus inside-to-outside spread ($\Delta T_{\text{I-O}}$) and crown bias diagnostics.
 * **Session YAML Header & 1-Click TSV Export:** Displays full session metadata (Track, Car, Driver, Weather, Air/Track Temp, Wind Speed/Direction, Setup Name) respecting Imperial (`°F`, `mph`, `mi`, `in`, `PSI`) and Metric (`°C`, `km/h`, `km`, `mm`, `kPa`) settings, plus 1-click clipboard TSV export for Excel/Google Sheets.
 
 ---
 
 # The Search For Speed Analyzer — v0.2.6
 
-### ⚖️ Side-by-Side Stint Telemetry Comparison:
+### ⚖ Side-by-Side Stint Telemetry Comparison:
 * **Compare Up to 3 Stints Side-by-Side:** Select and compare up to 3 individual stints simultaneously — analyze your own progression across tire runs and setup revisions, or benchmark directly against competitors in the session.
 * **Multi-Stint Lap Time Progression Chart:** Interactive line chart overlay with color-coded curves, stint PB highlights, and instant cursor hover displaying exact lap times and deltas to the fastest car on that lap.
 * **Dynamic Lap-by-Lap Comparison Log:** Side-by-side lap table with stint personal best highlights, delta times relative to baseline Stint A, and purple star callouts for the fastest driver on each lap.
 * **4-Corner Post-Stint Tire Wear & Temperature Comparison:** Compare LF, RF, LR, and RR inner/middle/outer carcass temperatures, cold vs hot pressures, and wear degradation cards across stints.
 * **Key Metrics & Pace Drop-off Analysis:** Side-by-side cards comparing completed laps, peak lap time, full stint average, consistency standard deviation ($\sigma$), fuel consumption rate per lap, and early-vs-late pace fall-off (laps 1–5 vs stint finish).
-* **Dedicated Floating Window & Pop-Out Modal:** Access stint comparisons from Cockpit View, Grid View, the overflow menu (`⋯`), or via the `[ ↗ Pop Out ]` button in the Stint Telemetry Analyzer.
+* **Dedicated Floating Window & Pop-Out Modal:** Access stint comparisons from Cockpit View, Grid View, the overflow menu (`…`), or via the `[ ↗ Pop Out ]` button in the Stint Telemetry Analyzer.
 * **1-Click Spreadsheet Export:** Copy full side-by-side stint data and lap-by-lap comparison logs to clipboard formatted for Excel/Google Sheets.
 
-### 🧭 High-Legibility Relative Wind Dial & 14pt Speed Typography:
+### 💨 High-Legibility Relative Wind Dial & 14pt Speed Typography:
 * **High-Contrast 14pt Speed Typography:** Enlarged wind speed digits to prominent 14pt bold text for both single and double-digit wind speeds (e.g. 6 to 35+ mph or km/h), with a clean, uncluttered dial face for instant readability at race pace.
 * **Collision-Free Arrow Vectoring:** Vector pointer line originates cleanly outside the center text zone, ensuring the arrow shaft and chevron never cut through or obscure the digits.
 * **Decoupled Car-Nose Heading Pip:** Re-engineered the 12 o'clock forward heading reference as a sleek gold triangular pip on the outer perimeter, completely eliminating visual polygon clipping or wonky overlap when wind blows forward.
@@ -126,7 +154,7 @@
 
 # The Search For Speed Analyzer — v0.2.5
 
-### 🧭 Precision Wind Direction Vectoring & 1-to-1 Speed Match:
+### 💨 Precision Wind Direction Vectoring & 1-to-1 Speed Match:
 * **True Cockpit Wind Orientation Alignment:** Fixed the wind angle calculation across the app (`(WindDir - YawNorth + PI)`), aligning vehicle yaw orientation with iRacing's clockwise coordinate system. Tailwinds now point forward (12 o'clock / UP), headwinds point backward (6 o'clock / DOWN), and quartering tailwinds (e.g. 2 o'clock) match external tools like Stint Analyzer 1-to-1 without inversion.
 * **Exact Wind Velocity Decimal Precision:** Eliminated the premature truncation of live wind speed (`format!("{:.2} m/s", wv)`), ensuring wind speed across all app views perfectly matches iRacing's Weather tab (e.g. 5 mph instead of rounding up to 6 or 7 mph).
 * **Enhanced Wind Vector Visuals:** Polished the wind vector compass gauge with a prominent sharp chevron pointer, higher contrast gold reference pip at 12 o'clock, and bright teal shaft for instant cockpit readability.
@@ -135,7 +163,7 @@
 
 # The Search For Speed Analyzer — v0.2.4
 
-### 🧭 Car-Relative Dynamic Wind Heading & Prominent Vector Gauge:
+### 💨 Car-Relative Dynamic Wind Heading & Prominent Vector Gauge:
 * **Cockpit-Relative Real-Time Wind Tracking:** Synchronized wind telemetry against vehicle yaw (`YawNorth` at 60 Hz). As you steer around the track, the wind arrow dynamically updates in conjunction with the direction the car is facing.
 * **Intuitive Wind Vectoring:** Crosswinds from left to right point directly right (3 o'clock), headwinds point directly into the car nose (6 o'clock), and tailwinds point forward (12 o'clock).
 * **High-Visibility Prominent Pointer:** Enlarged gauge diameter to `28px` with a bold cyan chevron, outlined vector shaft, and gold car-nose reference pip at 12 o'clock for instantaneous glanceability at race pace.
@@ -145,7 +173,7 @@
 
 # The Search For Speed Analyzer — v0.2.3
 
-### 🌡️ Air/Track Temperature & Wind Direction Overlay:
+### ☀ Air/Track Temperature & Wind Direction Overlay:
 * **Air & Track Surface Temp Readout:** Integrated live environmental telemetry into the floating overlay HUD (`Air/Track Temp: 72/82` in Fahrenheit or `22/28` in Celsius) so drivers can monitor track grip loss and ambient conditions without leaving their driving line.
 * **Wind Direction Compass Gauge:** Custom-drawn circular vector compass widget with the live wind speed number centered inside and a sharp pointer arrowhead indicating exact wind heading.
 * **Modular HUD Toggle:** Added `"Track Temp & Wind"` toggle checkbox in Settings under *Visible HUD Sections*.
@@ -156,7 +184,7 @@
 
 # The Search For Speed Analyzer — v0.2.2
 
-### 🛞 Definitive Tire Telemetry & Garage Sync:
+### 🏁 Definitive Tire Telemetry & Garage Sync:
 * **Direct iRacing Garage Matching:** Integrated direct extraction of iRacing's definitive garage tire data (`CarSetup`) from the session string, guaranteeing exact 1-to-1 matches with the in-game iRacing garage screen for last hot pressures, carcass temperatures, and tread wear percentages (LF: `12.1 psi` · `194° · 187° · 164°F` · `86% · 86% · 100%`).
 * **Preserved Native Tire Ordering:** Maintained the canonical telemetry reading order (`temp_l · temp_m · temp_r` and `wear_l · wear_m · wear_r`), which naturally maps to `O·M·I` for Left tires and `I·M·O` for Right tires exactly as shown in the iRacing garage.
 * **Zero Estimation Policy:** Completely eliminated ideal gas law math and pressure estimation formulas. Stint tires now exclusively report ground-truth telemetry values directly measured by iRacing.
@@ -168,7 +196,7 @@
 
 # The Search For Speed Analyzer — v0.2.1
 
-### 🛠️ UI Refinements & Styling Fixes:
+### ⚙ UI Refinements & Styling Fixes:
 * **Tire Wear & Temps Line Wrapping Fix:** Widened Column 3 (`345px` min), reduced button padding, and enforced non-breaking single-line layout (`.wrap(false)`) so 3-digit tire temperatures and wear percentages (`100% · 100% · 100%`) never wrap onto multiple rows.
 * **15.5pt In-Car Overlay Sub-Labels:** Increased overlay secondary font size to bold 15.5pt for effortless glanceability from your sim cockpit.
 * **Trimmed Bottom HUD Space:** Eliminated ~40px of bottom void in the in-car overlay, creating clean, symmetrical 8px borders around all cards without any empty space.
@@ -195,7 +223,7 @@
 
 # The Search For Speed Analyzer — v0.1.4
 
-### 🏎️ Instant First-Frame Telemetry & Mid-Run Attach:
+### 🏁 Instant First-Frame Telemetry & Mid-Run Attach:
 * **Immediate Lap 0 Pit Exit Detection:** Fixed an issue where launching the app while sitting in the pit or garage on Lap 0 could clear the pit exit transition check, preventing Stint 1 from starting until the app was closed and reopened.
 * **Instant Mid-Run Attach:** Launching the app while already driving out on track now immediately recognizes the active session and creates Stint 1 at your current lap, recording telemetry and fuel with zero missed laps.
 
@@ -208,7 +236,7 @@
 
 # The Search For Speed Analyzer — v0.1.3
 
-### 🏎️ Driver Roster & Stint Grid Restoration:
+### 🏁 Driver Roster & Stint Grid Restoration:
 * **Direct Shared-Memory YAML Parser:** Replaced the third-party SDK session parser with a custom direct memory-mapped ISO-8859-1 YAML reader. This eliminates crashes caused by unpopulated subsession result schemas (`ResultsPositions: ~`) and permanently restores full driver names, car numbers, and iRatings across all stint grids and HUD views.
 * **Resilient Driver Name Population:** Grid rows no longer fall back to placeholder `Car #1, Car #2` names when active sessions load. Real competitor names and numbers populate immediately.
 
@@ -232,9 +260,9 @@
 
 # The Search For Speed Analyzer — v0.1.1
 
-### 🛠️ Bug Fixes & Improvements:
+### ⚙ Bug Fixes & Improvements:
 
-#### 1. Session Phase Transitions & Lap Reset (Practice ➔ Qualify ➔ Race)
+#### 1. Session Phase Transitions & Lap Reset (Practice → Qualify → Race)
 * **Clean Session Isolation:** Moving from Practice to Qualifying to Race now resets active driver lap counters, stints, caution states, and fast laps cleanly. Qualifying flyer laps no longer bleed into your race session fast lap.
 * **Historical Baseline Fuel Retention:** Fuel burn rates calculated in previous sessions are preserved as an instant strategy baseline until active race laps are logged.
 * **Session History Archiving:** Completed session stints are archived in memory for historical reference.

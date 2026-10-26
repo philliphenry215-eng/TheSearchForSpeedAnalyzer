@@ -235,7 +235,7 @@ fn parse_release_json(json: &serde_json::Value) -> UpdateStatus {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
             .map_or(false, |n| n.contains("beta"));
 
-        // Preferred: the per-user Inno Setup installer (installs to %LOCALAPPDATA%, never needs admin)
+        // Preferred: Inno Setup installer (handles both per-user and per-machine Program Files installs)
         if let Some(asset) = pick_exe_asset(assets, true, current_is_beta) {
             if let Some(url) = asset["browser_download_url"].as_str() {
                 installer_download_url = Some(url.to_string());
@@ -451,7 +451,7 @@ fn launch_installer(setup_path: &Path) -> Result<(), String> {
             "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
              try {{ \
                $p = Start-Process -FilePath {setup} -Verb RunAs -Wait -PassThru \
-                    -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART',{dir_arg}; \
+                    -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',{dir_arg}; \
                if ($p.ExitCode -ne 0) {{ throw 'installer failed' }}; \
                Start-Process -FilePath {cur} \
              }} catch {{ \
@@ -466,7 +466,7 @@ fn launch_installer(setup_path: &Path) -> Result<(), String> {
     } else {
         format!(
             "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
-             Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/RELAUNCH',{dir_arg}",
+             Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/RELAUNCH',{dir_arg}",
             pid = std::process::id(),
             setup = ps_quote(setup_path),
             dir_arg = dir_arg_quoted,

@@ -266,9 +266,9 @@ pub fn render_discord_stint_card(
 
     // --- 1. TOP HEADER & SESSION WEATHER / TRACK STATE BANNER ---
     let header_title = if is_compare {
-        "SEARCH FOR SPEED  ·  STINT COMPARISON"
+        "THE SEARCH FOR SPEED  ·  STINT COMPARISON"
     } else {
-        "SEARCH FOR SPEED  ·  STINT REPORT"
+        "THE SEARCH FOR SPEED  ·  STINT REPORT"
     };
     draw_text(&mut img, &font_display, pad_x, 18.0, 22.0, primary_gold, header_title);
 

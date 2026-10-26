@@ -3103,7 +3103,7 @@ DriverInfo:
   DriverCarFuelMaxLtr: 110.0
   Drivers:
     - CarIdx: 0
-      UserName: Search For Speed Driver
+      UserName: The Search For Speed Driver
       CarNumber: "42"
       IRating: 4850
       CarScreenName: Porsche 963 GTP

@@ -3,7 +3,7 @@
   #define MyAppName "The Search For Speed Analyzer"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.5"
+  #define MyAppVersion "0.3.6"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "The Henry Boys"
@@ -37,10 +37,13 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={localappdata}\Programs\{#MyAppDirName}
+; Dynamic default directory: {autopf} resolves to Program Files in administrative / all-users mode,
+; and to {localappdata}\Programs in per-user / current-user mode.
+DefaultDirName={autopf}\{#MyAppDirName}
 DisableProgramGroupPage=yes
-; Per-user install requires no Windows administrator prompts
+; Allows user to choose between "Install for all users" (admin/Program Files) and "Install for me only" (per-user/LocalAppData)
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog commandline
 OutputDir=.
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile=assets\icon.ico

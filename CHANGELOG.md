@@ -5,6 +5,52 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.3.6] — 2026-10-25
+
+### Added & Fixed
+* **Dual-Mode Setup Installer & Custom Drive Support (`installer.iss`):**
+  * Added `PrivilegesRequiredOverridesAllowed=dialog commandline` and auto-constant `{autopf}` support to Inno Setup.
+  * Fixed Windows `Error 5: Access is denied` when installing into `C:\Program Files\SearchForSpeedAnalyzer`.
+  * Setup now offers both **Install for all users (recommended)** with UAC administrator elevation into `C:\Program Files`, and **Install for me only** into `%LOCALAPPDATA%\Programs`.
+  * Full support for installing to custom drives (`D:\`, `E:\`, etc.).
+* **Smart In-App Auto-Updater (`src/updater.rs`):**
+  * Silent update process passes `/ALLUSERS` with `-Verb RunAs` when installed in `C:\Program Files`, and `/CURRENTUSER` when installed per-user.
+* **Session Lap Number Synchronization:**
+  * Stint data now tracks exact iRacing session lap numbers (`CarIdxLapCompleted` at line crossing) alongside lap times and outputs them in TSV exports.
+  * Added robust handling for identical consecutive lap times and out-lap transitions.
+* **UI Font Stack & Branding:**
+  * Added font fallback definitions preventing missing `?` glyphs across system configurations.
+  * Standardized branding to **The Search For Speed Analyzer**.
+
+---
+
+## [0.3.5] — 2026-10-24
+
+### Added & Improved
+* **Local Stint Database & Real-Time Auto-Save:**
+  * Completed stints (`1+` green-flag laps) automatically persist to `%APPDATA%\SearchForSpeedAnalyzer\stint_database.json` and individual `.s4s.json` files.
+  * Automatic preservation of Practice and Qualifying stints before server transitions.
+* **Track-Matched Re-Import & Comparison:**
+  * Saved Stints manager with instant filtering to Current Track, fuzzy search, and re-importing into live sessions as reference stints.
+* **Lap 0 Historical Fuel Burn Seeding:**
+  * Pre-populates fuel burn rate, laps remaining, and pit call on Lap 0 from past runs on the same track and car combo.
+* **Discord Stint Code Sharing:**
+  * Compact `S4S-STINT-V1:...` share strings and clipboard import/export for teammate sharing.
+
+---
+
+## [0.3.4] — 2026-10-24
+
+### Added & Improved
+* **Post-Pit 4-Corner Tire Popup Overlay:**
+  * Floating in-car overlay that automatically appears for a configurable duration (`3s–60s`) when new post-pit tire wear, temperatures, and pressures latch.
+* **True Transparent Outer HUD Background:**
+  * DWM per-pixel alpha compositing with separate Inner Card Opacity and Outer Background Box sliders.
+* **Default Startup View Setting:**
+  * Added startup view selection in Settings (Cockpit Stint & Fuel Analyzer, Multi-Driver Stint Grid, or Offline .IBT Telemetry Lab).
+
+---
+
 ## [0.3.3] — 2026-10-24
 
 ### Added & Improved

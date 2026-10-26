@@ -18,9 +18,9 @@ use settings::{ActiveViewMode, AppSettings, FuelHeroMetric, LayoutPreset, ThemeP
 
 fn main() -> eframe::Result<()> {
     let title = if settings::is_beta_mode() {
-        "Search For Speed - Stint Analyzer [BETA]"
+        "The Search For Speed - Stint Analyzer [BETA]"
     } else {
-        "Search For Speed - Stint Analyzer"
+        "The Search For Speed - Stint Analyzer"
     };
 
     let app_icon = {
@@ -51,7 +51,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "Search For Speed Analyzer",
+        "The Search For Speed Analyzer",
         options,
         Box::new(|cc| {
             Box::new(WarRoomApp::new(cc))
@@ -176,9 +176,16 @@ fn setup_custom_style(ctx: &egui::Context, settings: &AppSettings) {
         .get_mut(&egui::FontFamily::Proportional)
         .unwrap()
         .insert(0, "Inter".to_owned());
+
+    let mut display_family = vec!["RacingSans".to_owned(), "Inter".to_owned()];
+    for font_name in fonts.families.get(&egui::FontFamily::Proportional).unwrap() {
+        if !display_family.contains(font_name) {
+            display_family.push(font_name.clone());
+        }
+    }
     fonts.families.insert(
         egui::FontFamily::Name("Display".into()),
-        vec!["RacingSans".to_owned(), "Inter".to_owned()],
+        display_family,
     );
     ctx.set_fonts(fonts);
     
@@ -260,6 +267,9 @@ pub struct StintData {
     pub awaiting_pit_out_lap_sf: bool,
     pub laps_completed: i32,
     pub lap_times: Vec<f32>,
+    /// iRacing session lap number (`CarIdxLapCompleted` at the S/F crossing) for each entry in `lap_times`.
+    /// Older saved stints may not have this; `numbered_valid_laps()` falls back to `start_lap + i + 1`.
+    pub lap_numbers: Vec<i32>,
     pub fuel_start: f32,
     pub fuel_used: f32,
     pub last_lap: f32,
@@ -292,6 +302,7 @@ impl Default for StintData {
             awaiting_pit_out_lap_sf: false,
             laps_completed: 0,
             lap_times: Vec::new(),
+            lap_numbers: Vec::new(),
             fuel_start: 0.0,
             fuel_used: 0.0,
             last_lap: 0.0,
@@ -331,6 +342,21 @@ impl StintData {
 
     pub fn valid_laps(&self) -> Vec<f32> {
         self.lap_times.iter().copied().filter(|&t| t > 5.0 && t < 360.0).collect()
+    }
+
+    /// Same laps as `valid_laps()`, paired with the iRacing session lap number each time belongs to.
+    pub fn numbered_valid_laps(&self) -> Vec<(i32, f32)> {
+        let has_numbers = self.lap_numbers.len() == self.lap_times.len();
+        self.lap_times
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|&(_, t)| t > 5.0 && t < 360.0)
+            .map(|(i, t)| {
+                let lap_num = if has_numbers { self.lap_numbers[i] } else { self.start_lap + (i as i32) + 1 };
+                (lap_num, t)
+            })
+            .collect()
     }
 
     pub fn full_average(&self) -> f32 {
@@ -555,6 +581,13 @@ pub struct DriverState {
     pub setup_name: String,
     pub stints: Vec<StintData>,
     pub historical_fuel_burn_rate: f32,
+    /// Session time when `CarIdxLapCompleted` incremented but `CarIdxLastLapTime` has not (yet) changed.
+    /// iRacing publishes the new lap time a few frames after the lap count; if it never changes the
+    /// lap was genuinely identical to the previous one and is recorded after a grace period.
+    pub pending_lap_count_since: f64,
+    /// Session time when a lap was recorded from a lap-time change BEFORE the lap count incremented,
+    /// so the late count increment is not treated as another lap.
+    pub lap_time_ahead_since: f64,
 }
 
 impl DriverState {
@@ -844,6 +877,8 @@ impl WarRoomState {
             },
             stints: Vec::new(),
             historical_fuel_burn_rate: 0.0,
+            pending_lap_count_since: 0.0,
+            lap_time_ahead_since: 0.0,
         });
 
         // If this exact saved stint is already imported, return its existing stint_number
@@ -1170,6 +1205,8 @@ impl WarRoomState {
                 setup_name: if idx == player_idx && !player_setup_snapshot.is_empty() { player_setup_snapshot.clone() } else { "Baseline".to_string() },
                 stints: Vec::new(),
                 historical_fuel_burn_rate: 0.0,
+                pending_lap_count_since: 0.0,
+                lap_time_ahead_since: 0.0,
             });
 
             driver.position = pos;
@@ -1500,7 +1537,9 @@ impl WarRoomState {
             }
 
             // 3. NEW LAP TIME / COUNT EMITTED BY IRACING ON TRACK (Direct SDK Fire)
-            let is_new_lap_time = (last_lap_time - driver.last_known_lap_time).abs() > 0.0005 && last_lap_time > 3.0;
+            // iRacing times laps to 0.1 ms, so any change larger than 0.05 ms is a new lap time. (A 0.5 ms threshold used to
+            // silently drop a lap whenever two consecutive laps were within half a millisecond, e.g. 33.1875 → 33.1871.)
+            let is_new_lap_time = (last_lap_time - driver.last_known_lap_time).abs() > 0.00005 && last_lap_time > 3.0;
             let is_new_lap_count = current_lap_sdk > driver.last_processed_lap && current_lap_sdk > 0;
 
             if (is_new_lap_count || is_new_lap_time) && in_world {
@@ -1578,10 +1617,14 @@ impl WarRoomState {
                 state_changed = true;
             } else {
                 // 3D. UNTIMED OUT-LAP COMPLETION (Start/Finish crossed for the first time since pit exit in Practice/Qualifying)
+                let mut out_lap_handled_this_frame = false;
                 if is_new_lap_count && !is_pit && in_world && !is_new_lap_time {
                     if let Some(active) = driver.stints.iter_mut().rev().find(|st| !st.is_imported) {
                         if active.is_active && !active.out_lap_completed {
                             active.out_lap_completed = true;
+                            // The out-lap consumed session lap `current_lap_sdk`; Flying Lap 1 will be session lap `current_lap_sdk + 1`
+                            active.start_lap = current_lap_sdk.max(0);
+                            active.end_lap = current_lap_sdk.max(0);
                             active.prev_crossing_fuel = current_fuel_sample;
                             active.crossing_fuel_level = current_fuel_sample;
                             if active.latched_fuel_burn_rate > 0.001 {
@@ -1589,6 +1632,10 @@ impl WarRoomState {
                             }
                             driver.last_processed_lap = current_lap_sdk;
                             driver.total_laps_completed = current_lap_sdk.max(0);
+                            // If iRacing publishes an out-lap time a few frames late, 3B absorbs it instead of counting it as Lap 1
+                            driver.ignored_lap_sdk = current_lap_sdk;
+                            driver.pending_lap_count_since = 0.0;
+                            out_lap_handled_this_frame = true;
                             if idx == player_idx {
                                 pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Crossed start/finish at Lap {}. Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, current_lap_sdk, current_fuel_sample));
                             }
@@ -1597,7 +1644,43 @@ impl WarRoomState {
                     }
                 }
 
-                if (is_new_lap_time || (is_new_lap_count && (last_lap_time - driver.last_known_lap_time).abs() > 0.0005)) && !is_pit && in_world {
+                // Decide whether a completed lap should be recorded this frame.
+                // `CarIdxLapCompleted` is the authority for "a lap was completed"; `CarIdxLastLapTime` normally
+                // changes a few frames later. A lap is recorded when:
+                //   a) the lap time changes (with or without the count having incremented yet), or
+                //   b) the count incremented but the time stayed identical for LAP_TIME_GRACE_S seconds —
+                //      i.e. two consecutive laps with the exact same time (previously these were silently dropped).
+                const LAP_TIME_GRACE_S: f64 = 3.0;
+                let mut record_identical_lap = false;
+                if is_pit || !in_world {
+                    driver.pending_lap_count_since = 0.0;
+                } else if is_new_lap_count && !is_new_lap_time && !out_lap_handled_this_frame {
+                    let count_catching_up = driver.lap_time_ahead_since > 0.0
+                        && (frame.cur_session_time - driver.lap_time_ahead_since) <= LAP_TIME_GRACE_S;
+                    if count_catching_up {
+                        // Lap was already recorded when its time arrived ahead of the count; just sync the count
+                        driver.lap_time_ahead_since = 0.0;
+                        driver.pending_lap_count_since = 0.0;
+                        driver.last_processed_lap = current_lap_sdk;
+                        driver.total_laps_completed = current_lap_sdk.max(0);
+                    } else if driver.pending_lap_count_since <= 0.0 {
+                        driver.pending_lap_count_since = frame.cur_session_time;
+                    } else if (frame.cur_session_time - driver.pending_lap_count_since) >= LAP_TIME_GRACE_S {
+                        if last_lap_time > 3.0 {
+                            record_identical_lap = true;
+                        } else {
+                            // Lap completed without a usable time (e.g. invalidated): consume the count, record nothing
+                            driver.pending_lap_count_since = 0.0;
+                            driver.last_processed_lap = current_lap_sdk;
+                            driver.total_laps_completed = current_lap_sdk.max(0);
+                        }
+                    }
+                }
+
+                if (is_new_lap_time || record_identical_lap) && !is_pit && in_world {
+                    // Session lap number this time belongs to. If the time arrived before the count incremented,
+                    // `CarIdxLapCompleted` is still one behind.
+                    let completed_lap_num = if is_new_lap_count || record_identical_lap { current_lap_sdk } else { current_lap_sdk + 1 };
                     if !driver.has_live_stints() || !driver.last_live_stint().map_or(false, |st| st.is_active) {
                         let new_stint_num = driver.next_live_stint_number();
                         let initial_laps_of_fuel = if current_fuel_sample > 0.0 {
@@ -1608,8 +1691,8 @@ impl WarRoomState {
 
                         driver.stints.push(StintData {
                             stint_number: new_stint_num,
-                            start_lap: (current_lap_sdk - 1).max(0),
-                            end_lap: current_lap_sdk.max(0),
+                            start_lap: (completed_lap_num - 1).max(0),
+                            end_lap: completed_lap_num.max(0),
                             out_lap_completed: true,
                             awaiting_pace_lap_sf: false,
                             awaiting_pit_out_lap_sf: false,
@@ -1639,63 +1722,93 @@ impl WarRoomState {
                         if last_lap_time > 3.0 && last_lap_time < 360.0 {
                             let was_uncompleted_out_lap = !active.out_lap_completed;
                             active.out_lap_completed = true;
-                            active.lap_times.push(last_lap_time);
-                            active.last_lap = last_lap_time;
-                            active.laps_completed = active.lap_times.len() as i32;
-                            active.end_lap = current_lap_sdk.max(0);
+                            active.end_lap = completed_lap_num.max(0);
 
-                            if active.fast_lap <= 0.0 || last_lap_time < active.fast_lap {
-                                active.fast_lap = last_lap_time;
-                            }
-                            if active.fuel_start <= 0.0 && current_fuel_sample > 0.0 {
-                                active.fuel_start = current_fuel_sample;
-                            }
-
-                            // Latch fuel at start/finish line crossing: calculate exact timed-lap burn delta
-                            if idx == player_idx && current_fuel_sample > 0.0 {
-                                let is_anomalous_slow_lap = active.fast_lap > 3.0 && last_lap_time > active.fast_lap * 1.35;
-
-                                if was_uncompleted_out_lap {
-                                    // The sim timed the out-lap itself: latch fuel at start/finish line so Lap 1 is measured cleanly
+                            if was_uncompleted_out_lap {
+                                // The sim timed the out-lap itself. An out-lap is never a flying lap, so it is not added to
+                                // the stint lap list (same as the untimed out-lap path 3D and the race pit-out path 3C).
+                                active.start_lap = completed_lap_num.max(0);
+                                if idx == player_idx && current_fuel_sample > 0.0 {
+                                    // Latch fuel at start/finish line so Lap 1 is measured cleanly
                                     active.prev_crossing_fuel = current_fuel_sample;
                                     active.crossing_fuel_level = current_fuel_sample;
                                     if active.latched_fuel_burn_rate > 0.001 {
                                         active.laps_of_fuel_crossing = (current_fuel_sample / active.latched_fuel_burn_rate).max(0.0);
                                     }
-                                    pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Timed out-lap ({:.3}s). Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, last_lap_time, current_fuel_sample));
-                                } else if !is_anomalous_slow_lap {
-                                    // Clean green-flag flying lap burn
-                                    if active.prev_crossing_fuel > 0.0 && active.prev_crossing_fuel >= current_fuel_sample {
-                                        let lap_burn = active.prev_crossing_fuel - current_fuel_sample;
-                                        if lap_burn > 0.05 && lap_burn < 25.0 {
-                                            active.lap_fuel_burns.push(lap_burn);
-                                            active.fuel_used += lap_burn;
-                                            active.latched_fuel_burn_rate = active.fuel_per_lap();
-                                        }
-                                    }
-                                    active.prev_crossing_fuel = current_fuel_sample;
-                                    active.crossing_fuel_level = current_fuel_sample;
-                                    let burn_rate = active.fuel_per_lap();
-                                    if burn_rate > 0.001 {
-                                        active.laps_of_fuel_crossing = (current_fuel_sample / burn_rate).max(0.0);
-                                    }
-                                } else {
-                                    // Anomalous slow lap (e.g. spin): update fuel level without distorting green-flag fuel burn average
-                                    active.prev_crossing_fuel = current_fuel_sample;
-                                    active.crossing_fuel_level = current_fuel_sample;
                                 }
-                            }
+                                if idx == player_idx {
+                                    pending_logs.push(format!("[OUT LAP COMPLETED] Stint S{}: Timed out-lap {} ({:.3}s) dropped. Latched fuel at {:.2} L for Flying Lap 1", active.stint_number, completed_lap_num, last_lap_time, current_fuel_sample));
+                                }
+                            } else {
+                                // Keep lap_numbers aligned 1:1 with lap_times
+                                while active.lap_numbers.len() < active.lap_times.len() {
+                                    let fill = active.start_lap + active.lap_numbers.len() as i32 + 1;
+                                    active.lap_numbers.push(fill);
+                                }
+                                active.lap_times.push(last_lap_time);
+                                active.lap_numbers.push(completed_lap_num);
+                                active.last_lap = last_lap_time;
+                                active.laps_completed = active.lap_times.len() as i32;
 
-                            if idx == player_idx {
-                                pending_logs.push(format!("[SDK LAP EMISSION] S{} Lap {}: Time = {:.3} (Prev = {:.3})", active.stint_number, active.laps_completed, last_lap_time, driver.last_known_lap_time));
+                                if active.fast_lap <= 0.0 || last_lap_time < active.fast_lap {
+                                    active.fast_lap = last_lap_time;
+                                }
+                                if active.fuel_start <= 0.0 && current_fuel_sample > 0.0 {
+                                    active.fuel_start = current_fuel_sample;
+                                }
+
+                                // Latch fuel at start/finish line crossing: calculate exact timed-lap burn delta
+                                if idx == player_idx && current_fuel_sample > 0.0 {
+                                    let is_anomalous_slow_lap = active.fast_lap > 3.0 && last_lap_time > active.fast_lap * 1.35;
+
+                                    if !is_anomalous_slow_lap {
+                                        // Clean green-flag flying lap burn
+                                        if active.prev_crossing_fuel > 0.0 && active.prev_crossing_fuel >= current_fuel_sample {
+                                            let lap_burn = active.prev_crossing_fuel - current_fuel_sample;
+                                            if lap_burn > 0.05 && lap_burn < 25.0 {
+                                                active.lap_fuel_burns.push(lap_burn);
+                                                active.fuel_used += lap_burn;
+                                                active.latched_fuel_burn_rate = active.fuel_per_lap();
+                                            }
+                                        }
+                                        active.prev_crossing_fuel = current_fuel_sample;
+                                        active.crossing_fuel_level = current_fuel_sample;
+                                        let burn_rate = active.fuel_per_lap();
+                                        if burn_rate > 0.001 {
+                                            active.laps_of_fuel_crossing = (current_fuel_sample / burn_rate).max(0.0);
+                                        }
+                                    } else {
+                                        // Anomalous slow lap (e.g. spin): update fuel level without distorting green-flag fuel burn average
+                                        active.prev_crossing_fuel = current_fuel_sample;
+                                        active.crossing_fuel_level = current_fuel_sample;
+                                    }
+                                }
+
+                                if idx == player_idx {
+                                    let how = if record_identical_lap {
+                                        " [identical to previous lap time]"
+                                    } else if !is_new_lap_count {
+                                        " [time arrived before lap count]"
+                                    } else {
+                                        ""
+                                    };
+                                    pending_logs.push(format!("[SDK LAP EMISSION] S{} Lap {} (Session Lap {}): Time = {:.3} (Prev = {:.3}){}", active.stint_number, active.laps_completed, completed_lap_num, last_lap_time, driver.last_known_lap_time, how));
+                                }
                             }
                             state_changed = true;
                         }
                     }
+                    driver.pending_lap_count_since = 0.0;
+                    driver.lap_time_ahead_since = if is_new_lap_count || record_identical_lap { 0.0 } else { frame.cur_session_time };
                     driver.last_known_lap_time = last_lap_time;
                     driver.last_processed_lap = current_lap_sdk;
                     driver.total_laps_completed = current_lap_sdk.max(0);
                 }
+            }
+
+            // Any branch above that consumed the lap count clears a pending identical-time lap
+            if current_lap_sdk <= driver.last_processed_lap {
+                driver.pending_lap_count_since = 0.0;
             }
 
             driver.is_on_pit_road = is_pit;
@@ -2332,6 +2445,8 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                 setup_name: setup_to_assign,
                 stints: Vec::new(),
                 historical_fuel_burn_rate: 0.0,
+                pending_lap_count_since: 0.0,
+                lap_time_ahead_since: 0.0,
             });
         }
 
@@ -3122,13 +3237,12 @@ fn format_laps_column_tsv(stint: &StintData) -> String {
 }
 
 fn format_stint_laps_spreadsheet_tsv(stint: &StintData) -> String {
-    let valid_laps = stint.valid_laps();
+    let numbered_laps = stint.numbered_valid_laps();
     let mut out = String::from("Stint Lap\tLap\tLap Time\tAvg Lap Time\n");
     let mut sum = 0.0;
-    for (i, &t) in valid_laps.iter().enumerate() {
+    for (i, &(overall_lap, t)) in numbered_laps.iter().enumerate() {
         sum += t;
         let avg = sum / (i + 1) as f32;
-        let overall_lap = stint.start_lap + (i as i32) + 1;
         out.push_str(&format!("{}\t{}\t{:.3}\t{:.3}\n", i + 1, overall_lap, t, avg));
     }
     out
@@ -3274,7 +3388,7 @@ pub fn format_stints_comparison_tsv(
     use_metric: bool,
 ) -> String {
     let mut out = String::new();
-    out.push_str("SEARCH FOR SPEED — STINT COMPARISON REPORT\n\n");
+    out.push_str("THE SEARCH FOR SPEED — STINT COMPARISON REPORT\n\n");
 
     // Header row
     out.push_str("METRIC");
@@ -3960,7 +4074,7 @@ impl WarRoomApp {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("RAW SDK VARIABLES · 60 HZ").color(muted).size(11.0).extra_letter_spacing(0.8));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("✕ Close").color(white).size(12.0)).fill(elevated)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated)).clicked() {
                             self.show_telemetry_debugger = false;
                         }
                     });
@@ -5039,7 +5153,7 @@ fn render_multi_stint_lap_chart(
             }
 
             let mut tooltip_lines = Vec::new();
-            tooltip_lines.push(format!("─── Lap {} ───", nearest_lap_idx + 1));
+            tooltip_lines.push(format!("——— Lap {} ———", nearest_lap_idx + 1));
 
             for (s_idx, valid) in all_valid.iter().enumerate() {
                 if nearest_lap_idx < valid.len() {
@@ -5352,7 +5466,7 @@ impl WarRoomApp {
                                         }
                                         if resolved.len() > 1 {
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                if ui.add(egui::Button::new(egui::RichText::new("✕").color(muted).size(11.0)).fill(egui::Color32::TRANSPARENT)).on_hover_text("Remove this stint from comparison").clicked() {
+                                                if ui.add(egui::Button::new(egui::RichText::new("×").color(muted).size(11.0)).fill(egui::Color32::TRANSPARENT)).on_hover_text("Remove this stint from comparison").clicked() {
                                                     remove_slot_idx = Some(c_idx);
                                                 }
                                             });
@@ -5977,7 +6091,7 @@ impl WarRoomApp {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("COMPARE UP TO 3 STINTS SIDE-BY-SIDE").color(self.settings.text_muted()).size(11.0).extra_letter_spacing(0.8));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized(egui::vec2(72.0, 26.0), egui::Button::new(egui::RichText::new("✕ Close").color(white).size(12.0)).fill(elevated)).clicked() {
+                        if ui.add_sized(egui::vec2(72.0, 26.0), egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated)).clicked() {
                             close_modal = true;
                         }
                     });
@@ -6160,7 +6274,7 @@ impl WarRoomApp {
                     };
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized(egui::vec2(72.0, 26.0), egui::Button::new(egui::RichText::new("✕ Close").color(white).size(12.0)).fill(elevated)).clicked() {
+                        if ui.add_sized(egui::vec2(72.0, 26.0), egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated)).clicked() {
                             close_modal = true;
                         }
 
@@ -6324,6 +6438,7 @@ impl WarRoomApp {
 
                     // --- SECTION: LAP-BY-LAP SPREADSHEET TABLE ---
                     let valid_laps = stint.valid_laps();
+                    let numbered_laps = stint.numbered_valid_laps();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("LAP-BY-LAP LOG").color(muted).size(11.0).extra_letter_spacing(0.8));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -6380,10 +6495,9 @@ impl WarRoomApp {
                                     })
                                     .body(|mut body| {
                                         let min_t = valid_laps.iter().cloned().fold(f32::INFINITY, f32::min);
-                                        for (i, &t) in valid_laps.iter().enumerate() {
+                                        for (i, &(overall_lap, t)) in numbered_laps.iter().enumerate() {
                                             sum_lap_times += t;
                                             let cum_avg = sum_lap_times / (i + 1) as f32;
-                                            let overall_lap = stint.start_lap + (i as i32) + 1;
                                             let is_fast = (t - min_t).abs() < 0.0001;
 
                                             body.row(26.0, |mut row| {
@@ -6757,7 +6871,7 @@ impl WarRoomApp {
                             ui.label(egui::RichText::new("STINT LOG").color(muted).size(11.0).extra_letter_spacing(1.0));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.add(
-                                    egui::Button::new(egui::RichText::new("Buckets ▾").color(white).size(11.5))
+                                    egui::Button::new(egui::RichText::new("Buckets ▼").color(white).size(11.5))
                                         .fill(elevated)
                                         .rounding(egui::Rounding::same(6.0))
                                 ).clicked() {
@@ -6845,7 +6959,7 @@ impl WarRoomApp {
                                                                 .show(ui, |ui| {
                                                                     ui.label(egui::RichText::new("Ref").color(secondary).size(10.0).strong());
                                                                 });
-                                                            if ui.add(egui::Button::new(egui::RichText::new("✕").color(muted).size(10.0)).frame(false)).on_hover_text("Unload this imported stint from current session (remains saved in your Stint Database)").clicked() {
+                                                            if ui.add(egui::Button::new(egui::RichText::new("×").color(muted).size(10.0)).frame(false)).on_hover_text("Unload this imported stint from current session (remains saved in your Stint Database)").clicked() {
                                                                 remove_imported_stint_num = Some(stint.stint_number);
                                                             }
                                                         }
@@ -6994,7 +7108,7 @@ impl WarRoomApp {
                                 ui.label(egui::RichText::new(header_lbl).color(muted).size(11.0).extra_letter_spacing(1.0));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if stint_has_tires {
-                                        ui.menu_button(egui::RichText::new("Copy ▾").color(muted).size(11.5), |ui| {
+                                        ui.menu_button(egui::RichText::new("Copy ▼").color(muted).size(11.5), |ui| {
                                             if ui.button("Copy 4-Tire Temps").clicked() {
                                                 let tsv = format_temps_excel_tsv(tires_to_show, is_metric);
                                                 ui.output_mut(|o| o.copied_text = tsv);
@@ -7353,7 +7467,7 @@ impl WarRoomApp {
                         }
 
                         if ui.add(
-                            egui::Button::new(egui::RichText::new("Buckets ▾").color(white).size(11.5))
+                            egui::Button::new(egui::RichText::new("Buckets ▼").color(white).size(11.5))
                                 .fill(elevated)
                                 .rounding(egui::Rounding::same(6.0))
                         ).clicked() {
@@ -8064,7 +8178,7 @@ impl WarRoomApp {
             } else if state.session_flag_name == "CHECKERED" {
                 ("🏁 Checkered", white)
             } else if state.session_flag_name == "WHITE FLAG" {
-                ("🏳 White Flag", white)
+                ("🏁 White Flag", white)
             } else {
                 ("● Green", green)
             };
@@ -8820,7 +8934,7 @@ impl WarRoomApp {
                         if ui
                             .add_sized(
                                 egui::vec2(72.0, 26.0),
-                                egui::Button::new(egui::RichText::new("✕ Close").color(white).size(12.0)).fill(elevated),
+                                egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated),
                             )
                             .clicked()
                         {
@@ -9593,13 +9707,13 @@ impl eframe::App for WarRoomApp {
                     });
                 });
 
-                // Right-side controls: Live pill, Overlay, Overflow menu (⋯), Settings (⚙)
+                // Right-side controls: Live pill, Overlay, Overflow menu (…), Settings (⚙)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add_sized(egui::vec2(32.0, 30.0), egui::Button::new(egui::RichText::new("⚙").color(white).size(14.0)).fill(elevated)).on_hover_text("Settings & Layouts").clicked() {
                         self.show_settings_modal = true;
                     }
 
-                    ui.menu_button(egui::RichText::new("⋯").color(white).size(15.0), |ui| {
+                    ui.menu_button(egui::RichText::new("…").color(white).size(15.0), |ui| {
                         ui.set_min_width(210.0);
                         if ui.button("📖 What's New & Release Notes").clicked() {
                             self.show_release_notes_modal = true;
@@ -9718,7 +9832,7 @@ impl eframe::App for WarRoomApp {
                                 }
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("✕ Dismiss").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(11.5)).clicked() {
                                         self.updater.dismiss();
                                     }
                                     if ui.button(egui::RichText::new("Skip this version").color(muted).size(11.5)).clicked() {
@@ -9771,7 +9885,7 @@ impl eframe::App for WarRoomApp {
                             updater::UpdateStatus::Error(err) => {
                                 ui.label(egui::RichText::new(format!("⚠ Update notice: {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(12.0));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("✕ Dismiss").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(11.5)).clicked() {
                                         self.updater.dismiss();
                                     }
                                 });
@@ -11117,7 +11231,7 @@ DriverInfo:
         let active_buckets = vec![5];
         let tsv = format_stints_comparison_tsv(&stints_info, &active_buckets, false);
 
-        assert!(tsv.contains("SEARCH FOR SPEED — STINT COMPARISON REPORT"));
+        assert!(tsv.contains("THE SEARCH FOR SPEED — STINT COMPARISON REPORT"));
         assert!(tsv.contains("Stint A (#42 Player 1)"));
         assert!(tsv.contains("Stint B (#42 Player 1)"));
         assert!(tsv.contains("Stint C (#7 Bob Rival)"));
@@ -11529,6 +11643,172 @@ DriverInfo:
         let drv = state.drivers.get(&1).unwrap();
         assert_eq!(drv.stints.len(), 1);
         assert_eq!(drv.stints[0].short_label(), "S1");
+    }
+
+    /// Feeds a single-car (CarIdx 0) telemetry frame into the state machine.
+    fn feed_single_car_frame(state: &mut WarRoomState, t: f64, on_pit_road: bool, lap_completed: i32, last_lap: f32) {
+        let pit_road = vec![on_pit_road];
+        let laps_comp = vec![lap_completed];
+        let last_laps = vec![last_lap];
+        let fast_laps = vec![0.0];
+        let positions = vec![1];
+        let surfaces = vec![if on_pit_road { 1 } else { 3 }];
+        let lap_dist_pcts = vec![0.01];
+        let frame = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: t,
+            current_fuel_sample: 0.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame, None, false);
+    }
+
+    #[test]
+    fn test_practice_stint_lap_numbers_and_near_identical_laps() {
+        // Reproduces a real practice stint: pit exit during session lap 41 (out-lap, untimed), flying laps 42..63.
+        // Laps 52 and 53 were 0.4 ms apart and lap 53 used to be silently dropped, shifting every later lap.
+        let mut state = WarRoomState::default();
+        state.session_type = "PRACTICE".to_string();
+        state.player_car_idx = 0;
+
+        let prev_last = 34.000_f32;
+        feed_single_car_frame(&mut state, 100.0, true, 40, prev_last); // In pit stall
+        feed_single_car_frame(&mut state, 105.0, false, 40, prev_last); // Pit exit -> S1 starts, out-lap (session lap 41)
+        feed_single_car_frame(&mut state, 140.0, false, 41, prev_last); // Out-lap crosses S/F (untimed)
+        feed_single_car_frame(&mut state, 140.3, false, 41, 38.900); // iRacing publishes a late out-lap time -> must be ignored
+
+        let times: [f32; 22] = [
+            32.614, 32.650, 32.823, 32.897, 33.139, 33.281, 33.146, 33.109, 33.080, 33.094, 33.1876,
+            33.1872, 33.157, 33.328, 33.447, 33.202, 33.146, 33.273, 33.285, 33.404, 33.449, 33.370,
+        ];
+        let mut t = 140.3;
+        let mut prev = 38.900_f32;
+        for (i, &lap_time) in times.iter().enumerate() {
+            let session_lap = 42 + i as i32;
+            t += lap_time as f64;
+            // Lap count increments first; CarIdxLastLapTime follows a few frames later
+            feed_single_car_frame(&mut state, t, false, session_lap, prev);
+            feed_single_car_frame(&mut state, t + 0.1, false, session_lap, prev);
+            feed_single_car_frame(&mut state, t + 0.25, false, session_lap, lap_time);
+            prev = lap_time;
+        }
+
+        let stint = &state.drivers.get(&0).unwrap().stints[0];
+        assert_eq!(stint.laps_completed, 22, "All 22 flying laps (42..63) must be counted");
+        let numbered = stint.numbered_valid_laps();
+        assert_eq!(numbered.first().copied(), Some((42, 32.614)));
+        assert_eq!(numbered[10], (52, 33.1876));
+        assert_eq!(numbered[11], (53, 33.1872));
+        assert_eq!(numbered.last().copied(), Some((63, 33.370)));
+
+        let tsv = format_stint_laps_spreadsheet_tsv(stint);
+        let rows: Vec<&str> = tsv.lines().collect();
+        assert!(rows[1].starts_with("1\t42\t32.614\t"));
+        assert!(rows[12].starts_with("12\t53\t33.187\t"));
+        assert!(rows[22].starts_with("22\t63\t33.370\t"));
+    }
+
+    #[test]
+    fn test_exactly_identical_consecutive_lap_time_is_recorded_after_grace() {
+        let mut state = WarRoomState::default();
+        state.session_type = "PRACTICE".to_string();
+        state.player_car_idx = 0;
+
+        feed_single_car_frame(&mut state, 100.0, true, 10, 0.0);
+        feed_single_car_frame(&mut state, 105.0, false, 10, 0.0); // Pit exit, out-lap = session lap 11
+        feed_single_car_frame(&mut state, 140.0, false, 11, 0.0); // Out-lap done
+        feed_single_car_frame(&mut state, 173.0, false, 12, 0.0);
+        feed_single_car_frame(&mut state, 173.2, false, 12, 33.0); // Lap 12 = 33.000
+
+        // Lap 13 is bit-for-bit identical: the count increments but the time never changes
+        feed_single_car_frame(&mut state, 206.0, false, 13, 33.0);
+        feed_single_car_frame(&mut state, 207.0, false, 13, 33.0);
+        assert_eq!(state.drivers.get(&0).unwrap().stints[0].laps_completed, 1, "Still inside grace window");
+        feed_single_car_frame(&mut state, 209.5, false, 13, 33.0);
+        assert_eq!(state.drivers.get(&0).unwrap().stints[0].laps_completed, 2, "Identical lap recorded after grace");
+        feed_single_car_frame(&mut state, 212.0, false, 13, 33.0);
+        assert_eq!(state.drivers.get(&0).unwrap().stints[0].laps_completed, 2, "Recorded only once");
+
+        // Lap 14: time arrives BEFORE the count increments — must be one lap, labelled 14
+        feed_single_car_frame(&mut state, 239.0, false, 13, 33.1);
+        feed_single_car_frame(&mut state, 239.2, false, 14, 33.1);
+        feed_single_car_frame(&mut state, 245.0, false, 14, 33.1);
+
+        let stint = &state.drivers.get(&0).unwrap().stints[0];
+        assert_eq!(stint.numbered_valid_laps(), vec![(12, 33.0), (13, 33.0), (14, 33.1)]);
+    }
+
+    #[test]
+    fn test_all_codebase_glyphs_supported() {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "Inter".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-Medium.ttf")),
+        );
+        fonts.font_data.insert(
+            "RacingSans".to_owned(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/RacingSansOne-Regular.ttf")),
+        );
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Proportional)
+            .unwrap()
+            .insert(0, "Inter".to_owned());
+
+        let mut display_family = vec!["RacingSans".to_owned(), "Inter".to_owned()];
+        for font_name in fonts.families.get(&egui::FontFamily::Proportional).unwrap() {
+            if !display_family.contains(font_name) {
+                display_family.push(font_name.clone());
+            }
+        }
+        fonts.families.insert(
+            egui::FontFamily::Name("Display".into()),
+            display_family,
+        );
+        ctx.set_fonts(fonts);
+
+        ctx.begin_frame(egui::RawInput::default());
+        let fonts_mgr = ctx.fonts(|f| f.clone());
+        let font_id = egui::FontId::proportional(14.0);
+
+        let files = [
+            include_str!("main.rs"),
+            include_str!("ibt_ui.rs"),
+            include_str!("settings.rs"),
+            include_str!("discord_card.rs"),
+            include_str!("stint_db.rs"),
+            include_str!("ibt.rs"),
+            include_str!("../RELEASE_NOTES.md"),
+        ];
+
+        let mut missing_chars = std::collections::BTreeMap::new();
+        for file in &files {
+            for c in file.chars() {
+                if !c.is_ascii() && !c.is_whitespace() && !fonts_mgr.has_glyph(&font_id, c) {
+                    *missing_chars.entry(c).or_insert(0) += 1;
+                }
+            }
+        }
+
+        for (c, count) in &missing_chars {
+            println!("MISSING GLYPH: {:?} (U+{:04X}) count={}", c, *c as u32, count);
+        }
+        assert!(
+            missing_chars.is_empty(),
+            "Found unsupported glyphs that will render as '?' in the UI: {:?}",
+            missing_chars
+        );
     }
 }
 
