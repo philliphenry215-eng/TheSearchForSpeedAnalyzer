@@ -1,3 +1,19 @@
+# The Search For Speed Analyzer — v0.3.9
+
+### 🛡 Windows Defender & Antivirus False-Positive Hardening:
+* **Embedded Application Manifest & Metadata:**
+  * Embedded a formal Windows application manifest (`asInvoker`) explicitly declaring to Windows Defender and SmartScreen that the application runs safely with standard user privileges and requires zero elevation.
+  * Added complete Windows VersionInfo metadata (Company, Product Name, Description, Copyright, Numeric Version) to both the compiled executable (`build.rs`) and the setup installer (`installer.iss`).
+
+### ⚙ Direct Win32 Updater Pipeline (Eliminated Hidden PowerShell):
+* **Native Process Execution:**
+  * Fully replaced hidden background PowerShell execution (`powershell.exe -WindowStyle Hidden -EncodedCommand`) in the auto-updater with native Win32 `ShellExecuteW` and direct process spawning.
+  * Eliminates the single largest behavioral trigger for antivirus heuristic scanners.
+  * Seamlessly integrates with Windows Restart Manager via Inno Setup flags (`/CLOSEAPPLICATIONS` and `/RELAUNCH`) so updating in place requires no external script wrappers.
+  * Hardened URL opening logic to strictly validate HTTP/HTTPS links before passing to the system shell.
+
+---
+
 # The Search For Speed Analyzer — v0.3.8
 
 ### 📊 Cross-File Telemetry Comparison (.IBT Lab):

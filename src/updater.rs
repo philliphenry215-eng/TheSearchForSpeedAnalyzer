@@ -293,7 +293,7 @@ fn pick_exe_asset<'a>(
 enum PendingKind {
     /// Per-user Inno Setup installer, run silently after the app exits.
     Installer,
-    /// Raw standalone binary, swapped in place (elevating via UAC only if the folder is protected).
+    /// Raw standalone binary, swapped in place (portable installs in a user-writable folder).
     Binary,
 }
 
@@ -431,10 +431,16 @@ pub fn apply_update_and_restart() -> Result<(), String> {
     }
 }
 
-/// Runs the Inno Setup installer silently once this process has exited, targeting the
-/// current application directory (`/DIR=...`) so custom C:/D:/E: drive installs stay in place.
-/// If the target directory is protected (e.g. `C:\Program Files`), elevates via UAC (`-Verb RunAs`)
-/// for the install step and then relaunches the app unelevated.
+/// Hands off to the downloaded Inno Setup installer and exits the app.
+///
+/// The installer is started directly (no hidden PowerShell / script hosts), runs silently into the
+/// current application directory (`/DIR=...`) so custom C:/D:/E: installs stay in place, closes this
+/// app via Windows Restart Manager if it is still running (`/CLOSEAPPLICATIONS`), and relaunches it
+/// afterwards (`/RELAUNCH`, handled in `installer.iss`).
+///
+/// Only legacy installs in a protected folder (e.g. `C:\Program Files` from v0.3.6) need admin rights.
+/// In that case Windows shows its normal UAC prompt *before* the app closes; if the user declines,
+/// the app simply stays open and reports that the update was cancelled.
 fn launch_installer(setup_path: &Path) -> Result<(), String> {
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Cannot locate current executable: {}", e))?;
@@ -442,45 +448,40 @@ fn launch_installer(setup_path: &Path) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "Cannot locate application folder".to_string())?;
 
-    let dir_arg = format!("/DIR={}", exe_dir.to_string_lossy());
-    let dir_arg_quoted = format!("'{}'", dir_arg.replace('\'', "''"));
     let needs_admin = !is_dir_writable(exe_dir);
+    let args = installer_args(exe_dir, needs_admin);
 
-    let script = if needs_admin {
-        format!(
-            "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
-             try {{ \
-               $p = Start-Process -FilePath {setup} -Verb RunAs -Wait -PassThru \
-                    -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART',{dir_arg}; \
-               if ($p.ExitCode -ne 0) {{ throw 'installer failed' }}; \
-               Start-Process -FilePath {cur} \
-             }} catch {{ \
-               Start-Process -FilePath {cur} -ArgumentList '{cancel_flag}' \
-             }}",
-            pid = std::process::id(),
-            setup = ps_quote(setup_path),
-            dir_arg = dir_arg_quoted,
-            cur = ps_quote(&current_exe),
-            cancel_flag = UPDATE_CANCELLED_ARG,
-        )
+    if needs_admin {
+        run_elevated(setup_path, &args)?;
     } else {
-        format!(
-            "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
-             Start-Process -FilePath {setup} -ArgumentList '/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/RELAUNCH',{dir_arg}",
-            pid = std::process::id(),
-            setup = ps_quote(setup_path),
-            dir_arg = dir_arg_quoted,
-        )
-    };
-
-    spawn_hidden_powershell(&script)
-        .map_err(|e| format!("Failed to launch installer: {}", e))?;
+        std::process::Command::new(setup_path)
+            .args(&args)
+            .spawn()
+            .map_err(|e| format!("Failed to launch installer: {}", e))?;
+    }
     std::process::exit(0);
 }
 
-/// Legacy path: swaps the raw binary in place. If the install folder is protected
-/// (e.g. Program Files), a UAC prompt is shown only for the file copy, and the app
-/// is relaunched afterwards *without* admin rights.
+/// Silent-install command line passed to the Inno Setup installer.
+fn installer_args(install_dir: &Path, all_users: bool) -> Vec<String> {
+    let mut args = vec![
+        "/SILENT".to_string(),
+        "/SUPPRESSMSGBOXES".to_string(),
+        "/NORESTART".to_string(),
+        "/CLOSEAPPLICATIONS".to_string(),
+        "/RELAUNCH".to_string(),
+    ];
+    if all_users {
+        // Keeps legacy Program Files installs in per-machine mode (same uninstall entry).
+        args.push("/ALLUSERS".to_string());
+    }
+    args.push(format!("/DIR={}", install_dir.to_string_lossy()));
+    args
+}
+
+/// Legacy path for standalone portable installs: swaps the raw binary in place.
+/// Windows allows renaming a running .exe, so this needs no helper process at all.
+/// If the folder is protected or the file is locked, the user is pointed to the installer instead.
 fn apply_binary_swap(new_exe: &Path) -> Result<(), String> {
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Cannot locate current executable: {}", e))?;
@@ -501,44 +502,13 @@ fn apply_binary_swap(new_exe: &Path) -> Result<(), String> {
             // Roll back so the app is never left missing
             let _ = std::fs::rename(&old_exe, &current_exe);
         }
-        // Fall through to the helper (e.g. file locked) - it waits for this process to exit
     }
 
-    // Elevated copy step (runs as admin via UAC). Only does the file copy.
-    let elevated_script = format!(
-        "Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
-         Start-Sleep -Milliseconds 300; \
-         Copy-Item -LiteralPath {new} -Destination {cur} -Force -ErrorAction Stop",
-        pid = std::process::id(),
-        new = ps_quote(new_exe),
-        cur = ps_quote(&current_exe),
-    );
-
-    // Outer non-elevated helper: requests UAC only when needed, then relaunches unelevated.
-    let needs_admin = !is_dir_writable(exe_dir);
-    let verb = if needs_admin { "-Verb RunAs " } else { "" };
-    let outer_script = format!(
-        "try {{ \
-           $p = Start-Process -FilePath 'powershell.exe' {verb}-WindowStyle Hidden -Wait -PassThru \
-                -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{inner}'; \
-           if ($p.ExitCode -ne 0) {{ throw 'copy failed' }}; \
-           Remove-Item -LiteralPath {new} -Force -ErrorAction SilentlyContinue; \
-           Start-Process -FilePath {cur} \
-         }} catch {{ \
-           Wait-Process -Id {pid} -Timeout 30 -ErrorAction SilentlyContinue; \
-           Start-Process -FilePath {cur} -ArgumentList '{cancel_flag}' \
-         }}",
-        verb = verb,
-        inner = encode_ps_command(&elevated_script),
-        new = ps_quote(new_exe),
-        cur = ps_quote(&current_exe),
-        pid = std::process::id(),
-        cancel_flag = UPDATE_CANCELLED_ARG,
-    );
-
-    spawn_hidden_powershell(&outer_script)
-        .map_err(|e| format!("Failed to launch updater process: {}", e))?;
-    std::process::exit(0);
+    Err(format!(
+        "Couldn't update the app in place because its folder is protected or in use ({}). \
+         Please download and run SearchForSpeedAnalyzer-Setup.exe from the GitHub releases page.",
+        exe_dir.display()
+    ))
 }
 
 /// Command-line flag passed back to the app when an elevated update was declined or failed.
@@ -555,49 +525,86 @@ fn is_dir_writable(dir: &Path) -> bool {
     }
 }
 
-/// Wraps a path in a PowerShell single-quoted literal.
-fn ps_quote(p: &Path) -> String {
-    format!("'{}'", p.to_string_lossy().replace('\'', "''"))
-}
-
-/// Encodes a script for `powershell -EncodedCommand` (Base64 of UTF-16LE), avoiding all quoting issues.
-fn encode_ps_command(script: &str) -> String {
-    let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
-    base64_encode(&bytes)
-}
-
-fn base64_encode(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+/// Quotes a single argument for a Windows command line (CommandLineToArgvW rules).
+fn quote_windows_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+        return arg.to_string();
     }
+    let mut out = String::from("\"");
+    let mut backslashes = 0usize;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.push_str(&"\\".repeat(backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                out.push_str(&"\\".repeat(backslashes));
+                out.push(c);
+                backslashes = 0;
+            }
+        }
+    }
+    out.push_str(&"\\".repeat(backslashes * 2));
+    out.push('"');
     out
 }
 
-fn spawn_hidden_powershell(script: &str) -> std::io::Result<std::process::Child> {
-    let mut cmd = std::process::Command::new("powershell.exe");
-    cmd.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-EncodedCommand",
-        &encode_ps_command(script),
-    ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+fn to_wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "shell32")]
+extern "system" {
+    fn ShellExecuteW(
+        hwnd: isize,
+        lp_operation: *const u16,
+        lp_file: *const u16,
+        lp_parameters: *const u16,
+        lp_directory: *const u16,
+        n_show_cmd: i32,
+    ) -> isize;
+}
+
+/// Starts a program through the standard Windows shell. `verb` is e.g. "open" or "runas".
+/// Returns false if Windows refused (including the user declining a UAC prompt).
+#[cfg(target_os = "windows")]
+fn shell_execute(verb: &str, file: &str, params: &str) -> bool {
+    const SW_SHOWNORMAL: i32 = 1;
+    let verb_w = to_wide(verb);
+    let file_w = to_wide(file);
+    let params_w = to_wide(params);
+    // SAFETY: all strings are valid NUL-terminated UTF-16 buffers that outlive the call.
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            verb_w.as_ptr(),
+            file_w.as_ptr(),
+            if params.is_empty() { std::ptr::null() } else { params_w.as_ptr() },
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Per Win32 docs, values greater than 32 indicate success.
+    result > 32
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_execute(_verb: &str, _file: &str, _params: &str) -> bool {
+    false
+}
+
+/// Runs a program with administrator rights via the standard Windows UAC prompt.
+fn run_elevated(program: &Path, args: &[String]) -> Result<(), String> {
+    let params = args.iter().map(|a| quote_windows_arg(a)).collect::<Vec<_>>().join(" ");
+    if shell_execute("runas", &program.to_string_lossy(), &params) {
+        Ok(())
+    } else {
+        Err("Update cancelled: administrator permission is required to update this install folder.".to_string())
     }
-    cmd.spawn()
 }
 
 pub fn cleanup_old_updates() {
@@ -675,12 +682,11 @@ fn parse_version_numbers(s: &str) -> Vec<u32> {
         .collect()
 }
 
+/// Opens a web page in the user's default browser via the standard Windows shell.
 pub fn open_browser(url: &str) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn();
+    // Only ever hand http(s) links to the shell.
+    if url.starts_with("https://") || url.starts_with("http://") {
+        let _ = shell_execute("open", url, "");
     }
 }
 
@@ -760,11 +766,27 @@ mod tests {
     }
 
     #[test]
-    fn test_base64_encode() {
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    fn test_quote_windows_arg() {
+        assert_eq!(quote_windows_arg("/SILENT"), "/SILENT");
+        assert_eq!(quote_windows_arg(r"/DIR=C:\Program Files\S4S"), r#""/DIR=C:\Program Files\S4S""#);
+        // Trailing backslash before the closing quote must be doubled
+        assert_eq!(quote_windows_arg(r"/DIR=C:\My Apps\"), r#""/DIR=C:\My Apps\\""#);
+        assert_eq!(quote_windows_arg(r#"a"b"#), r#""a\"b""#);
+        assert_eq!(quote_windows_arg(""), r#""""#);
+    }
+
+    #[test]
+    fn test_installer_args_silent_relaunch_and_dir() {
+        let dir = Path::new(r"D:\Games\SearchForSpeedAnalyzer");
+        let user = installer_args(dir, false);
+        assert!(user.contains(&"/SILENT".to_string()));
+        assert!(user.contains(&"/CLOSEAPPLICATIONS".to_string()));
+        assert!(user.contains(&"/RELAUNCH".to_string()));
+        assert!(!user.contains(&"/ALLUSERS".to_string()));
+        assert_eq!(user.last().unwrap(), r"/DIR=D:\Games\SearchForSpeedAnalyzer");
+
+        let admin = installer_args(Path::new(r"C:\Program Files\SearchForSpeedAnalyzer"), true);
+        assert!(admin.contains(&"/ALLUSERS".to_string()));
+        assert!(admin.contains(&"/RELAUNCH".to_string()));
     }
 }

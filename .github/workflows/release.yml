@@ -47,6 +47,10 @@ jobs:
             $tag = "${{ inputs.custom_tag }}"
           }
           
+          # Numeric-only version (e.g. v0.3.9-beta.1 -> 0.3.9) for the installer's Windows "Details" metadata
+          $numVer = ($tag -replace '^[vV]', '') -replace '[-+].*$', ''
+          if ($numVer -notmatch '^\d+(\.\d+){0,3}$') { $numVer = "0.0.0" }
+          
           $isBeta = $false
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $isBeta = [System.Convert]::ToBoolean("${{ inputs.is_beta }}")
@@ -56,13 +60,13 @@ jobs:
           
           if ($isBeta) {
             Copy-Item target/release/SearchForSpeedAnalyzer.exe SearchForSpeedAnalyzer-Beta.exe
-            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DBetaBuild /DMyAppName="The Search For Speed Analyzer (Beta)" /DMyAppExeName="SearchForSpeedAnalyzer-Beta.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Beta-Setup" /DMyAppVersion="$tag" installer.iss
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DBetaBuild /DMyAppName="The Search For Speed Analyzer (Beta)" /DMyAppExeName="SearchForSpeedAnalyzer-Beta.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Beta-Setup" /DMyAppVersion="$tag" /DMyAppNumericVersion="$numVer" installer.iss
             Write-Output "BINARY_NAME=SearchForSpeedAnalyzer-Beta.exe" >> $env:GITHUB_ENV
             Write-Output "INSTALLER_NAME=SearchForSpeedAnalyzer-Beta-Setup.exe" >> $env:GITHUB_ENV
             Write-Output "IS_PRERELEASE=true" >> $env:GITHUB_ENV
           } else {
             Copy-Item target/release/SearchForSpeedAnalyzer.exe SearchForSpeedAnalyzer.exe
-            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppName="The Search For Speed Analyzer" /DMyAppExeName="SearchForSpeedAnalyzer.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Setup" /DMyAppVersion="$tag" installer.iss
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppName="The Search For Speed Analyzer" /DMyAppExeName="SearchForSpeedAnalyzer.exe" /DOutputBaseFilename="SearchForSpeedAnalyzer-Setup" /DMyAppVersion="$tag" /DMyAppNumericVersion="$numVer" installer.iss
             Write-Output "BINARY_NAME=SearchForSpeedAnalyzer.exe" >> $env:GITHUB_ENV
             Write-Output "INSTALLER_NAME=SearchForSpeedAnalyzer-Setup.exe" >> $env:GITHUB_ENV
             Write-Output "IS_PRERELEASE=false" >> $env:GITHUB_ENV

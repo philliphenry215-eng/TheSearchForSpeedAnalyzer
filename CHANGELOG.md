@@ -5,6 +5,19 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.3.9] — 2026-10-26
+
+### Improved & Fixed
+* **Windows Defender & Antivirus False-Positive Hardening:**
+  * Added complete Windows VersionInfo metadata (Company, Product, Description, Copyright, Numeric Version) to both the Inno Setup installer (`installer.iss`) and the compiled application binary (`build.rs`).
+  * Embedded an application manifest declaring `requestedExecutionLevel level="asInvoker"` and Windows 10/11 compatibility (`supportedOS`), explicitly signaling that the application runs safely with standard user privileges.
+* **Direct Win32 Updater Architecture (Eliminated Hidden PowerShell):**
+  * Replaced hidden PowerShell background processes (`powershell.exe -WindowStyle Hidden -EncodedCommand`) in `src/updater.rs` with native Win32 `ShellExecuteW` and direct process spawning.
+  * Replaced manual update process termination with Inno Setup's native Windows Restart Manager integration (`/CLOSEAPPLICATIONS` and `/RELAUNCH`).
+  * Hardened URL navigation in `open_browser` to validate HTTP/HTTPS schemes before delegating to the Windows shell.
+
+---
+
 ## [0.3.8] — 2026-10-25
 
 ### Added & Improved

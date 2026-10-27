@@ -3,7 +3,7 @@
   #define MyAppName "The Search For Speed Analyzer"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.8"
+  #define MyAppVersion "0.3.9"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "The Henry Boys"
@@ -16,6 +16,10 @@
 #endif
 #ifndef OutputBaseFilename
   #define OutputBaseFilename "SearchForSpeedAnalyzer-Setup"
+#endif
+; Purely numeric version (e.g. 0.3.9) for the Windows file "Details" tab, which rejects text like "v0.3.9-beta.1".
+#ifndef MyAppNumericVersion
+  #define MyAppNumericVersion "0.3.9"
 #endif
 
 ; Beta and stable are separate apps in Windows: own AppId (uninstall entry) and own folder,
@@ -41,8 +45,24 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Default to user's Documents folder: familiar, accessible, zero admin rights needed, no Error 5
 DefaultDirName={userdocs}\{#MyAppDirName}
 DisableProgramGroupPage=yes
-; Per-user install into Documents requires no Windows administrator prompts or elevation
+; Per-user install into Documents requires no Windows administrator prompts or elevation.
 PrivilegesRequired=lowest
+; No privilege dialog is shown. The in-app updater passes /ALLUSERS only for legacy (v0.3.6)
+; installs in C:\Program Files, so they keep updating in place under their original uninstall entry.
+PrivilegesRequiredOverridesAllowed=commandline
+; Close a still-running copy of the app (Windows Restart Manager) before replacing its files.
+; The app is relaunched by the [Run] section instead of Restart Manager.
+CloseApplications=force
+RestartApplications=no
+; File "Details" metadata shown in Explorer and read by antivirus / SmartScreen reputation checks.
+VersionInfoVersion={#MyAppNumericVersion}
+VersionInfoProductVersion={#MyAppNumericVersion}
+VersionInfoTextVersion={#MyAppVersion}
+VersionInfoProductTextVersion={#MyAppVersion}
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoProductName={#MyAppName}
+VersionInfoDescription={#MyAppName} Setup
+VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
 OutputDir=.
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile=assets\icon.ico
@@ -67,8 +87,9 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-; Used by the in-app updater, which runs this installer with /SILENT /RELAUNCH
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait; Check: ShouldRelaunch
+; Used by the in-app updater, which runs this installer with /SILENT /RELAUNCH.
+; runasoriginaluser: even when an admin update was approved via UAC, the app restarts with normal rights.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
 [Code]
 function ShouldRelaunch: Boolean;
