@@ -270,6 +270,128 @@ impl Default for ColumnVisibility {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SettingsTab {
+    General,
+    Telemetry,
+    OverlayHud,
+    TirePopup,
+    GridColumns,
+    Themes,
+    Updates,
+}
+
+impl Default for SettingsTab {
+    fn default() -> Self {
+        Self::General
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompareLineStyle {
+    DistinctColor, // Distinct contrasting hue for opposing/compare lap (Default)
+    DashedLine,    // Dashed lines for Lap B (MoTeC / ATLAS standard)
+    ShadedAlpha,   // 50% opacity shaded version of Lap A (Legacy)
+}
+
+impl Default for CompareLineStyle {
+    fn default() -> Self {
+        Self::DistinctColor
+    }
+}
+
+fn default_lap_a_color() -> [u8; 3] { [255, 212, 64] }   // Vibrant Gold
+fn default_lap_b_color() -> [u8; 3] { [0, 210, 255] }     // Electric Cyan
+fn default_throttle_a_color() -> [u8; 3] { [0, 230, 118] } // Bright Neon Lime
+fn default_throttle_b_color() -> [u8; 3] { [0, 229, 255] } // Electric Mint / Cyan
+fn default_brake_a_color() -> [u8; 3] { [255, 23, 68] }   // Crimson Red
+fn default_brake_b_color() -> [u8; 3] { [255, 145, 0] }   // Vivid Amber Orange
+fn default_steering_a_color() -> [u8; 3] { [0, 229, 200] } // Aqua
+fn default_steering_b_color() -> [u8; 3] { [255, 179, 0] } // Tangerine
+fn default_delta_ahead_color() -> [u8; 3] { [75, 225, 110] } // Delta Lap B faster (green)
+fn default_delta_behind_color() -> [u8; 3] { [255, 75, 75] } // Delta Lap B slower (red)
+fn default_trace_stroke_width() -> f32 { 1.8 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelemetryTraceColors {
+    #[serde(default = "default_lap_a_color")]
+    pub lap_a_primary: [u8; 3],
+    #[serde(default = "default_lap_b_color")]
+    pub lap_b_reference: [u8; 3],
+    #[serde(default = "default_throttle_a_color")]
+    pub throttle_a: [u8; 3],
+    #[serde(default = "default_throttle_b_color")]
+    pub throttle_b: [u8; 3],
+    #[serde(default = "default_brake_a_color")]
+    pub brake_a: [u8; 3],
+    #[serde(default = "default_brake_b_color")]
+    pub brake_b: [u8; 3],
+    #[serde(default = "default_steering_a_color")]
+    pub steering_a: [u8; 3],
+    #[serde(default = "default_steering_b_color")]
+    pub steering_b: [u8; 3],
+    #[serde(default = "default_delta_ahead_color")]
+    pub delta_ahead: [u8; 3],
+    #[serde(default = "default_delta_behind_color")]
+    pub delta_behind: [u8; 3],
+}
+
+impl Default for TelemetryTraceColors {
+    fn default() -> Self {
+        Self {
+            lap_a_primary: default_lap_a_color(),
+            lap_b_reference: default_lap_b_color(),
+            throttle_a: default_throttle_a_color(),
+            throttle_b: default_throttle_b_color(),
+            brake_a: default_brake_a_color(),
+            brake_b: default_brake_b_color(),
+            steering_a: default_steering_a_color(),
+            steering_b: default_steering_b_color(),
+            delta_ahead: default_delta_ahead_color(),
+            delta_behind: default_delta_behind_color(),
+        }
+    }
+}
+
+impl TelemetryTraceColors {
+    pub fn lap_a(&self) -> Color32 { Color32::from_rgb(self.lap_a_primary[0], self.lap_a_primary[1], self.lap_a_primary[2]) }
+    pub fn lap_b(&self) -> Color32 { Color32::from_rgb(self.lap_b_reference[0], self.lap_b_reference[1], self.lap_b_reference[2]) }
+    pub fn thr_a(&self) -> Color32 { Color32::from_rgb(self.throttle_a[0], self.throttle_a[1], self.throttle_a[2]) }
+    pub fn thr_b(&self) -> Color32 { Color32::from_rgb(self.throttle_b[0], self.throttle_b[1], self.throttle_b[2]) }
+    pub fn brk_a(&self) -> Color32 { Color32::from_rgb(self.brake_a[0], self.brake_a[1], self.brake_a[2]) }
+    pub fn brk_b(&self) -> Color32 { Color32::from_rgb(self.brake_b[0], self.brake_b[1], self.brake_b[2]) }
+    pub fn steer_a(&self) -> Color32 { Color32::from_rgb(self.steering_a[0], self.steering_a[1], self.steering_a[2]) }
+    pub fn steer_b(&self) -> Color32 { Color32::from_rgb(self.steering_b[0], self.steering_b[1], self.steering_b[2]) }
+    pub fn d_ahead(&self) -> Color32 { Color32::from_rgb(self.delta_ahead[0], self.delta_ahead[1], self.delta_ahead[2]) }
+    pub fn d_behind(&self) -> Color32 { Color32::from_rgb(self.delta_behind[0], self.delta_behind[1], self.delta_behind[2]) }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelemetrySettings {
+    #[serde(default)]
+    pub trace_colors: TelemetryTraceColors,
+    #[serde(default)]
+    pub compare_style: CompareLineStyle,
+    #[serde(default = "default_trace_stroke_width")]
+    pub trace_stroke_width: f32,
+    #[serde(default = "default_true")]
+    pub include_subfolders: bool,
+    #[serde(default = "default_true")]
+    pub enable_downsampling_lod: bool,
+}
+
+impl Default for TelemetrySettings {
+    fn default() -> Self {
+        Self {
+            trace_colors: TelemetryTraceColors::default(),
+            compare_style: CompareLineStyle::default(),
+            trace_stroke_width: default_trace_stroke_width(),
+            include_subfolders: true,
+            enable_downsampling_lod: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemePreset {
     #[serde(alias = "MatteSageGreen")]
     S4SGoldBlue,      // Pitch black + Vibrant Gold + Electric Racing Blue
@@ -327,6 +449,8 @@ pub struct AppSettings {
     pub active_avg_buckets: Vec<usize>,
     #[serde(default)]
     pub updates: UpdateSettings,
+    #[serde(default)]
+    pub telemetry: TelemetrySettings,
 }
 
 fn default_custom_avg_buckets() -> Vec<usize> {
@@ -352,6 +476,7 @@ impl Default for AppSettings {
             custom_avg_buckets: default_custom_avg_buckets(),
             active_avg_buckets: default_active_avg_buckets(),
             updates: UpdateSettings::default(),
+            telemetry: TelemetrySettings::default(),
         }
     }
 }

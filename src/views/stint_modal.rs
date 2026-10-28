@@ -1552,17 +1552,28 @@ impl WarRoomApp {
 
                         if !is_compare {
                             if ui.add_sized(
-                                egui::vec2(108.0, 26.0),
-                                egui::Button::new(egui::RichText::new("💾 Save / Share").color(white).size(11.5)).fill(elevated)
-                            ).on_hover_text("Save this stint to your local Stint Database and copy a shareable S4S stint code to clipboard").clicked() {
+                                egui::vec2(125.0, 26.0),
+                                egui::Button::new(egui::RichText::new("📎 Share Stint File").color(white).size(11.5)).fill(elevated)
+                            ).on_hover_text("Save this stint to your database and copy the physical .s4s.json file to clipboard (press Ctrl+V in Discord to attach)").clicked() {
                                 let record = stint_db::build_record_from_state(s, target_car_idx, stint);
-                                let share_str = stint_db::export_share_string(&record);
-                                self.stint_db.upsert_stint(record);
-                                if let Ok(code) = share_str {
-                                    ui.output_mut(|o| o.copied_text = code);
-                                    self.toast_message = Some((format!("💾 Saved Stint {} to Database & copied share code!", stint.short_label()), std::time::Instant::now()));
-                                } else {
-                                    self.toast_message = Some((format!("💾 Saved Stint {} to local Stint Database!", stint.short_label()), std::time::Instant::now()));
+                                self.stint_db.upsert_stint(record.clone());
+                                let file_path = self.stint_db.record_file_path(&record);
+                                match stint_db::copy_stint_file_to_clipboard(&file_path) {
+                                    Ok(()) => {
+                                        self.toast_message = Some((
+                                            format!("📎 Saved & copied Stint {} (.s4s.json) to clipboard — press Ctrl+V in Discord to attach!", stint.short_label()),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        if let Ok(code) = stint_db::export_share_string(&record) {
+                                            ui.output_mut(|o| o.copied_text = code);
+                                        }
+                                        self.toast_message = Some((
+                                            format!("💾 Saved Stint {} to local Stint Database!", stint.short_label()),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
                                 }
                             }
 

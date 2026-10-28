@@ -1,10 +1,10 @@
 use crate::ibt::{
     build_demo_ibt_session, check_ibt_comparison_compatibility, compare_laps, default_telemetry_dir,
-    normalize_lap, parse_ibt_file, scan_ibt_directory, DamperRegime, IbtFileEntry, IbtSession,
-    LapAnalysis, LapComparisonReport, NormalizedLapTrace, ShockCornerData, TireCornerAnalysis,
-    TireTempSource, KPA_TO_PSI, MM_TO_INCHES,
+    normalize_lap, open_directory_in_explorer, parse_ibt_file, scan_ibt_directory, DamperRegime,
+    IbtFileEntry, IbtSession, LapAnalysis, LapComparisonReport, NormalizedLapTrace, ShockCornerData,
+    TireCornerAnalysis, TireTempSource, KPA_TO_PSI, MM_TO_INCHES,
 };
-use crate::settings::AppSettings;
+use crate::settings::{AppSettings, CompareLineStyle};
 use crate::{display_font, format_time, with_alpha};
 use eframe::egui;
 use std::path::PathBuf;
@@ -72,6 +72,7 @@ pub struct IbtTelemetryLabState {
     pub channel_search_filter: String,
     pub status_error: Option<String>,
     pub tire_chart_mode: TireChartMode,
+    pub include_subfolders: bool,
     worker: LoadWorkerState,
     has_initialized_dir: bool,
 }
@@ -96,6 +97,7 @@ impl Default for IbtTelemetryLabState {
             channel_search_filter: String::new(),
             status_error: None,
             tire_chart_mode: TireChartMode::AllCorners,
+            include_subfolders: true,
             worker: LoadWorkerState::Idle,
             has_initialized_dir: false,
         }
@@ -112,7 +114,7 @@ impl IbtTelemetryLabState {
 
     pub fn refresh_directory(&mut self) {
         let path = PathBuf::from(self.directory_input.trim());
-        self.scanned_files = scan_ibt_directory(&path);
+        self.scanned_files = scan_ibt_directory(&path, self.include_subfolders);
     }
 
     pub fn trigger_load_file(&mut self, path: PathBuf, target: LoadTarget, ctx: egui::Context) {
@@ -370,6 +372,7 @@ impl IbtTelemetryLabState {
                                                     .add(demo_btn)
                                                     .on_hover_text("Generate and load a complete 3-lap 60Hz .ibt telemetry dataset in memory")
                                                     .clicked()
+        
                                                 {
                                                     self.trigger_load_demo(LoadTarget::Primary, ctx.clone());
                                                 }
@@ -381,7 +384,7 @@ impl IbtTelemetryLabState {
                                     ui.horizontal(|ui| {
                                         let resp = ui.add(
                                             egui::TextEdit::singleline(&mut self.directory_input)
-                                                .desired_width(220.0)
+                                                .desired_width(175.0)
                                                 .hint_text("%USERPROFILE%\\Documents\\iRacing\\telemetry"),
                                         );
                                         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -391,6 +394,7 @@ impl IbtTelemetryLabState {
                                             .add(egui::Button::new("🔄").fill(elevated))
                                             .on_hover_text("Rescan telemetry directory for .ibt files")
                                             .clicked()
+
                                         {
                                             self.refresh_directory();
                                         }
@@ -398,11 +402,28 @@ impl IbtTelemetryLabState {
                                             .add(egui::Button::new("Reset").fill(elevated))
                                             .on_hover_text("Reset to default iRacing telemetry directory")
                                             .clicked()
+
                                         {
                                             self.directory_input =
                                                 default_telemetry_dir().to_string_lossy().to_string();
                                             self.refresh_directory();
                                         }
+                                        if ui
+                                            .add(egui::Button::new("📂").fill(elevated))
+                                            .on_hover_text("Open folder in Windows File Explorer")
+                                            .clicked()
+
+                                        {
+                                            open_directory_in_explorer(std::path::Path::new(self.directory_input.trim()));
+                                        }
+                                    });
+
+                                    ui.add_space(2.0);
+                                    ui.horizontal(|ui| {
+                                        if ui.checkbox(&mut self.include_subfolders, "Subfolders").on_hover_text("Recursively scan subfolders for .ibt files (e.g. car or event directories)").changed() {
+                                            self.refresh_directory();
+                                        }
+                                        ui.label(egui::RichText::new(format!("({} files found)", self.scanned_files.len())).color(muted).size(10.5));
                                     });
 
                                     ui.add_space(4.0);
@@ -437,6 +458,9 @@ impl IbtTelemetryLabState {
                                         .filter(|f| {
                                             filter_lower.is_empty()
                                                 || f.file_name.to_lowercase().contains(&filter_lower)
+                                                || f.subfolder
+                                                    .as_deref()
+                                                    .map_or(false, |sub| sub.to_lowercase().contains(&filter_lower))
                                         })
                                         .cloned()
                                         .collect();
@@ -540,6 +564,14 @@ impl IbtTelemetryLabState {
                                                                         );
                                                                     });
                                                                     ui.horizontal(|ui| {
+                                                                        if let Some(ref sub) = entry.subfolder {
+                                                                            ui.label(
+                                                                                egui::RichText::new(format!("📁 {}", sub))
+                                                                                    .color(with_alpha(primary, 210))
+                                                                                    .size(10.0),
+                                                                            );
+                                                                            ui.label(egui::RichText::new("·").color(muted).size(10.0));
+                                                                        }
                                                                         ui.label(
                                                                             egui::RichText::new(format!(
                                                                                 "{:.1} MB · {}",
@@ -571,6 +603,7 @@ impl IbtTelemetryLabState {
                                                                         .add(b_btn)
                                                                         .on_hover_text("Load this file as Reference Session (Lap B comparison)")
                                                                         .clicked()
+                            
                                                                     {
                                                                         click_load_b = true;
                                                                     }
@@ -639,6 +672,7 @@ impl IbtTelemetryLabState {
                                                                 .button(egui::RichText::new("×").color(muted).size(12.0))
                                                                 .on_hover_text("Unload Reference Session")
                                                                 .clicked()
+                    
                                                             {
                                                                 do_clear_ref = true;
                                                             }
@@ -646,6 +680,7 @@ impl IbtTelemetryLabState {
                                                                 .button(egui::RichText::new("Swap").color(white).size(11.0))
                                                                 .on_hover_text("Swap Session A and Reference Session B")
                                                                 .clicked()
+                    
                                                             {
                                                                 do_swap = true;
                                                             }
@@ -1213,12 +1248,17 @@ impl IbtTelemetryLabState {
         norm_a: &NormalizedLapTrace,
         comparison: Option<&LapComparisonReport>,
     ) {
-        let primary = settings.primary_accent();
-        let secondary = settings.secondary_accent();
+        let colors = &settings.telemetry.trace_colors;
+        let compare_style = settings.telemetry.compare_style;
+        let is_dashed = compare_style == CompareLineStyle::DashedLine;
+        let base_sw = settings.telemetry.trace_stroke_width;
+
+        let primary = colors.lap_a();
+        let secondary = colors.lap_b();
         let white = settings.text_color();
         let muted = settings.text_muted();
-        let green = settings.status_green();
-        let red = settings.status_red();
+        let green = colors.thr_a();
+        let red = colors.brk_a();
         let use_metric = settings.use_metric;
 
         // Top KPI Summary Strip
@@ -1305,7 +1345,8 @@ impl IbtTelemetryLabState {
                 label: &delta_label,
                 data: &comp.time_delta_s,
                 color: secondary,
-                stroke_width: 2.0,
+                stroke_width: base_sw + 0.2,
+                is_dashed: false,
             }];
             draw_synchronized_trace_lane(
                 ui,
@@ -1342,7 +1383,8 @@ impl IbtTelemetryLabState {
                 label: &a_label,
                 data: sa,
                 color: primary,
-                stroke_width: 2.0,
+                stroke_width: base_sw + 0.2,
+                is_dashed: false,
             }];
             let b_label = comparison
                 .map(|c| format!("Lap {} [B] Speed", c.lap_b.lap_number))
@@ -1352,7 +1394,8 @@ impl IbtTelemetryLabState {
                     label: &b_label,
                     data: sb,
                     color: secondary,
-                    stroke_width: 1.6,
+                    stroke_width: if is_dashed { base_sw + 0.2 } else { base_sw },
+                    is_dashed,
                 });
             }
             draw_synchronized_trace_lane(
@@ -1378,33 +1421,45 @@ impl IbtTelemetryLabState {
                 series.push(TraceSeries {
                     label: "Throttle [A]",
                     data: thr,
-                    color: green,
-                    stroke_width: 1.9,
+                    color: colors.thr_a(),
+                    stroke_width: base_sw + 0.1,
+                    is_dashed: false,
                 });
             }
             if let Some(ref brk) = norm_a.brake_pct {
                 series.push(TraceSeries {
                     label: "Brake [A]",
                     data: brk,
-                    color: red,
-                    stroke_width: 1.9,
+                    color: colors.brk_a(),
+                    stroke_width: base_sw + 0.1,
+                    is_dashed: false,
                 });
             }
             if let Some(comp) = comparison {
                 if let Some(ref thr_b) = comp.lap_b.throttle_pct {
+                    let thr_b_col = match compare_style {
+                        CompareLineStyle::ShadedAlpha => with_alpha(colors.thr_a(), 125),
+                        _ => colors.thr_b(),
+                    };
                     series.push(TraceSeries {
                         label: "Throttle [B]",
                         data: thr_b,
-                        color: with_alpha(green, 125),
-                        stroke_width: 1.2,
+                        color: thr_b_col,
+                        stroke_width: if is_dashed { base_sw + 0.1 } else { base_sw * 0.9 },
+                        is_dashed,
                     });
                 }
                 if let Some(ref brk_b) = comp.lap_b.brake_pct {
+                    let brk_b_col = match compare_style {
+                        CompareLineStyle::ShadedAlpha => with_alpha(colors.brk_a(), 125),
+                        _ => colors.brk_b(),
+                    };
                     series.push(TraceSeries {
                         label: "Brake [B]",
                         data: brk_b,
-                        color: with_alpha(red, 125),
-                        stroke_width: 1.2,
+                        color: brk_b_col,
+                        stroke_width: if is_dashed { base_sw + 0.1 } else { base_sw * 0.9 },
+                        is_dashed,
                     });
                 }
             }
@@ -1429,16 +1484,22 @@ impl IbtTelemetryLabState {
             let mut series = vec![TraceSeries {
                 label: "Steering Angle [A]",
                 data: steer_a,
-                color: egui::Color32::from_rgb(0, 229, 200),
-                stroke_width: 1.8,
+                color: colors.steer_a(),
+                stroke_width: base_sw,
+                is_dashed: false,
             }];
             if let Some(comp) = comparison {
                 if let Some(ref steer_b) = comp.lap_b.steering_deg {
+                    let steer_b_col = match compare_style {
+                        CompareLineStyle::ShadedAlpha => with_alpha(colors.steer_a(), 125),
+                        _ => colors.steer_b(),
+                    };
                     series.push(TraceSeries {
                         label: "Steering Angle [B]",
                         data: steer_b,
-                        color: secondary,
-                        stroke_width: 1.3,
+                        color: steer_b_col,
+                        stroke_width: if is_dashed { base_sw } else { base_sw * 0.9 },
+                        is_dashed,
                     });
                 }
             }
@@ -1464,7 +1525,8 @@ impl IbtTelemetryLabState {
                 label: "RPM [A]",
                 data: rpm_a,
                 color: settings.status_amber(),
-                stroke_width: 1.7,
+                stroke_width: base_sw,
+                is_dashed: false,
             }];
             if let Some(comp) = comparison {
                 if let Some(ref rpm_b) = comp.lap_b.rpm {
@@ -1472,7 +1534,8 @@ impl IbtTelemetryLabState {
                         label: "RPM [B]",
                         data: rpm_b,
                         color: secondary,
-                        stroke_width: 1.3,
+                        stroke_width: if is_dashed { base_sw } else { base_sw * 0.9 },
+                        is_dashed,
                     });
                 }
             }
@@ -1507,8 +1570,13 @@ impl IbtTelemetryLabState {
         norm_a: &NormalizedLapTrace,
         comparison: Option<&LapComparisonReport>,
     ) {
-        let primary = settings.primary_accent();
-        let secondary = settings.secondary_accent();
+        let colors = &settings.telemetry.trace_colors;
+        let compare_style = settings.telemetry.compare_style;
+        let is_dashed = compare_style == CompareLineStyle::DashedLine;
+        let base_sw = settings.telemetry.trace_stroke_width;
+
+        let primary = colors.lap_a();
+        let secondary = colors.lap_b();
         let white = settings.text_color();
         let green = settings.status_green();
         let amber = settings.status_amber();
@@ -1650,7 +1718,8 @@ impl IbtTelemetryLabState {
                 label: "LF Ride Height [A]",
                 data: v,
                 color: egui::Color32::from_rgb(34, 211, 238),
-                stroke_width: 1.9,
+                stroke_width: base_sw + 0.1,
+                is_dashed: false,
             });
         }
         if let Some(ref v) = rf_a_s {
@@ -1658,7 +1727,8 @@ impl IbtTelemetryLabState {
                 label: "RF Ride Height [A]",
                 data: v,
                 color: primary,
-                stroke_width: 1.9,
+                stroke_width: base_sw + 0.1,
+                is_dashed: false,
             });
         }
         if let Some(ref v) = cfsr_a_s {
@@ -1666,31 +1736,47 @@ impl IbtTelemetryLabState {
                 label: "Center Splitter (CFSR) [A]",
                 data: v,
                 color: purple,
-                stroke_width: 1.8,
+                stroke_width: base_sw,
+                is_dashed: false,
             });
         }
         if let Some(ref v) = lf_b_s {
+            let lf_b_col = match compare_style {
+                CompareLineStyle::ShadedAlpha => with_alpha(egui::Color32::from_rgb(34, 211, 238), 120),
+                _ => egui::Color32::from_rgb(59, 130, 246), // High-contrast Electric Blue
+            };
             front_rh_series.push(TraceSeries {
                 label: "LF [B]",
                 data: v,
-                color: with_alpha(egui::Color32::from_rgb(34, 211, 238), 120),
-                stroke_width: 1.2,
+                color: lf_b_col,
+                stroke_width: if is_dashed { base_sw + 0.1 } else { base_sw * 0.85 },
+                is_dashed,
             });
         }
         if let Some(ref v) = rf_b_s {
+            let rf_b_col = match compare_style {
+                CompareLineStyle::ShadedAlpha => with_alpha(primary, 120),
+                _ => egui::Color32::from_rgb(249, 115, 22), // High-contrast Vivid Orange
+            };
             front_rh_series.push(TraceSeries {
                 label: "RF [B]",
                 data: v,
-                color: with_alpha(primary, 120),
-                stroke_width: 1.2,
+                color: rf_b_col,
+                stroke_width: if is_dashed { base_sw + 0.1 } else { base_sw * 0.85 },
+                is_dashed,
             });
         }
         if let Some(ref v) = cfsr_b_s {
+            let cfsr_b_col = match compare_style {
+                CompareLineStyle::ShadedAlpha => with_alpha(purple, 120),
+                _ => egui::Color32::from_rgb(236, 72, 153), // High-contrast Fuchsia/Pink
+            };
             front_rh_series.push(TraceSeries {
                 label: "CFSR [B]",
                 data: v,
-                color: with_alpha(purple, 120),
-                stroke_width: 1.2,
+                color: cfsr_b_col,
+                stroke_width: if is_dashed { base_sw } else { base_sw * 0.85 },
+                is_dashed,
             });
         }
 
@@ -1723,7 +1809,8 @@ impl IbtTelemetryLabState {
                 label: "LR Ride Height [A]",
                 data: v,
                 color: green,
-                stroke_width: 1.9,
+                stroke_width: base_sw + 0.1,
+                is_dashed: false,
             });
         }
         if let Some(ref v) = rr_a_s {
@@ -1731,23 +1818,34 @@ impl IbtTelemetryLabState {
                 label: "RR Ride Height [A]",
                 data: v,
                 color: egui::Color32::from_rgb(255, 115, 145),
-                stroke_width: 1.9,
+                stroke_width: base_sw + 0.1,
+                is_dashed: false,
             });
         }
         if let Some(ref v) = lr_b_s {
+            let lr_b_col = match compare_style {
+                CompareLineStyle::ShadedAlpha => with_alpha(green, 120),
+                _ => egui::Color32::from_rgb(16, 185, 129), // High-contrast Emerald Teal
+            };
             rear_rh_series.push(TraceSeries {
                 label: "LR [B]",
                 data: v,
-                color: with_alpha(green, 120),
-                stroke_width: 1.2,
+                color: lr_b_col,
+                stroke_width: if is_dashed { base_sw + 0.1 } else { base_sw * 0.85 },
+                is_dashed,
             });
         }
         if let Some(ref v) = rr_b_s {
+            let rr_b_col = match compare_style {
+                CompareLineStyle::ShadedAlpha => with_alpha(egui::Color32::from_rgb(255, 115, 145), 120),
+                _ => egui::Color32::from_rgb(225, 29, 72), // High-contrast Crimson
+            };
             rear_rh_series.push(TraceSeries {
                 label: "RR [B]",
                 data: v,
-                color: with_alpha(egui::Color32::from_rgb(255, 115, 145), 120),
-                stroke_width: 1.2,
+                color: rr_b_col,
+                stroke_width: if is_dashed { base_sw + 0.1 } else { base_sw * 0.85 },
+                is_dashed,
             });
         }
 
@@ -1786,7 +1884,8 @@ impl IbtTelemetryLabState {
                 label: trace_label_a,
                 data: ra,
                 color: primary,
-                stroke_width: 2.0,
+                stroke_width: base_sw + 0.2,
+                is_dashed: false,
             }];
             if let Some(ref rb) = rake_b_s {
                 let trace_label_b = if comparison.as_ref().and_then(|c| c.lap_b.cfsr_rh_mm.as_ref()).is_some() {
@@ -1794,11 +1893,16 @@ impl IbtTelemetryLabState {
                 } else {
                     "Longitudinal Rake [B] (Rear - Front)"
                 };
+                let rake_b_col = match compare_style {
+                    CompareLineStyle::ShadedAlpha => with_alpha(primary, 120),
+                    _ => secondary,
+                };
                 series.push(TraceSeries {
                     label: trace_label_b,
                     data: rb,
-                    color: secondary,
-                    stroke_width: 1.5,
+                    color: rake_b_col,
+                    stroke_width: if is_dashed { base_sw + 0.2 } else { base_sw * 0.85 },
+                    is_dashed,
                 });
             }
             draw_synchronized_trace_lane(
@@ -1828,14 +1932,20 @@ impl IbtTelemetryLabState {
                 label: "Side Rake [A] (Left - Right)",
                 data: sa,
                 color: amber,
-                stroke_width: 2.0,
+                stroke_width: base_sw + 0.2,
+                is_dashed: false,
             }];
             if let Some(ref sb) = side_b_s {
+                let side_b_col = match compare_style {
+                    CompareLineStyle::ShadedAlpha => with_alpha(amber, 120),
+                    _ => secondary,
+                };
                 side_series.push(TraceSeries {
                     label: "Side Rake [B]",
                     data: sb,
-                    color: secondary,
-                    stroke_width: 1.5,
+                    color: side_b_col,
+                    stroke_width: if is_dashed { base_sw + 0.2 } else { base_sw * 0.85 },
+                    is_dashed,
                 });
             }
             draw_synchronized_trace_lane(
@@ -1867,7 +1977,8 @@ impl IbtTelemetryLabState {
                 label: "Front Split [A] (LF - RF)",
                 data: fs,
                 color: egui::Color32::from_rgb(34, 211, 238),
-                stroke_width: 1.8,
+                stroke_width: base_sw,
+                is_dashed: false,
             });
         }
         if let Some(ref rs) = rsplit_s {
@@ -1875,7 +1986,8 @@ impl IbtTelemetryLabState {
                 label: "Rear Split [A] (LR - RR)",
                 data: rs,
                 color: green,
-                stroke_width: 1.8,
+                stroke_width: base_sw,
+                is_dashed: false,
             });
         }
 
@@ -2107,96 +2219,76 @@ impl IbtTelemetryLabState {
             TireChartMode::AllCorners => {
                 let mut list = Vec::new();
                 if let Some(ref v) = norm_a.lf_temp_f {
-                    list.push(TraceSeries {
-                        label: "LF Center",
-                        data: v,
-                        color: egui::Color32::from_rgb(56, 189, 248),
-                        stroke_width: 1.8,
-                    });
+                    list.push(TraceSeries::solid("LF Center", v, egui::Color32::from_rgb(56, 189, 248), 1.8));
                 }
                 if let Some(ref v) = norm_a.rf_temp_f {
-                    list.push(TraceSeries {
-                        label: "RF Center",
-                        data: v,
-                        color: egui::Color32::from_rgb(251, 191, 36),
-                        stroke_width: 2.2,
-                    });
+                    list.push(TraceSeries::solid("RF Center", v, egui::Color32::from_rgb(251, 191, 36), 2.2));
                 }
                 if let Some(ref v) = norm_a.lr_temp_f {
-                    list.push(TraceSeries {
-                        label: "LR Center",
-                        data: v,
-                        color: egui::Color32::from_rgb(74, 222, 128),
-                        stroke_width: 1.8,
-                    });
+                    list.push(TraceSeries::solid("LR Center", v, egui::Color32::from_rgb(74, 222, 128), 1.8));
                 }
                 if let Some(ref v) = norm_a.rr_temp_f {
-                    list.push(TraceSeries {
-                        label: "RR Center",
-                        data: v,
-                        color: egui::Color32::from_rgb(248, 113, 113),
-                        stroke_width: 2.0,
-                    });
+                    list.push(TraceSeries::solid("RR Center", v, egui::Color32::from_rgb(248, 113, 113), 2.0));
                 }
                 ("TIRE SURFACE / CARCASS TEMPERATURES ACROSS LAP (LF, RF, LR, RR)", if use_metric { "°C" } else { "°F" }, list)
             }
             TireChartMode::FrontAxle => {
                 let mut list = Vec::new();
                 if let Some(ref v) = norm_a.lf_outside_temp_f {
-                    list.push(TraceSeries { label: "LF Out", data: v, color: egui::Color32::from_rgb(96, 165, 250), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("LF Out", v, egui::Color32::from_rgb(96, 165, 250), 1.4));
                 }
                 if let Some(ref v) = norm_a.lf_temp_f {
-                    list.push(TraceSeries { label: "LF Mid", data: v, color: egui::Color32::from_rgb(56, 189, 248), stroke_width: 2.0 });
+                    list.push(TraceSeries::solid("LF Mid", v, egui::Color32::from_rgb(56, 189, 248), 2.0));
                 }
                 if let Some(ref v) = norm_a.lf_inside_temp_f {
-                    list.push(TraceSeries { label: "LF In", data: v, color: egui::Color32::from_rgb(45, 212, 191), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("LF In", v, egui::Color32::from_rgb(45, 212, 191), 1.4));
                 }
                 if let Some(ref v) = norm_a.rf_inside_temp_f {
-                    list.push(TraceSeries { label: "RF In", data: v, color: egui::Color32::from_rgb(251, 146, 60), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("RF In", v, egui::Color32::from_rgb(251, 146, 60), 1.4));
                 }
                 if let Some(ref v) = norm_a.rf_temp_f {
-                    list.push(TraceSeries { label: "RF Mid", data: v, color: egui::Color32::from_rgb(251, 191, 36), stroke_width: 2.2 });
+                    list.push(TraceSeries::solid("RF Mid", v, egui::Color32::from_rgb(251, 191, 36), 2.2));
                 }
                 if let Some(ref v) = norm_a.rf_outside_temp_f {
-                    list.push(TraceSeries { label: "RF Out", data: v, color: egui::Color32::from_rgb(234, 179, 8), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("RF Out", v, egui::Color32::from_rgb(234, 179, 8), 1.4));
                 }
                 ("FRONT AXLE TIRE TEMPERATURE DISTRIBUTION (LF vs. RF — 3-ZONE)", if use_metric { "°C" } else { "°F" }, list)
             }
             TireChartMode::RearAxle => {
                 let mut list = Vec::new();
                 if let Some(ref v) = norm_a.lr_outside_temp_f {
-                    list.push(TraceSeries { label: "LR Out", data: v, color: egui::Color32::from_rgb(52, 211, 153), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("LR Out", v, egui::Color32::from_rgb(52, 211, 153), 1.4));
                 }
                 if let Some(ref v) = norm_a.lr_temp_f {
-                    list.push(TraceSeries { label: "LR Mid", data: v, color: egui::Color32::from_rgb(74, 222, 128), stroke_width: 2.0 });
+                    list.push(TraceSeries::solid("LR Mid", v, egui::Color32::from_rgb(74, 222, 128), 2.0));
                 }
                 if let Some(ref v) = norm_a.lr_inside_temp_f {
-                    list.push(TraceSeries { label: "LR In", data: v, color: egui::Color32::from_rgb(167, 243, 208), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("LR In", v, egui::Color32::from_rgb(167, 243, 208), 1.4));
                 }
                 if let Some(ref v) = norm_a.rr_inside_temp_f {
-                    list.push(TraceSeries { label: "RR In", data: v, color: egui::Color32::from_rgb(244, 63, 94), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("RR In", v, egui::Color32::from_rgb(244, 63, 94), 1.4));
                 }
                 if let Some(ref v) = norm_a.rr_temp_f {
-                    list.push(TraceSeries { label: "RR Mid", data: v, color: egui::Color32::from_rgb(248, 113, 113), stroke_width: 2.2 });
+                    list.push(TraceSeries::solid("RR Mid", v, egui::Color32::from_rgb(248, 113, 113), 2.2));
                 }
                 if let Some(ref v) = norm_a.rr_outside_temp_f {
-                    list.push(TraceSeries { label: "RR Out", data: v, color: egui::Color32::from_rgb(251, 113, 133), stroke_width: 1.4 });
+                    list.push(TraceSeries::solid("RR Out", v, egui::Color32::from_rgb(251, 113, 133), 1.4));
                 }
                 ("REAR AXLE TIRE TEMPERATURE DISTRIBUTION (LR vs. RR — 3-ZONE)", if use_metric { "°C" } else { "°F" }, list)
             }
             TireChartMode::Pressures => {
                 let mut list = Vec::new();
                 if let Some(ref v) = norm_a.lf_press_psi {
-                    list.push(TraceSeries { label: "LF Pressure", data: v, color: egui::Color32::from_rgb(56, 189, 248), stroke_width: 1.8 });
+                    list.push(TraceSeries::solid("LF Pressure", v, egui::Color32::from_rgb(56, 189, 248), 1.8));
                 }
                 if let Some(ref v) = norm_a.rf_press_psi {
-                    list.push(TraceSeries { label: "RF Pressure", data: v, color: egui::Color32::from_rgb(251, 191, 36), stroke_width: 2.2 });
+                    list.push(TraceSeries::solid("RF Pressure", v, egui::Color32::from_rgb(251, 191, 36), 2.2));
                 }
                 if let Some(ref v) = norm_a.lr_press_psi {
-                    list.push(TraceSeries { label: "LR Pressure", data: v, color: egui::Color32::from_rgb(74, 222, 128), stroke_width: 1.8 });
+                    list.push(TraceSeries::solid("LR Pressure", v, egui::Color32::from_rgb(74, 222, 128), 1.8));
                 }
                 if let Some(ref v) = norm_a.rr_press_psi {
-                    list.push(TraceSeries { label: "RR Pressure", data: v, color: egui::Color32::from_rgb(248, 113, 113), stroke_width: 2.0 });
+                    list.push(TraceSeries::solid("RR Pressure", v, egui::Color32::from_rgb(248, 113, 113), 2.0));
                 }
                 ("DYNAMIC TIRE PRESSURES ACROSS LAP (LF, RF, LR, RR)", if use_metric { "kPa" } else { "psi" }, list)
             }
@@ -2573,6 +2665,126 @@ pub struct TraceSeries<'a> {
     pub data: &'a [f32],
     pub color: egui::Color32,
     pub stroke_width: f32,
+    pub is_dashed: bool,
+}
+
+impl<'a> TraceSeries<'a> {
+    pub fn solid(label: &'a str, data: &'a [f32], color: egui::Color32, stroke_width: f32) -> Self {
+        Self {
+            label,
+            data,
+            color,
+            stroke_width,
+            is_dashed: false,
+        }
+    }
+
+    pub fn dashed(label: &'a str, data: &'a [f32], color: egui::Color32, stroke_width: f32) -> Self {
+        Self {
+            label,
+            data,
+            color,
+            stroke_width,
+            is_dashed: true,
+        }
+    }
+}
+
+fn draw_dashed_polyline(
+    painter: &egui::Painter,
+    pts: &[egui::Pos2],
+    stroke: egui::Stroke,
+    dash_len: f32,
+    gap_len: f32,
+) {
+    if pts.len() < 2 {
+        return;
+    }
+    let period = dash_len + gap_len;
+    let mut dist = 0.0;
+    for w in pts.windows(2) {
+        let p1 = w[0];
+        let p2 = w[1];
+        let seg_len = (p2 - p1).length();
+        if seg_len < 1e-4 {
+            continue;
+        }
+
+        let mut t = 0.0;
+        while t < seg_len {
+            let cur_dist = dist + t;
+            let phase = cur_dist % period;
+            let remaining_in_phase = if phase < dash_len {
+                dash_len - phase
+            } else {
+                period - phase
+            };
+            let step = (seg_len - t).min(remaining_in_phase);
+            if phase < dash_len {
+                let start_frac = t / seg_len;
+                let end_frac = (t + step) / seg_len;
+                let sp = p1 + (p2 - p1) * start_frac;
+                let ep = p1 + (p2 - p1) * end_frac;
+                painter.line_segment([sp, ep], stroke);
+            }
+            t += step;
+        }
+        dist += seg_len;
+    }
+}
+
+fn downsample_min_max(data: &[f32], target_count: usize) -> (Vec<f32>, Vec<usize>) {
+    let n = data.len();
+    if n <= target_count || target_count < 4 {
+        let indices = (0..n).collect();
+        return (data.to_vec(), indices);
+    }
+    let bucket_size = n as f32 / (target_count / 2) as f32;
+    let mut out_vals = Vec::with_capacity(target_count);
+    let mut out_indices = Vec::with_capacity(target_count);
+
+    let mut b_start = 0.0;
+    while (b_start as usize) < n {
+        let start_idx = b_start as usize;
+        let end_idx = ((b_start + bucket_size) as usize).min(n);
+        if start_idx >= end_idx {
+            break;
+        }
+
+        let mut min_val = f32::INFINITY;
+        let mut min_idx = start_idx;
+        let mut max_val = f32::NEG_INFINITY;
+        let mut max_idx = start_idx;
+
+        for (offset, &v) in data[start_idx..end_idx].iter().enumerate() {
+            let actual_idx = start_idx + offset;
+            if v < min_val {
+                min_val = v;
+                min_idx = actual_idx;
+            }
+            if v > max_val {
+                max_val = v;
+                max_idx = actual_idx;
+            }
+        }
+
+        if min_idx <= max_idx {
+            out_vals.push(min_val);
+            out_indices.push(min_idx);
+            if max_idx != min_idx {
+                out_vals.push(max_val);
+                out_indices.push(max_idx);
+            }
+        } else {
+            out_vals.push(max_val);
+            out_indices.push(max_idx);
+            out_vals.push(min_val);
+            out_indices.push(min_idx);
+        }
+
+        b_start += bucket_size;
+    }
+    (out_vals, out_indices)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2627,6 +2839,26 @@ fn draw_synchronized_trace_lane(
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(idx) = hover_idx {
+                        if series.len() == 2 {
+                            let val_a = series[0].data.get(idx).copied();
+                            let val_b = series[1].data.get(idx).copied();
+                            if let (Some(va), Some(vb)) = (val_a, val_b) {
+                                let delta = vb - va;
+                                let delta_col = if delta.abs() < 1e-4 {
+                                    muted
+                                } else if delta > 0.0 {
+                                    settings.telemetry.trace_colors.d_ahead()
+                                } else {
+                                    settings.telemetry.trace_colors.d_behind()
+                                };
+                                let delta_txt = format!("Δ (B - A): {:+.2} {}", delta, unit);
+                                draw_legend_pill(ui, delta_col, &delta_txt, white);
+                                ui.add_space(6.0);
+                            }
+                        }
+                    }
+
                     for s in series.iter().rev() {
                         let val_txt = if let Some(idx) = hover_idx {
                             if let Some(&v) = s.data.get(idx) {
@@ -2731,24 +2963,42 @@ fn draw_synchronized_trace_lane(
                 );
             }
 
-            // Draw each trace polyline
+            // Draw each trace polyline (with adaptive LOD downsampling & dashed support)
             for s in series {
                 let n = s.data.len();
                 if n < 2 {
                     continue;
                 }
-                let mut pts = Vec::with_capacity(n);
-                for (i, &val) in s.data.iter().enumerate() {
-                    let x_frac = i as f32 / ((n - 1) as f32);
+
+                let target_pts = (plot_rect.width() * 2.0).clamp(500.0, 2400.0) as usize;
+                let (sampled_vals, sampled_indices) = if settings.telemetry.enable_downsampling_lod && n > target_pts * 2 {
+                    downsample_min_max(s.data, target_pts)
+                } else {
+                    (s.data.to_vec(), (0..n).collect())
+                };
+
+                let m = sampled_vals.len();
+                if m < 2 {
+                    continue;
+                }
+
+                let mut pts = Vec::with_capacity(m);
+                for (&idx, &val) in sampled_indices.iter().zip(sampled_vals.iter()) {
+                    let x_frac = idx as f32 / ((n - 1) as f32);
                     let y_frac = ((y_max - val) / (y_max - y_min)).clamp(0.0, 1.0);
                     let px = plot_rect.left() + x_frac * plot_rect.width();
                     let py = plot_rect.top() + y_frac * plot_rect.height();
                     pts.push(egui::pos2(px, py));
                 }
-                painter.add(egui::Shape::line(
-                    pts,
-                    egui::Stroke::new(s.stroke_width, s.color),
-                ));
+
+                if s.is_dashed {
+                    draw_dashed_polyline(&painter, &pts, egui::Stroke::new(s.stroke_width, s.color), 7.0, 4.5);
+                } else {
+                    painter.add(egui::Shape::line(
+                        pts,
+                        egui::Stroke::new(s.stroke_width, s.color),
+                    ));
+                }
             }
 
             // Update shared hover cursor

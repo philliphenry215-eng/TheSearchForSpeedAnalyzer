@@ -426,7 +426,7 @@ impl StintDatabase {
         }
     }
 
-    fn record_file_path(&self, record: &SavedStintRecord) -> PathBuf {
+    pub fn record_file_path(&self, record: &SavedStintRecord) -> PathBuf {
         let track_part = sanitize_filename_part(&record.track_name, 26);
         let drv_part = sanitize_filename_part(&record.driver_name, 18);
         let id_part = sanitize_filename_part(&record.id, 28);
@@ -440,13 +440,16 @@ impl StintDatabase {
         self.stints_folder_path().join(filename)
     }
 
-    fn write_individual_stint_file(&self, record: &SavedStintRecord) {
+    pub fn write_individual_stint_file(&self, record: &SavedStintRecord) -> Result<PathBuf, String> {
         let folder = self.stints_folder_path();
-        let _ = fs::create_dir_all(&folder);
+        fs::create_dir_all(&folder)
+            .map_err(|e| format!("Failed to create stints folder: {}", e))?;
         let file_path = self.record_file_path(record);
-        if let Ok(json) = serde_json::to_string_pretty(record) {
-            let _ = fs::write(file_path, json);
-        }
+        let json = serde_json::to_string_pretty(record)
+            .map_err(|e| format!("Failed to serialize stint file: {}", e))?;
+        fs::write(&file_path, json)
+            .map_err(|e| format!("Failed to write stint file: {}", e))?;
+        Ok(file_path)
     }
 
     pub fn upsert_stint(&mut self, mut record: SavedStintRecord) {
@@ -467,7 +470,7 @@ impl StintDatabase {
         }
 
         self.sort_records();
-        self.write_individual_stint_file(&record);
+        let _ = self.write_individual_stint_file(&record);
         self.save();
     }
 
@@ -716,6 +719,219 @@ pub fn read_clipboard_text() -> Result<String, String> {
         .map_err(|e| format!("Could not read text from clipboard: {}", e))
 }
 
+/// Copies the physical .s4s.json stint file to the Windows Clipboard (CF_HDROP).
+/// When pasted (Ctrl+V) into Discord, Slack, Teams, or Windows Explorer, it attaches/copies
+/// the actual file rather than raw JSON text.
+pub fn copy_stint_file_to_clipboard(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("Stint file does not exist: {}", path.display()));
+    }
+    use clipboard_win::Setter;
+    let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path_str = abs_path.to_string_lossy();
+    // Windows Explorer does not handle \\?\ extended UNC path prefixes when pasting from clipboard
+    let clean_path = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str).to_string();
+
+    let _clip = clipboard_win::Clipboard::new_attempts(10)
+        .map_err(|e| format!("Could not open Windows clipboard: {}", e))?;
+    let _ = clipboard_win::raw::empty();
+
+    let paths = [clean_path.as_str()];
+    clipboard_win::formats::FileList
+        .write_clipboard(&paths)
+        .map_err(|e| format!("Failed to copy file to clipboard: {}", e))?;
+
+    Ok(())
+}
+
+/// Reads file paths from the clipboard if the user copied files in Windows Explorer or another app.
+pub fn read_clipboard_file_paths() -> Vec<PathBuf> {
+    use clipboard_win::Getter;
+    let mut files = Vec::<String>::new();
+    if let Ok(_clip) = clipboard_win::Clipboard::new_attempts(5) {
+        let _ = clipboard_win::formats::FileList.read_clipboard(&mut files);
+    }
+    files
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.ends_with(".s4s.json") || n.ends_with(".json") || n.ends_with(".s4s"))
+                    .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Reveals a file in Windows Explorer with the specific file selected/highlighted,
+/// making it effortless to drag-and-drop into Discord or attach to messages.
+pub fn reveal_file_in_explorer(path: &Path) {
+    #[cfg(target_os = "windows")]
+    {
+        if path.exists() {
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(format!("/select,{}", path.display()))
+                .spawn();
+        } else if let Some(parent) = path.parent() {
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(parent)
+                .spawn();
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(parent) = path.parent() {
+            open_folder_in_explorer(parent);
+        }
+    }
+}
+
+/// Reads and parses an individual stint file from disk.
+pub fn import_stint_from_file(path: &Path) -> Result<SavedStintRecord, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Could not read file '{}': {}", path.display(), e))?;
+    let mut rec = import_from_str(&content)?;
+    if rec.id.trim().is_empty() {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("imported");
+        rec.id = format!("file_{}", sanitize_filename_part(stem, 32));
+        rec.stint.saved_id = rec.id.clone();
+    }
+    Ok(rec)
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[allow(non_snake_case)]
+struct OPENFILENAMEW {
+    lStructSize: u32,
+    hwndOwner: *mut std::ffi::c_void,
+    hInstance: *mut std::ffi::c_void,
+    lpstrFilter: *const u16,
+    lpstrCustomFilter: *mut u16,
+    nMaxCustFilter: u32,
+    nFilterIndex: u32,
+    lpstrFile: *mut u16,
+    nMaxFile: u32,
+    lpstrFileTitle: *mut u16,
+    nMaxFileTitle: u32,
+    lpstrInitialDir: *const u16,
+    lpstrTitle: *const u16,
+    Flags: u32,
+    nFileOffset: u16,
+    nFileExtension: u16,
+    lpstrDefExt: *const u16,
+    lCustData: usize,
+    lpfnHook: *mut std::ffi::c_void,
+    lpTemplateName: *const u16,
+    pvReserved: *mut std::ffi::c_void,
+    dwReserved: u32,
+    FlagsEx: u32,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "comdlg32")]
+extern "system" {
+    fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+    fn GetSaveFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+}
+
+/// Opens native Windows file dialog to select an existing .s4s.json stint file for importing.
+pub fn pick_open_stint_file_dialog() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let filter: Vec<u16> = "Search For Speed Stint Files (*.s4s.json;*.json)\0*.s4s.json;*.json\0All Files (*.*)\0*.*\0\0"
+            .encode_utf16()
+            .collect();
+        let title: Vec<u16> = "Select Stint File to Import (.s4s.json)\0"
+            .encode_utf16()
+            .collect();
+
+        // Default initial directory: prioritize Downloads (where Discord/browser downloads land) or stints folder
+        let init_dir = std::env::var_os("USERPROFILE")
+            .map(|u| PathBuf::from(u).join("Downloads"))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| get_settings_dir().join("stints"));
+        let init_dir_w: Vec<u16> = init_dir
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let mut buf = [0u16; 1024];
+        let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+        ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+        ofn.lpstrFilter = filter.as_ptr();
+        ofn.nFilterIndex = 1;
+        ofn.lpstrFile = buf.as_mut_ptr();
+        ofn.nMaxFile = buf.len() as u32;
+        ofn.lpstrInitialDir = init_dir_w.as_ptr();
+        ofn.lpstrTitle = title.as_ptr();
+        // OFN_FILEMUSTEXIST (0x1000) | OFN_PATHMUSTEXIST (0x800) | OFN_EXPLORER (0x80000) | OFN_NOCHANGEDIR (0x8)
+        ofn.Flags = 0x00081808;
+
+        let res = unsafe { GetOpenFileNameW(&mut ofn) };
+        if res != 0 {
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let path_str = String::from_utf16_lossy(&buf[..len]);
+            let p = PathBuf::from(path_str);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+/// Opens native Windows save dialog to export a stint file to a chosen location.
+pub fn pick_save_stint_file_dialog(default_filename: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        let filter: Vec<u16> = "Search For Speed Stint Files (*.s4s.json)\0*.s4s.json\0All Files (*.*)\0*.*\0\0"
+            .encode_utf16()
+            .collect();
+        let title: Vec<u16> = "Export Stint File As (.s4s.json)\0"
+            .encode_utf16()
+            .collect();
+        let def_ext: Vec<u16> = "s4s.json\0".encode_utf16().collect();
+
+        let mut buf = [0u16; 1024];
+        let def_name_w: Vec<u16> = default_filename.encode_utf16().collect();
+        let copy_len = def_name_w.len().min(buf.len() - 1);
+        buf[..copy_len].copy_from_slice(&def_name_w[..copy_len]);
+
+        let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+        ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+        ofn.lpstrFilter = filter.as_ptr();
+        ofn.nFilterIndex = 1;
+        ofn.lpstrFile = buf.as_mut_ptr();
+        ofn.nMaxFile = buf.len() as u32;
+        ofn.lpstrTitle = title.as_ptr();
+        ofn.lpstrDefExt = def_ext.as_ptr();
+        // OFN_OVERWRITEPROMPT (0x2) | OFN_PATHMUSTEXIST (0x800) | OFN_EXPLORER (0x80000) | OFN_NOCHANGEDIR (0x8)
+        ofn.Flags = 0x0008080A;
+
+        let res = unsafe { GetSaveFileNameW(&mut ofn) };
+        if res != 0 {
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let path_str = String::from_utf16_lossy(&buf[..len]);
+            return Some(PathBuf::from(path_str));
+        }
+        None
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
 pub fn open_folder_in_explorer(path: &Path) {
     let _ = fs::create_dir_all(path);
     #[cfg(target_os = "windows")]
@@ -789,6 +1005,51 @@ fn migrate_legacy_stint_db(target_base: &Path) {
 mod tests {
     use super::*;
     use crate::{StintTireSet, TireCornerData};
+
+    #[test]
+    fn test_stint_file_import_export_clipboard() {
+        let temp_dir = std::env::temp_dir().join(format!("s4s_file_test_{}", current_unix_millis()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let mut stint = StintData::default();
+        stint.stint_number = 2;
+        stint.laps_completed = 10;
+        stint.lap_times = vec![85.200; 10];
+        stint.fast_lap = 84.800;
+
+        let rec = SavedStintRecord {
+            id: "file_test_s2".to_string(),
+            saved_at_unix: 1700000000,
+            saved_at_display: "2026-10-27 19:30".to_string(),
+            track_name: "Watkins Glen".to_string(),
+            driver_name: "Peebs".to_string(),
+            setup_name: "Race_v1".to_string(),
+            stint,
+            ..Default::default()
+        };
+
+        let file_path = temp_dir.join("Watkins_Glen_Peebs_S2_file_test_s2.s4s.json");
+        let json = serde_json::to_string_pretty(&rec).expect("serialize");
+        fs::write(&file_path, json).expect("write file");
+
+        // Verify import from file
+        let imported = import_stint_from_file(&file_path).expect("import from file");
+        assert_eq!(imported.track_name, "Watkins Glen");
+        assert_eq!(imported.stint.laps_completed, 10);
+        assert_eq!(imported.stint.fast_lap, 84.800);
+
+        // Verify copying file to Windows clipboard (when window station/clipboard is available in session)
+        if let Ok(()) = copy_stint_file_to_clipboard(&file_path) {
+            let clip_files = read_clipboard_file_paths();
+            assert!(
+                clip_files.iter().any(|p| p.file_name() == file_path.file_name()),
+                "Clipboard should contain the copied file: {:?}",
+                clip_files
+            );
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn test_track_matching_and_normalization() {

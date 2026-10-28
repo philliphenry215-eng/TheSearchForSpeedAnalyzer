@@ -11,6 +11,24 @@ use crate::views::*;
 use crate::stint_db;
 use crate::updater;
 
+fn render_color_picker_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    color: &mut [u8; 3],
+    tooltip: &str,
+    text_color: egui::Color32,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        if ui.color_edit_button_srgb(color).on_hover_text(tooltip).changed() {
+            changed = true;
+        }
+        ui.label(egui::RichText::new(name).color(text_color).size(11.5));
+    });
+    ui.add_space(2.0);
+    changed
+}
+
 impl WarRoomApp {
     pub(crate) fn render_telemetry_debugger(&mut self, ctx: &egui::Context, s: &WarRoomState) {
         if !self.show_telemetry_debugger { return; }
@@ -273,39 +291,233 @@ impl WarRoomApp {
         let muted = self.settings.text_muted();
         let elevated = self.settings.card_elevated_color();
 
-        egui::Window::new("Settings & Layouts")
-            .fixed_size([570.0, 640.0])
-            .vscroll(true)
+        let screen_rect = ctx.screen_rect();
+        let win_w = 700.0f32.min(screen_rect.width() - 40.0);
+        let win_h = 580.0f32.min(screen_rect.height() - 40.0);
+        let mut is_open = self.show_settings_modal;
+        let mut close_modal = false;
+
+        egui::Window::new("⚙ Engineering & App Settings")
+            .id(egui::Id::new("app_settings_modal_window"))
+            .open(&mut is_open)
+            .fixed_size([win_w, win_h])
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.add_space(4.0);
-                
-                ui.label(egui::RichText::new("DEFAULT STARTUP VIEW").color(muted).size(11.0).extra_letter_spacing(0.8));
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    close_modal = true;
+                }
+
+                // TOP HEADER: Section Title & Quick Close
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.settings.default_startup_view == ActiveViewMode::CockpitEngineer, "Cockpit Stint & Fuel Analyzer").clicked() {
-                        self.settings.default_startup_view = ActiveViewMode::CockpitEngineer;
-                        self.settings.view_mode = ActiveViewMode::CockpitEngineer;
-                        self.settings.save();
-                    }
-                    if ui.selectable_label(self.settings.default_startup_view == ActiveViewMode::GridTable, "Multi-Driver Stint Grid").clicked() {
-                        self.settings.default_startup_view = ActiveViewMode::GridTable;
-                        self.settings.view_mode = ActiveViewMode::GridTable;
-                        self.settings.save();
-                    }
-                    if ui.selectable_label(self.settings.default_startup_view == ActiveViewMode::IbtTelemetry, "Offline .IBT Telemetry Lab").clicked() {
-                        self.settings.default_startup_view = ActiveViewMode::IbtTelemetry;
-                        self.settings.view_mode = ActiveViewMode::IbtTelemetry;
-                        self.settings.save();
+                    ui.label(
+                        egui::RichText::new("CONFIGURATION & PREFERENCES")
+                            .color(muted)
+                            .size(11.0)
+                            .extra_letter_spacing(0.8),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_sized(
+                            egui::vec2(76.0, 24.0),
+                            egui::Button::new(
+                                egui::RichText::new("Done ✓")
+                                    .color(egui::Color32::BLACK)
+                                    .strong()
+                                    .size(11.5),
+                            ).fill(primary).rounding(egui::Rounding::same(5.0)),
+                        ).clicked() {
+                            close_modal = true;
+                        }
+                    });
+                });
+
+                ui.add_space(4.0);
+
+                // TOP TAB BAR: Horizontal Row of Category Tabs
+                ui.horizontal_wrapped(|ui| {
+                    let tabs = [
+                        (SettingsTab::General, "🏁 General"),
+                        (SettingsTab::Telemetry, "📈 Telemetry (.IBT)"),
+                        (SettingsTab::OverlayHud, "🖥 In-Car HUD"),
+                        (SettingsTab::TirePopup, "◎ Tire Popups"),
+                        (SettingsTab::GridColumns, "📊 Columns & Avgs"),
+                        (SettingsTab::Themes, "🎨 Themes"),
+                        (SettingsTab::Updates, "🔄 Updates"),
+                    ];
+
+                    for (tab, label) in tabs {
+                        let is_active = self.settings_active_tab == tab;
+                        let btn = egui::Button::new(
+                            egui::RichText::new(label)
+                                .color(if is_active { primary } else { white })
+                                .size(11.5)
+                                .strong(),
+                        )
+                        .fill(if is_active { with_alpha(primary, 40) } else { elevated })
+                        .stroke(if is_active { egui::Stroke::new(1.2, primary) } else { egui::Stroke::NONE })
+                        .rounding(egui::Rounding::same(5.0));
+
+                        if ui.add(btn).clicked() {
+                            self.settings_active_tab = tab;
+                        }
                     }
                 });
 
+                ui.add_space(4.0);
+                ui.separator();
                 ui.add_space(6.0);
+
+                // MAIN CONTENT AREA: Vertical ScrollArea with explicit top_down layout
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(win_h - 130.0)
+                    .show(ui, |ui| {
+                        ui.vertical(|ui| {
+                            match self.settings_active_tab {
+                                SettingsTab::General => {
+                                    self.render_settings_general_tab(ui, primary, white, muted, elevated);
+                                }
+                                SettingsTab::Telemetry => {
+                                    self.render_settings_telemetry_tab(ui, primary, secondary, white, muted, elevated);
+                                }
+                                SettingsTab::OverlayHud => {
+                                    self.render_settings_overlay_tab(ui, white, muted, elevated);
+                                }
+                                SettingsTab::TirePopup => {
+                                    self.render_settings_tire_popup_tab(ui, white, muted, elevated);
+                                }
+                                SettingsTab::GridColumns => {
+                                    self.render_settings_grid_columns_tab(ui, secondary, white, muted, elevated);
+                                }
+                                SettingsTab::Themes => {
+                                    self.render_settings_themes_tab(ui, ctx, primary, secondary, white, muted, elevated);
+                                }
+                                SettingsTab::Updates => {
+                                    self.render_settings_updates_tab(ui, primary, white, muted, elevated);
+                                }
+                            }
+                            ui.add_space(16.0);
+                        });
+                    });
+
+                // BOTTOM STATUS & CLOSE BAR
                 ui.separator();
                 ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("S4S Analyzer v{}", updater::CURRENT_VERSION))
+                            .color(muted)
+                            .size(10.5),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_sized(
+                            egui::vec2(90.0, 26.0),
+                            egui::Button::new(
+                                egui::RichText::new("Save & Close")
+                                    .color(egui::Color32::BLACK)
+                                    .strong()
+                                    .size(11.5),
+                            ).fill(primary).rounding(egui::Rounding::same(5.0)),
+                        ).clicked() {
+                            close_modal = true;
+                        }
+                    });
+                });
+            });
 
-                ui.label(egui::RichText::new("LAYOUT PRESETS").color(muted).size(11.0).extra_letter_spacing(0.8));
+        if !is_open || close_modal {
+            self.settings.save();
+            self.show_settings_modal = false;
+        }
+    }
+
+    fn render_settings_general_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        primary: egui::Color32,
+        white: egui::Color32,
+        muted: egui::Color32,
+        elevated: egui::Color32,
+    ) {
+        ui.label(egui::RichText::new("GENERAL & STARTUP CONFIGURATION").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.add_space(6.0);
+
+        // Section 1: Default Startup View
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Default Startup Workspace").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Choose which screen opens automatically when the application launches:").color(muted).size(11.0));
+                ui.add_space(8.0);
+
+                let views = [
+                    (ActiveViewMode::CockpitEngineer, "★ Cockpit Stint & Fuel Analyzer", "Real-time live telemetry, stint pacing, fuel strategy, tires"),
+                    (ActiveViewMode::GridTable, "📊 Multi-Driver Stint Grid", "Multi-car standings, stint history, sector pace comparison"),
+                    (ActiveViewMode::IbtTelemetry, "📈 Offline .IBT Telemetry Lab", "Deep telemetry analysis, lap comparison, ride heights, exports"),
+                ];
+
+                for (mode, label, desc) in views {
+                    let is_sel = self.settings.default_startup_view == mode;
+                    let btn = egui::Button::new(
+                        egui::RichText::new(label)
+                            .color(if is_sel { primary } else { white })
+                            .strong()
+                            .size(12.0),
+                    )
+                    .fill(if is_sel { with_alpha(primary, 35) } else { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 6) })
+                    .stroke(if is_sel { egui::Stroke::new(1.0, primary) } else { egui::Stroke::NONE })
+                    .rounding(egui::Rounding::same(5.0));
+
+                    if ui.add_sized(egui::vec2(ui.available_width(), 28.0), btn).clicked() {
+                        self.settings.default_startup_view = mode;
+                        self.settings.view_mode = mode;
+                        self.settings.save();
+                    }
+                    ui.label(egui::RichText::new(desc).color(muted).size(10.5));
+                    ui.add_space(6.0);
+                }
+            });
+
+        ui.add_space(8.0);
+
+        // Section 2: Measurement Units
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Measurement Units").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Select imperial or metric units across HUD, telemetry, and tables:").color(muted).size(11.0));
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!self.settings.use_metric, "🇺🇸 Imperial (mph, °F, gal, psi)").clicked() {
+                        self.settings.use_metric = false;
+                        self.settings.save();
+                    }
+                    ui.add_space(8.0);
+                    if ui.selectable_label(self.settings.use_metric, "🌐 Metric (km/h, °C, L, kPa)").clicked() {
+                        self.settings.use_metric = true;
+                        self.settings.save();
+                    }
+                });
+            });
+
+        ui.add_space(8.0);
+
+        // Section 3: Layout Presets
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Grid & Screen Layout Presets").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Quickly configure column sets and card layouts for your current racing discipline:").color(muted).size(11.0));
+                ui.add_space(8.0);
+
                 ui.horizontal_wrapped(|ui| {
                     if ui.selectable_label(self.settings.layout_preset == LayoutPreset::FullStint, "Full Stint").clicked() {
                         self.settings.apply_preset(LayoutPreset::FullStint);
@@ -320,89 +532,374 @@ impl WarRoomApp {
                         self.settings.apply_preset(LayoutPreset::Minimalist);
                     }
                 });
+            });
+    }
 
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
+    fn render_settings_telemetry_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        primary: egui::Color32,
+        secondary: egui::Color32,
+        white: egui::Color32,
+        muted: egui::Color32,
+        elevated: egui::Color32,
+    ) {
+        ui.label(egui::RichText::new("OFFLINE .IBT TELEMETRY CUSTOMIZATION").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.add_space(6.0);
 
-                ui.label(egui::RichText::new("ROLLING LAP AVERAGE BUCKETS").color(muted).size(11.0).extra_letter_spacing(0.8));
-                ui.label(egui::RichText::new("Select which lap averages to display in stint tables:").color(muted).size(12.0));
-                ui.add_space(4.0);
+        // Card 1: Comparison Line Rendering (User Request: "opposing or compare lines different colors rather than a shaded version")
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Comparison & Opposing Lap Style (Lap B)").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Choose how reference / comparison laps are rendered alongside primary Lap A traces:").color(muted).size(11.0));
+                ui.add_space(8.0);
 
-                let mut to_toggle: Option<usize> = None;
-                ui.horizontal_wrapped(|ui| {
-                    for &b in &self.settings.custom_avg_buckets {
-                        let is_active = self.settings.active_avg_buckets.contains(&b);
-                        let chip_text = if is_active {
-                            format!("✓ Avg {}", b)
-                        } else {
-                            format!("Avg {}", b)
-                        };
+                let mut style_changed = false;
 
-                        let chip_btn = egui::Button::new(
-                            egui::RichText::new(chip_text)
-                                .color(if is_active { egui::Color32::WHITE } else { muted })
-                                .size(12.0)
-                        )
-                        .fill(if is_active { with_alpha(secondary, 180) } else { elevated })
-                        .rounding(egui::Rounding::same(6.0));
-
-                        if ui.add(chip_btn).clicked() {
-                            to_toggle = Some(b);
-                        }
+                ui.vertical(|ui| {
+                    if ui.radio_value(&mut self.settings.telemetry.compare_style, CompareLineStyle::DistinctColor, "🎨 Distinct High-Contrast Colors (Recommended)").changed() {
+                        style_changed = true;
                     }
+                    ui.label(egui::RichText::new("    Uses distinct vibrant colors for Lap B channels (e.g. Cyan/Amber vs Primary) for maximum visibility.").color(muted).size(10.5));
+                    ui.add_space(4.0);
+
+                    if ui.radio_value(&mut self.settings.telemetry.compare_style, CompareLineStyle::DashedLine, "--- Dashed Reference Line").changed() {
+                        style_changed = true;
+                    }
+                    ui.label(egui::RichText::new("    Renders Lap B with a high-contrast dashed line stroke, making trace shapes instantly distinguishable even on overlapping lines.").color(muted).size(10.5));
+                    ui.add_space(4.0);
+
+                    if ui.radio_value(&mut self.settings.telemetry.compare_style, CompareLineStyle::ShadedAlpha, "~ Shaded Semi-Transparent (Legacy)").changed() {
+                        style_changed = true;
+                    }
+                    ui.label(egui::RichText::new("    Renders Lap B with semi-transparent alpha shading of Lap A's color.").color(muted).size(10.5));
                 });
 
-                if let Some(b) = to_toggle {
-                    if self.settings.active_avg_buckets.contains(&b) {
-                        self.settings.active_avg_buckets.retain(|&x| x != b);
-                    } else {
-                        self.settings.active_avg_buckets.push(b);
-                        self.settings.active_avg_buckets.sort();
-                    }
+                if style_changed {
                     self.settings.save();
                 }
+            });
 
-                ui.add_space(6.0);
+        ui.add_space(8.0);
+
+        // Card 2: Trace Colors (Lap A & Lap B Channels)
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Custom bucket:").size(12.0).color(muted));
-                    let edit = ui.add(egui::TextEdit::singleline(&mut self.custom_bucket_input).desired_width(55.0).hint_text("e.g. 12"));
-                    let enter_pressed = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.add(egui::Button::new(egui::RichText::new("+ Add").color(white).size(12.0)).fill(elevated)).clicked() || enter_pressed {
-                        if let Ok(num) = self.custom_bucket_input.trim().parse::<usize>() {
-                            if num > 0 && num <= 500 {
-                                if !self.settings.custom_avg_buckets.contains(&num) {
-                                    self.settings.custom_avg_buckets.push(num);
-                                    self.settings.custom_avg_buckets.sort();
-                                }
-                                if !self.settings.active_avg_buckets.contains(&num) {
-                                    self.settings.active_avg_buckets.push(num);
-                                    self.settings.active_avg_buckets.sort();
-                                }
-                                self.custom_bucket_input.clear();
-                                self.settings.save();
-                            }
-                        }
-                    }
-
+                    ui.label(egui::RichText::new("Telemetry Trace Channel Colors").color(white).size(13.0).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(
-                            egui::Button::new(egui::RichText::new("Reset defaults").color(muted).size(11.5))
-                                .fill(elevated)
-                        ).clicked() {
-                            self.settings.custom_avg_buckets = vec![5, 10, 15, 20, 25, 30, 35, 40, 50, 60];
-                            self.settings.active_avg_buckets = vec![5, 10, 15, 20, 25, 30];
+                        if ui.add(egui::Button::new(egui::RichText::new("Reset to Defaults").color(muted).size(11.0)).fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10))).clicked() {
+                            self.settings.telemetry.trace_colors = TelemetryTraceColors::default();
                             self.settings.save();
                         }
                     });
                 });
+                ui.label(egui::RichText::new("Click any color swatch to open the interactive color picker wheel:").color(muted).size(11.0));
+                ui.add_space(8.0);
+
+                let mut color_changed = false;
+
+                ui.columns(2, |cols| {
+                    // Column 1: Lap A (Primary)
+                    cols[0].vertical(|ui| {
+                        ui.label(egui::RichText::new("PRIMARY SESSION (LAP A)").color(primary).size(11.0).strong());
+                        ui.add_space(4.0);
+
+                        color_changed |= render_color_picker_row(ui, "Speed / Base", &mut self.settings.telemetry.trace_colors.lap_a_primary, "Vehicle speed & base accent", white);
+                        color_changed |= render_color_picker_row(ui, "Throttle", &mut self.settings.telemetry.trace_colors.throttle_a, "0 - 100% pedal trace", white);
+                        color_changed |= render_color_picker_row(ui, "Brake", &mut self.settings.telemetry.trace_colors.brake_a, "0 - 100% pedal pressure", white);
+                        color_changed |= render_color_picker_row(ui, "Steering", &mut self.settings.telemetry.trace_colors.steering_a, "Steering wheel angle", white);
+                    });
+
+                    // Column 2: Lap B (Comparison / Opposing Lap)
+                    cols[1].vertical(|ui| {
+                        ui.label(egui::RichText::new("REFERENCE SESSION (LAP B)").color(secondary).size(11.0).strong());
+                        ui.add_space(4.0);
+
+                        color_changed |= render_color_picker_row(ui, "Speed (Ref)", &mut self.settings.telemetry.trace_colors.lap_b_reference, "Reference comparison speed", white);
+                        color_changed |= render_color_picker_row(ui, "Throttle (Ref)", &mut self.settings.telemetry.trace_colors.throttle_b, "Reference throttle comparison", white);
+                        color_changed |= render_color_picker_row(ui, "Brake (Ref)", &mut self.settings.telemetry.trace_colors.brake_b, "Reference brake comparison", white);
+                        color_changed |= render_color_picker_row(ui, "Steering (Ref)", &mut self.settings.telemetry.trace_colors.steering_b, "Reference steering comparison", white);
+                        ui.add_space(4.0);
+                        color_changed |= render_color_picker_row(ui, "Delta Faster", &mut self.settings.telemetry.trace_colors.delta_ahead, "Lap A is faster / gaining", white);
+                        color_changed |= render_color_picker_row(ui, "Delta Slower", &mut self.settings.telemetry.trace_colors.delta_behind, "Lap A is slower / losing", white);
+                    });
+                });
+
+                if color_changed {
+                    self.settings.save();
+                }
+            });
+
+        ui.add_space(8.0);
+
+        // Card 3: Chart Display & Downsampling Performance
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Display Tuning & Performance").color(white).size(13.0).strong());
+                ui.add_space(6.0);
+
+                let mut tuning_changed = false;
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Trace Line Thickness:").color(muted).size(11.5));
+                    if ui.add(egui::Slider::new(&mut self.settings.telemetry.trace_stroke_width, 1.0..=4.0).suffix(" px")).changed() {
+                        tuning_changed = true;
+                    }
+                });
+
+                if ui.checkbox(&mut self.settings.telemetry.enable_downsampling_lod, "Adaptive LOD downsampling for 60Hz traces (smoother 60+ FPS)").changed() {
+                    tuning_changed = true;
+                }
+
+                if tuning_changed {
+                    self.settings.save();
+                }
+            });
+
+        ui.add_space(8.0);
+
+        // Card 4: Directory & Subfolder Management
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Telemetry Storage & Folders").color(white).size(13.0).strong());
+                ui.add_space(6.0);
+
+                if ui.checkbox(&mut self.settings.telemetry.include_subfolders, "Scan subfolders recursively in telemetry directory").changed() {
+                    self.ibt_lab.include_subfolders = self.settings.telemetry.include_subfolders;
+                    self.settings.save();
+                }
+                ui.label(egui::RichText::new("Sessions in subfolders (e.g. Telemetry/Sebring/session.ibt) automatically appear with folder tags.").color(muted).size(10.5));
+            });
+    }
+
+    fn render_settings_overlay_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        white: egui::Color32,
+        muted: egui::Color32,
+        elevated: egui::Color32,
+    ) {
+        ui.label(egui::RichText::new("IN-CAR OVERLAY & HUD MODULES").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.add_space(6.0);
+
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("HUD Behavior & Visibility").color(white).size(13.0).strong());
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut self.settings.overlay.enabled, "Auto-show overlay in car").changed() {
+                        self.settings.save();
+                    }
+                    if ui.checkbox(&mut self.settings.overlay.always_on_top, "Always on top").changed() {
+                        self.settings.save();
+                    }
+                    let preview_btn_text = if self.preview_overlay_hud { "Hide Preview" } else { "Show Preview" };
+                    if ui.selectable_label(self.preview_overlay_hud, preview_btn_text).clicked() {
+                        self.preview_overlay_hud = !self.preview_overlay_hud;
+                    }
+                });
 
                 ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Visible HUD Sections:").color(muted).size(11.0));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.checkbox(&mut self.settings.overlay.show_pace_card, "Pace & Stint").changed() {
+                        self.settings.save();
+                    }
+                    if ui.checkbox(&mut self.settings.overlay.show_fuel_card, "Fuel & Strategy").changed() {
+                        self.settings.save();
+                    }
+                    if ui.checkbox(&mut self.settings.overlay.show_race_control_card, "Race Control & Flags").changed() {
+                        self.settings.save();
+                    }
+                    if ui.checkbox(&mut self.settings.overlay.show_weather, "Track Temp & Wind").changed() {
+                        self.settings.save();
+                    }
+                });
 
-                ui.label(egui::RichText::new("GRID COLUMNS").color(muted).size(11.0).extra_letter_spacing(0.8));
-                egui::Grid::new("column_grid").num_columns(3).spacing([20.0, 6.0]).show(ui, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Primary Fuel Stat:").color(muted));
+                    let is_fuel_amount = self.settings.overlay.fuel_hero_metric == FuelHeroMetric::FuelAmount;
+                    if ui.selectable_label(is_fuel_amount, "Fuel in Tank (Gallons / L)").clicked() {
+                        self.settings.overlay.fuel_hero_metric = FuelHeroMetric::FuelAmount;
+                        self.settings.save();
+                    }
+                    if ui.selectable_label(!is_fuel_amount, "Laps to Empty").clicked() {
+                        self.settings.overlay.fuel_hero_metric = FuelHeroMetric::LapsToEmpty;
+                        self.settings.save();
+                    }
+                });
+            });
+
+        ui.add_space(8.0);
+
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Scale & Visual Opacity").color(white).size(13.0).strong());
+                ui.add_space(6.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("HUD Scale:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.overlay.hud_scale, 0.75..=1.50).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("HUD Card Opacity:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.overlay.opacity, 0.05..=1.0).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("HUD Background Opacity:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.overlay.bg_opacity, 0.0..=1.0).custom_formatter(|n, _| if n <= 0.005 { "0% (Transparent)".to_string() } else { format!("{:.0}%", n * 100.0) })).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Pit safety margin:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.overlay.safety_margin_laps, 0.0..=5.0).suffix(" laps")).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Overlay position:").color(muted));
+                    let pos_str = match self.settings.overlay.position {
+                        Some([x, y]) => format!("({:.0}, {:.0})", x, y),
+                        None => "Default (Center)".to_string(),
+                    };
+                    ui.label(egui::RichText::new(pos_str).color(white));
+                    if self.settings.overlay.position.is_some() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Reset Position").color(muted).size(11.5)).fill(elevated)).clicked() {
+                            self.settings.overlay.position = None;
+                            self.settings.save();
+                        }
+                    }
+                });
+            });
+    }
+
+    fn render_settings_tire_popup_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        white: egui::Color32,
+        muted: egui::Color32,
+        elevated: egui::Color32,
+    ) {
+        ui.label(egui::RichText::new("POST-PIT 4-CORNER TIRE POPUP OVERLAY").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.add_space(6.0);
+
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Tire Card Triggers & Timings").color(white).size(13.0).strong());
+                ui.add_space(6.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    if ui.checkbox(&mut self.settings.tire_popup_overlay.enabled, "Auto-popup 4-corner tires after pitting").changed() {
+                        self.settings.save();
+                    }
+                    if ui.checkbox(&mut self.settings.tire_popup_overlay.always_on_top, "Always on top").changed() {
+                        self.settings.save();
+                    }
+                    let tire_prev_text = if self.preview_tire_popup_hud { "Hide Preview" } else { "Show Preview" };
+                    if ui.selectable_label(self.preview_tire_popup_hud, tire_prev_text).clicked() {
+                        self.preview_tire_popup_hud = !self.preview_tire_popup_hud;
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Popup Duration:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.duration_secs, 3.0..=60.0).suffix(" sec")).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Popup Scale:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.scale, 0.75..=1.50).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tire Card Opacity:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.opacity, 0.05..=1.0).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tire Background Opacity:").color(muted));
+                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.bg_opacity, 0.0..=1.0).custom_formatter(|n, _| if n <= 0.005 { "0% (Transparent)".to_string() } else { format!("{:.0}%", n * 100.0) })).changed() {
+                        self.settings.save();
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Tire popup position:").color(muted));
+                    let tire_pos_str = match self.settings.tire_popup_overlay.position {
+                        Some([x, y]) => format!("({:.0}, {:.0})", x, y),
+                        None => "Default (Center)".to_string(),
+                    };
+                    ui.label(egui::RichText::new(tire_pos_str).color(white));
+                    if self.settings.tire_popup_overlay.position.is_some() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Reset Position").color(muted).size(11.5)).fill(elevated)).clicked() {
+                            self.settings.tire_popup_overlay.position = None;
+                            self.settings.save();
+                        }
+                    }
+                });
+            });
+    }
+
+    fn render_settings_grid_columns_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        secondary: egui::Color32,
+        white: egui::Color32,
+        muted: egui::Color32,
+        elevated: egui::Color32,
+    ) {
+        ui.label(egui::RichText::new("GRID COLUMNS & ROLLING AVERAGES").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.add_space(6.0);
+
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Visible Table Columns").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Toggle which metrics appear in the standings and stint tables:").color(muted).size(11.0));
+                ui.add_space(8.0);
+
+                egui::Grid::new("column_grid").num_columns(3).spacing([24.0, 8.0]).show(ui, |ui| {
                     if ui.checkbox(&mut self.settings.columns.pos, "Position").changed() { self.settings.layout_preset = LayoutPreset::Custom; self.settings.save(); }
                     if ui.checkbox(&mut self.settings.columns.car_num, "Car #").changed() { self.settings.layout_preset = LayoutPreset::Custom; self.settings.save(); }
                     if ui.checkbox(&mut self.settings.columns.driver, "Driver").changed() { self.settings.layout_preset = LayoutPreset::Custom; self.settings.save(); }
@@ -421,207 +918,185 @@ impl WarRoomApp {
                     if ui.checkbox(&mut self.settings.columns.setup_name, "Setup Name").changed() { self.settings.layout_preset = LayoutPreset::Custom; self.settings.save(); }
                     ui.end_row();
                 });
+            });
 
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
+        ui.add_space(8.0);
 
-                ui.label(egui::RichText::new("IN-CAR OVERLAY & HUD MODULES").color(muted).size(11.0).extra_letter_spacing(0.8));
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut self.settings.overlay.enabled, "Auto-show overlay in car").changed() {
-                        self.settings.save();
-                    }
-                    if ui.checkbox(&mut self.settings.overlay.always_on_top, "Always on top").changed() {
-                        self.settings.save();
-                    }
-                    let preview_btn_text = if self.preview_overlay_hud { "Hide HUD Preview" } else { "Show HUD Preview" };
-                    if ui.selectable_label(self.preview_overlay_hud, preview_btn_text).clicked() {
-                        self.preview_overlay_hud = !self.preview_overlay_hud;
-                    }
-                });
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Rolling Lap Average Buckets").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Select which lap intervals to compute rolling averages for:").color(muted).size(11.0));
+                ui.add_space(8.0);
 
-                ui.add_space(3.0);
-                ui.label(egui::RichText::new("Visible HUD Sections:").color(muted).size(11.0));
+                let mut to_toggle: Option<usize> = None;
                 ui.horizontal_wrapped(|ui| {
-                    if ui.checkbox(&mut self.settings.overlay.show_pace_card, "Pace & Stint").changed() {
-                        self.settings.save();
-                    }
-                    if ui.checkbox(&mut self.settings.overlay.show_fuel_card, "Fuel & Strategy").changed() {
-                        self.settings.save();
-                    }
-                    if ui.checkbox(&mut self.settings.overlay.show_race_control_card, "Race Control & Flags").changed() {
-                        self.settings.save();
-                    }
-                    if ui.checkbox(&mut self.settings.overlay.show_weather, "Track Temp & Wind").changed() {
-                        self.settings.save();
-                    }
-                });
+                    for &b in &self.settings.custom_avg_buckets {
+                        let is_active = self.settings.active_avg_buckets.contains(&b);
+                        let chip_text = if is_active {
+                            format!("✓ Avg {}", b)
+                        } else {
+                            format!("Avg {}", b)
+                        };
 
-                ui.add_space(3.0);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Primary Fuel Stat:").color(muted));
-                    let is_fuel_amount = self.settings.overlay.fuel_hero_metric == FuelHeroMetric::FuelAmount;
-                    if ui.selectable_label(is_fuel_amount, "Fuel in Tank (Gallons / L)").clicked() {
-                        self.settings.overlay.fuel_hero_metric = FuelHeroMetric::FuelAmount;
-                        self.settings.save();
-                    }
-                    if ui.selectable_label(!is_fuel_amount, "Laps to Empty").clicked() {
-                        self.settings.overlay.fuel_hero_metric = FuelHeroMetric::LapsToEmpty;
-                        self.settings.save();
-                    }
-                });
+                        let chip_btn = egui::Button::new(
+                            egui::RichText::new(chip_text)
+                                .color(if is_active { egui::Color32::WHITE } else { muted })
+                                .size(11.5)
+                        )
+                        .fill(if is_active { with_alpha(secondary, 180) } else { elevated })
+                        .rounding(egui::Rounding::same(5.0));
 
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("HUD Scale").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.overlay.hud_scale, 0.75..=1.50).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("HUD Card Opacity").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.overlay.opacity, 0.05..=1.0).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("HUD Background Box Opacity").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.overlay.bg_opacity, 0.0..=1.0).custom_formatter(|n, _| if n <= 0.005 { "0% (Transparent)".to_string() } else { format!("{:.0}%", n * 100.0) })).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Pit safety margin").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.overlay.safety_margin_laps, 0.0..=5.0).suffix(" laps")).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Overlay position:").color(muted));
-                    let pos_str = match self.settings.overlay.position {
-                        Some([x, y]) => format!("({:.0}, {:.0})", x, y),
-                        None => "Default (Center)".to_string(),
-                    };
-                    ui.label(egui::RichText::new(pos_str).color(white));
-                    if self.settings.overlay.position.is_some() {
-                        if ui.add(egui::Button::new(egui::RichText::new("Reset").color(muted).size(11.5)).fill(elevated)).clicked() {
-                            self.settings.overlay.position = None;
-                            self.settings.save();
+                        if ui.add(chip_btn).clicked() {
+                            to_toggle = Some(b);
                         }
                     }
                 });
 
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
-
-                ui.label(egui::RichText::new("POST-PIT 4-CORNER TIRE POPUP OVERLAY").color(muted).size(11.0).extra_letter_spacing(0.8));
-                ui.horizontal_wrapped(|ui| {
-                    if ui.checkbox(&mut self.settings.tire_popup_overlay.enabled, "Auto-popup 4-corner tires after pitting").changed() {
-                        self.settings.save();
+                if let Some(b) = to_toggle {
+                    if self.settings.active_avg_buckets.contains(&b) {
+                        self.settings.active_avg_buckets.retain(|&x| x != b);
+                    } else {
+                        self.settings.active_avg_buckets.push(b);
+                        self.settings.active_avg_buckets.sort();
                     }
-                    if ui.checkbox(&mut self.settings.tire_popup_overlay.always_on_top, "Always on top").changed() {
-                        self.settings.save();
-                    }
-                    let tire_prev_text = if self.preview_tire_popup_hud { "Hide Tire Popup Preview" } else { "Show Tire Popup Preview" };
-                    if ui.selectable_label(self.preview_tire_popup_hud, tire_prev_text).clicked() {
-                        self.preview_tire_popup_hud = !self.preview_tire_popup_hud;
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Popup Duration").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.duration_secs, 3.0..=60.0).suffix(" sec")).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Popup Scale").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.scale, 0.75..=1.50).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Tire Card Opacity").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.opacity, 0.05..=1.0).custom_formatter(|n, _| format!("{:.0}%", n * 100.0))).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Tire Background Box Opacity").color(muted));
-                    if ui.add(egui::Slider::new(&mut self.settings.tire_popup_overlay.bg_opacity, 0.0..=1.0).custom_formatter(|n, _| if n <= 0.005 { "0% (Transparent)".to_string() } else { format!("{:.0}%", n * 100.0) })).changed() {
-                        self.settings.save();
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Tire popup position:").color(muted));
-                    let tire_pos_str = match self.settings.tire_popup_overlay.position {
-                        Some([x, y]) => format!("({:.0}, {:.0})", x, y),
-                        None => "Default (Center)".to_string(),
-                    };
-                    ui.label(egui::RichText::new(tire_pos_str).color(white));
-                    if self.settings.tire_popup_overlay.position.is_some() {
-                        if ui.add(egui::Button::new(egui::RichText::new("Reset").color(muted).size(11.5)).fill(elevated)).clicked() {
-                            self.settings.tire_popup_overlay.position = None;
-                            self.settings.save();
-                        }
-                    }
-                });
-
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
-
-                ui.label(egui::RichText::new("THEME & UNITS").color(muted).size(11.0).extra_letter_spacing(0.8));
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("Theme:").color(muted));
-                    if ui.selectable_label(self.settings.theme == ThemePreset::S4SGoldBlue, "S4S Gold & Blue (Dark)").clicked() {
-                        self.settings.theme = ThemePreset::S4SGoldBlue;
-                        self.settings.save();
-                        setup_custom_style(ctx, &self.settings);
-                        self.logo_texture = load_logo_texture(ctx, self.settings.is_dark_theme());
-                    }
-                    if ui.selectable_label(self.settings.theme == ThemePreset::S4SGoldBlueLight, "S4S Daylight (Light Mode)").clicked() {
-                        self.settings.theme = ThemePreset::S4SGoldBlueLight;
-                        self.settings.save();
-                        setup_custom_style(ctx, &self.settings);
-                        self.logo_texture = load_logo_texture(ctx, self.settings.is_dark_theme());
-                    }
-                    if ui.selectable_label(self.settings.theme == ThemePreset::StealthDark, "Stealth Monochrome").clicked() {
-                        self.settings.theme = ThemePreset::StealthDark;
-                        self.settings.save();
-                        setup_custom_style(ctx, &self.settings);
-                        self.logo_texture = load_logo_texture(ctx, self.settings.is_dark_theme());
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Units:").color(muted));
-                    if ui.selectable_label(!self.settings.use_metric, "Imperial (mph / °F / gal)").clicked() {
-                        self.settings.use_metric = false;
-                        self.settings.save();
-                    }
-                    if ui.selectable_label(self.settings.use_metric, "Metric (km/h / °C / L)").clicked() {
-                        self.settings.use_metric = true;
-                        self.settings.save();
-                    }
-                });
+                    self.settings.save();
+                }
 
                 ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Custom bucket:").size(11.5).color(muted));
+                    let edit = ui.add(egui::TextEdit::singleline(&mut self.custom_bucket_input).desired_width(50.0).hint_text("e.g. 12"));
+                    let enter_pressed = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
-                ui.label(egui::RichText::new("UPDATES & RELEASE CHANNEL").color(muted).size(11.0).extra_letter_spacing(0.8));
+                    if ui.add(egui::Button::new(egui::RichText::new("+ Add").color(white).size(11.5)).fill(elevated)).clicked() || enter_pressed {
+                        if let Ok(num) = self.custom_bucket_input.trim().parse::<usize>() {
+                            if num > 0 && num <= 500 {
+                                if !self.settings.custom_avg_buckets.contains(&num) {
+                                    self.settings.custom_avg_buckets.push(num);
+                                    self.settings.custom_avg_buckets.sort();
+                                }
+                                if !self.settings.active_avg_buckets.contains(&num) {
+                                    self.settings.active_avg_buckets.push(num);
+                                    self.settings.active_avg_buckets.sort();
+                                }
+                                self.custom_bucket_input.clear();
+                                self.settings.save();
+                            }
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(
+                            egui::Button::new(egui::RichText::new("Reset defaults").color(muted).size(11.0))
+                                .fill(elevated)
+                        ).clicked() {
+                            self.settings.custom_avg_buckets = vec![5, 10, 15, 20, 25, 30, 35, 40, 50, 60];
+                            self.settings.active_avg_buckets = vec![5, 10, 15, 20, 25, 30];
+                            self.settings.save();
+                        }
+                    });
+                });
+            });
+    }
+
+    fn render_settings_themes_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        primary: egui::Color32,
+        _secondary: egui::Color32,
+        white: egui::Color32,
+        muted: egui::Color32,
+        elevated: egui::Color32,
+    ) {
+        ui.label(egui::RichText::new("APPEARANCE & COLOR THEMES").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.add_space(6.0);
+
+        let themes = [
+            (
+                ThemePreset::S4SGoldBlue,
+                "S4S Gold & Blue (Dark)",
+                "Official Search For Speed livery: High-contrast racing gold accents with electric cyan highlights and deep dark slate canvas.",
+                egui::Color32::from_rgb(255, 200, 59),
+                egui::Color32::from_rgb(0, 210, 255),
+                egui::Color32::from_rgb(14, 17, 23),
+            ),
+            (
+                ThemePreset::StealthDark,
+                "Stealth Monochrome",
+                "Ultra-clean night racing aesthetic with muted silver tones and minimal color distraction for pure focus.",
+                egui::Color32::from_rgb(212, 216, 224),
+                egui::Color32::from_rgb(138, 148, 166),
+                egui::Color32::from_rgb(8, 10, 14),
+            ),
+            (
+                ThemePreset::S4SGoldBlueLight,
+                "S4S Daylight (Light Mode)",
+                "Crisp, sunlight-readable high-contrast daylight theme designed for bright rooms and daytime pit stands.",
+                egui::Color32::from_rgb(200, 136, 0),
+                egui::Color32::from_rgb(0, 119, 204),
+                egui::Color32::from_rgb(244, 246, 249),
+            ),
+        ];
+
+        for (preset, title, desc, col1, col2, bg_col) in themes {
+            let is_sel = self.settings.theme == preset;
+            egui::Frame::none()
+                .fill(if is_sel { with_alpha(primary, 25) } else { elevated })
+                .stroke(if is_sel { egui::Stroke::new(1.5, primary) } else { egui::Stroke::NONE })
+                .rounding(egui::Rounding::same(8.0))
+                .inner_margin(12.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (resp, painter) = ui.allocate_painter(egui::vec2(44.0, 22.0), egui::Sense::hover());
+                        let r = resp.rect;
+                        painter.rect_filled(r, 4.0, bg_col);
+                        painter.rect_stroke(r, 4.0, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 30)));
+                        painter.circle_filled(egui::pos2(r.min.x + 12.0, r.center().y), 5.0, col1);
+                        painter.circle_filled(egui::pos2(r.min.x + 28.0, r.center().y), 5.0, col2);
+
+                        ui.label(egui::RichText::new(title).color(if is_sel { primary } else { white }).size(12.5).strong());
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if is_sel {
+                                ui.label(egui::RichText::new("Active ✓").color(primary).strong().size(11.5));
+                            } else if ui.add(egui::Button::new(egui::RichText::new("Select").color(white).size(11.0)).fill(elevated)).clicked() {
+                                self.settings.theme = preset;
+                                self.settings.save();
+                                setup_custom_style(ctx, &self.settings);
+                                self.logo_texture = load_logo_texture(ctx, self.settings.is_dark_theme());
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(desc).color(muted).size(10.5));
+                });
+            ui.add_space(6.0);
+        }
+    }
+
+    fn render_settings_updates_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        primary: egui::Color32,
+        white: egui::Color32,
+        muted: egui::Color32,
+        elevated: egui::Color32,
+    ) {
+        ui.label(egui::RichText::new("UPDATES & RELEASE CHANNEL").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.add_space(6.0);
+
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let version_label = format!("Installed Version: v{}", updater::CURRENT_VERSION);
-                    ui.label(egui::RichText::new(version_label).color(white).size(12.5));
+                    ui.label(egui::RichText::new(version_label).color(white).size(13.0).strong());
                     if settings::is_beta_mode() {
                         egui::Frame::none()
                             .fill(egui::Color32::from_rgb(110, 45, 160))
@@ -633,7 +1108,7 @@ impl WarRoomApp {
                     }
                 });
 
-                ui.add_space(3.0);
+                ui.add_space(6.0);
                 if ui.checkbox(&mut self.settings.updates.check_on_startup, "Check for updates automatically on launch").changed() {
                     self.settings.save();
                 }
@@ -641,15 +1116,15 @@ impl WarRoomApp {
                     self.settings.save();
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    let check_btn = egui::Button::new(egui::RichText::new("Check for Updates Now").color(white).size(12.0))
+                    let check_btn = egui::Button::new(egui::RichText::new("Check for Updates Now").color(white).size(11.5))
                         .fill(elevated);
                     if ui.add(check_btn).clicked() {
                         self.updater.trigger_check(self.settings.updates.include_prereleases);
                     }
 
-                    if ui.add(egui::Button::new(egui::RichText::new("📖 What's New / Notes").color(white).size(12.0)).fill(elevated)).clicked() {
+                    if ui.add(egui::Button::new(egui::RichText::new("📖 What's New / Notes").color(white).size(11.5)).fill(elevated)).clicked() {
                         self.show_release_notes_modal = true;
                     }
 
@@ -658,14 +1133,14 @@ impl WarRoomApp {
                         updater::UpdateStatus::Idle => {},
                         updater::UpdateStatus::Checking => {
                             ui.spinner();
-                            ui.label(egui::RichText::new("Checking GitHub Releases...").color(muted).size(12.0));
+                            ui.label(egui::RichText::new("Checking GitHub Releases...").color(muted).size(11.5));
                         },
                         updater::UpdateStatus::UpToDate => {
-                            ui.label(egui::RichText::new("✓ Up to date").color(egui::Color32::from_rgb(75, 225, 110)).size(12.0));
+                            ui.label(egui::RichText::new("✓ Up to date").color(egui::Color32::from_rgb(75, 225, 110)).size(11.5));
                         },
                         updater::UpdateStatus::UpdateAvailable(info) => {
                             let text = format!("Update {} available!", info.tag_name);
-                            ui.label(egui::RichText::new(text).color(primary).strong().size(12.0));
+                            ui.label(egui::RichText::new(text).color(primary).strong().size(11.5));
                             let info_clone = info.clone();
                             if ui.add(egui::Button::new(egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(11.5)).fill(primary)).clicked() {
                                 self.updater.trigger_download_and_install(&info_clone);
@@ -677,7 +1152,7 @@ impl WarRoomApp {
                         updater::UpdateStatus::Downloading { percent, downloaded_bytes, total_bytes, .. } => {
                             let mb_down = *downloaded_bytes as f32 / (1024.0 * 1024.0);
                             let mb_tot = *total_bytes as f32 / (1024.0 * 1024.0);
-                            ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(12.0));
+                            ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(11.5));
                         },
                         updater::UpdateStatus::ReadyToRestart { .. } => {
                             if ui.add(egui::Button::new(egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(11.5)).fill(self.settings.status_green())).clicked() {
@@ -689,20 +1164,11 @@ impl WarRoomApp {
                         }
                     }
                 });
-
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(4.0);
-                
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add_sized(egui::vec2(120.0, 32.0), egui::Button::new(egui::RichText::new("Done").color(egui::Color32::BLACK).strong()).fill(primary)).clicked() {
-                        self.settings.save();
-                        self.show_settings_modal = false;
-                    }
-                });
             });
     }
-    pub(crate) fn render_stint_db_modal(&mut self, ctx: &egui::Context, s: &WarRoomState) {
+
+
+        pub(crate) fn render_stint_db_modal(&mut self, ctx: &egui::Context, s: &WarRoomState) {
         if !self.show_stint_db_modal {
             return;
         }
@@ -728,8 +1194,8 @@ impl WarRoomApp {
         };
 
         let screen_rect = ctx.screen_rect();
-        let win_w = (screen_rect.width() * 0.86).clamp(860.0, 1280.0);
-        let win_h = (screen_rect.height() * 0.82).clamp(520.0, 840.0);
+        let win_w = (screen_rect.width() * 0.92).clamp(1240.0, 1600.0);
+        let win_h = (screen_rect.height() * 0.85).clamp(560.0, 920.0);
 
         let mut is_open = self.show_stint_db_modal;
         let mut close_modal = false;
@@ -737,13 +1203,17 @@ impl WarRoomApp {
         let mut action_reimport: Option<stint_db::SavedStintRecord> = None;
         let mut action_compare: Option<stint_db::SavedStintRecord> = None;
         let mut action_share: Option<stint_db::SavedStintRecord> = None;
+        let mut action_export_as: Option<stint_db::SavedStintRecord> = None;
+        let mut action_import_file: Option<std::path::PathBuf> = None;
         let mut action_delete_id: Option<String> = None;
 
         egui::Window::new("📂 Saved Stints Database · Track Re-Import & Share")
-            .id(egui::Id::new("stint_database_modal_window"))
+            .id(egui::Id::new("stint_database_modal_window_v4"))
             .open(&mut is_open)
             .default_size([win_w, win_h])
-            .default_pos([screen_rect.min.x + 60.0, screen_rect.min.y + 50.0])
+            .min_width(1200.0)
+            .min_height(520.0)
+            .default_pos([screen_rect.min.x + 30.0, screen_rect.min.y + 40.0])
             .collapsible(false)
             .resizable(true)
             .show(ctx, |ui| {
@@ -853,7 +1323,7 @@ impl WarRoomApp {
                         if ui
                             .add(
                                 egui::Button::new(
-                                    egui::RichText::new("📥 Paste Stint from Clipboard")
+                                    egui::RichText::new("📥 Import Stint File...")
                                         .color(egui::Color32::BLACK)
                                         .size(11.5)
                                         .strong(),
@@ -861,19 +1331,42 @@ impl WarRoomApp {
                                 .fill(primary)
                                 .rounding(egui::Rounding::same(6.0)),
                             )
-                            .on_hover_text("Import a shared S4S-STINT-V1:... code or JSON stint copied from Discord and load it into the session")
+                            .on_hover_text("Open file picker to import a teammate's .s4s.json stint file and load it into your session")
                             .clicked()
                         {
-                            match stint_db::read_clipboard_text().and_then(|raw| stint_db::import_from_str(&raw)) {
-                                Ok(rec) => {
-                                    self.stint_db.upsert_stint(rec.clone());
-                                    action_reimport = Some(rec);
-                                }
-                                Err(err) => {
-                                    self.toast_message = Some((
-                                        format!("⚠ Clipboard import failed: {}", err),
-                                        std::time::Instant::now(),
-                                    ));
+                            if let Some(path) = stint_db::pick_open_stint_file_dialog() {
+                                action_import_file = Some(path);
+                            }
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("📋 Paste from Clipboard")
+                                        .color(white)
+                                        .size(11.5),
+                                )
+                                .fill(elevated)
+                                .rounding(egui::Rounding::same(6.0)),
+                            )
+                            .on_hover_text("Import a stint from clipboard: supports files copied in Windows Explorer (.s4s.json) or text share codes")
+                            .clicked()
+                        {
+                            let clip_files = stint_db::read_clipboard_file_paths();
+                            if let Some(first_file) = clip_files.first() {
+                                action_import_file = Some(first_file.clone());
+                            } else {
+                                match stint_db::read_clipboard_text().and_then(|raw| stint_db::import_from_str(&raw)) {
+                                    Ok(rec) => {
+                                        self.stint_db.upsert_stint(rec.clone());
+                                        action_reimport = Some(rec);
+                                    }
+                                    Err(err) => {
+                                        self.toast_message = Some((
+                                            format!("⚠ Clipboard import failed: {}", err),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -898,7 +1391,7 @@ impl WarRoomApp {
                             );
                             ui.label(
                                 egui::RichText::new(
-                                    "Completed stints (1+ laps) are automatically saved locally with lap times, fuel burn, 4-corner pit tire wear/temps, setup name, and notes. Re-import any stint to view it as IMP 1, IMP 2 in your Stint Log or Side-by-Side Comparison without affecting live telemetry.",
+                                    "Completed stints (1+ laps) are automatically saved locally with lap times, fuel burn, pit tire wear/temps, and setup. Click '📎 Share File' on any stint to copy the .s4s.json file to your clipboard (press Ctrl+V in Discord to attach), or click '📥 Import Stint File...' to load a teammate's stint directly.",
                                 )
                                 .color(muted)
                                 .size(11.5),
@@ -986,7 +1479,7 @@ impl WarRoomApp {
                                     ui.add_space(6.0);
                                     ui.label(
                                         egui::RichText::new(
-                                            "Complete laps in iRacing (auto-saved automatically), click '💾 Save / Share' on any stint in Stint Analyzer, or click '📥 Paste Stint from Clipboard' above.",
+                                            "Complete laps in iRacing (auto-saved automatically), click '📎 Share Stint File' on any stint in Stint Analyzer, or click '📥 Import Stint File...' above.",
                                         )
                                         .color(muted)
                                         .size(12.0),
@@ -1012,15 +1505,15 @@ impl WarRoomApp {
                                         .striped(true)
                                         .resizable(true)
                                         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                        .column(Column::initial(125.0).at_least(105.0)) // Saved Date
-                                        .column(Column::initial(195.0).at_least(140.0)) // Track & Car
-                                        .column(Column::initial(175.0).at_least(130.0)) // Setup & Driver
-                                        .column(Column::initial(52.0).at_least(45.0))   // Laps
-                                        .column(Column::initial(78.0).at_least(68.0))   // Fastest
-                                        .column(Column::initial(78.0).at_least(68.0))   // Full Avg
-                                        .column(Column::initial(72.0).at_least(62.0))   // Fuel/Lap
-                                        .column(Column::initial(78.0).at_least(68.0))   // Tires
-                                        .column(Column::remainder().at_least(250.0))    // Actions
+                                        .column(Column::initial(115.0).at_least(95.0))  // Saved Date
+                                        .column(Column::initial(180.0).at_least(130.0)) // Track & Car
+                                        .column(Column::initial(160.0).at_least(120.0)) // Setup & Driver
+                                        .column(Column::initial(46.0).at_least(38.0))   // Laps
+                                        .column(Column::initial(72.0).at_least(60.0))   // Fastest
+                                        .column(Column::initial(72.0).at_least(60.0))   // Full Avg
+                                        .column(Column::initial(68.0).at_least(56.0))   // Fuel/Lap
+                                        .column(Column::initial(74.0).at_least(60.0))   // Pit Tires
+                                        .column(Column::remainder().at_least(380.0))    // Actions
                                         .header(28.0, |mut header| {
                                             header.col(|ui| { ui.label(egui::RichText::new("Saved").color(muted).size(11.5)); });
                                             header.col(|ui| { ui.label(egui::RichText::new("Track & Car").color(muted).size(11.5)); });
@@ -1030,7 +1523,7 @@ impl WarRoomApp {
                                             header.col(|ui| { ui.label(egui::RichText::new("Full Avg").color(muted).size(11.5)); });
                                             header.col(|ui| { ui.label(egui::RichText::new("Fuel/Lap").color(muted).size(11.5)); });
                                             header.col(|ui| { ui.label(egui::RichText::new("Pit Tires").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Actions (Re-Import / Compare / Share)").color(muted).size(11.5)); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Actions (Re-Import / Compare / Share File / Show / Export)").color(muted).size(11.5)); });
                                         })
                                         .body(|mut body| {
                                             for (row_idx, rec) in filtered_records.iter().enumerate() {
@@ -1128,6 +1621,7 @@ impl WarRoomApp {
                                                     row.col(|ui| {
                                                         ui.push_id(("stint_db_row_actions", row_idx, &rec.id), |ui| {
                                                             ui.horizontal(|ui| {
+                                                                ui.spacing_mut().item_spacing.x = 4.0;
                                                                 let reimp_label = if let Some(imp_n) = already_imported_num {
                                                                     format!("✓ IMP {}", (imp_n - 100).max(1))
                                                                 } else {
@@ -1164,14 +1658,39 @@ impl WarRoomApp {
 
                                                                 if ui
                                                                     .add(
-                                                                        egui::Button::new(egui::RichText::new("📋 Share").color(white).size(11.5))
+                                                                        egui::Button::new(egui::RichText::new("📎 Share File").color(white).size(11.5))
                                                                             .fill(elevated)
                                                                             .rounding(egui::Rounding::same(5.0)),
                                                                     )
-                                                                    .on_hover_text("Copy S4S-STINT-V1 share code to clipboard for pasting in Discord")
+                                                                    .on_hover_text("Copy the .s4s.json stint file to Windows Clipboard (press Ctrl+V in Discord or Explorer to attach the file)")
                                                                     .clicked()
                                                                 {
                                                                     action_share = Some(rec.clone());
+                                                                }
+
+                                                                let file_path = self.stint_db.record_file_path(&rec);
+                                                                if ui
+                                                                    .add(
+                                                                        egui::Button::new(egui::RichText::new("📂 Show").color(white).size(11.5))
+                                                                            .fill(elevated)
+                                                                            .rounding(egui::Rounding::same(5.0)),
+                                                                    )
+                                                                    .on_hover_text("Locate and highlight this stint file (.s4s.json) in Windows Explorer to drag-and-drop into Discord")
+                                                                    .clicked()
+                                                                {
+                                                                    stint_db::reveal_file_in_explorer(&file_path);
+                                                                }
+
+                                                                if ui
+                                                                    .add(
+                                                                        egui::Button::new(egui::RichText::new("💾").color(muted).size(11.5))
+                                                                            .fill(elevated)
+                                                                            .rounding(egui::Rounding::same(5.0)),
+                                                                    )
+                                                                    .on_hover_text("Export a copy of this .s4s.json stint file to any folder on your PC")
+                                                                    .clicked()
+                                                                {
+                                                                    action_export_as = Some(rec.clone());
                                                                 }
 
                                                                 if ui
@@ -1194,6 +1713,25 @@ impl WarRoomApp {
                         });
                 }
             });
+
+        if let Some(path) = action_import_file {
+            match stint_db::import_stint_from_file(&path) {
+                Ok(rec) => {
+                    self.stint_db.upsert_stint(rec.clone());
+                    let dest_path = self.stint_db.record_file_path(&rec);
+                    if path != dest_path && path.exists() {
+                        let _ = std::fs::copy(&path, &dest_path);
+                    }
+                    action_reimport = Some(rec);
+                }
+                Err(err) => {
+                    self.toast_message = Some((
+                        format!("⚠ Could not import file: {}", err),
+                        std::time::Instant::now(),
+                    ));
+                }
+            }
+        }
 
         if let Some(rec) = action_reimport {
             let (car_idx, imp_num) = if let Ok(mut state_guard) = self.state.lock() {
@@ -1247,17 +1785,54 @@ impl WarRoomApp {
         }
 
         if let Some(rec) = action_share {
-            match stint_db::export_share_string(&rec) {
-                Ok(code) => {
-                    ctx.output_mut(|o| o.copied_text = code);
-                    self.toast_message = Some((
-                        "📋 Copied shareable stint code to clipboard — paste in Discord or share via Stints folder!"
-                            .to_string(),
-                        std::time::Instant::now(),
-                    ));
+            match self.stint_db.write_individual_stint_file(&rec) {
+                Ok(file_path) => {
+                    match stint_db::copy_stint_file_to_clipboard(&file_path) {
+                        Ok(()) => {
+                            self.toast_message = Some((
+                                "📎 Copied Stint file (.s4s.json) to clipboard — press Ctrl+V in Discord or Explorer to attach!".to_string(),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                        Err(_) => {
+                            if let Ok(code) = stint_db::export_share_string(&rec) {
+                                ctx.output_mut(|o| o.copied_text = code);
+                                self.toast_message = Some((
+                                    "📋 Copied stint share code to clipboard (ready to paste in Discord).".to_string(),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
-                    self.toast_message = Some((format!("⚠ Share failed: {}", e), std::time::Instant::now()));
+                    self.toast_message = Some((format!("⚠ Failed to write stint file: {}", e), std::time::Instant::now()));
+                }
+            }
+        }
+
+        if let Some(rec) = action_export_as {
+            let default_name = self.stint_db.record_file_path(&rec)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("stint.s4s.json")
+                .to_string();
+            if let Some(dest_path) = stint_db::pick_save_stint_file_dialog(&default_name) {
+                if let Ok(json) = serde_json::to_string_pretty(&rec) {
+                    match std::fs::write(&dest_path, json) {
+                        Ok(_) => {
+                            self.toast_message = Some((
+                                format!("💾 Exported stint file to '{}'!", dest_path.display()),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                        Err(e) => {
+                            self.toast_message = Some((
+                                format!("⚠ Export failed: {}", e),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                    }
                 }
             }
         }

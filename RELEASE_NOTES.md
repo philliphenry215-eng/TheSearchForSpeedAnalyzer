@@ -1,3 +1,29 @@
+# The Search For Speed Analyzer — v0.4.0
+
+### 📁 Intuitive Stint File Sharing & Native File Import:
+* **Physical Stint File Sharing (`.s4s.json` via CF_HDROP):**
+  * Replaced raw JSON text strings with physical `.s4s.json` file sharing.
+  * Clicking "Share File" directly copies the `.s4s.json` file to the Windows Clipboard. Pressing `Ctrl+V` in Discord, Slack, or Windows Explorer directly attaches/pastes the actual file.
+  * Added dedicated `Show` button to open Windows File Explorer with the specific `.s4s.json` file selected for instant drag-and-drop.
+  * Added `Export As...` action to save `.s4s.json` files to custom directories.
+* **Native File Picker Import Dialog:**
+  * Replaced raw text paste with a native Windows Open File Dialog (`GetOpenFileNameW`) pre-filtered to `*.s4s.json;*.json`.
+  * Automatically points to the user's `Downloads` or `Documents/SearchForSpeed/stints/` folder.
+* **Expanded Saved Stints Database Window:**
+  * Enlarged default window dimensions and enforced minimum widths so all action buttons (`Re-Import`, `Compare`, `Share File`, `Show`, `Export`, and `Delete`) fit naturally without being cut off.
+
+### 📈 .IBT Telemetry Lab & Settings Command Center:
+* **Custom Telemetry Colors & Comparison Line Styles:**
+  * Interactive color pickers for every telemetry trace channel.
+  * High-contrast distinct comparison traces (Lap A vs Lap B) and dashed reference patterns.
+  * Adaptive LOD downsampling for ultra-smooth 60Hz trace rendering.
+* **Spacious Desktop Settings Suite:**
+  * Redesigned settings modal into a spacious tabbed desktop command center.
+* **UI Polish & Icon Fixes:**
+  * Restored crisp Unicode icons across all navigation bars, menus, and update banners.
+
+---
+
 # The Search For Speed Analyzer — v0.3.9
 
 ### 🛡 Windows Defender & Antivirus False-Positive Hardening:

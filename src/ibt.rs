@@ -40,6 +40,7 @@ pub fn default_telemetry_dir() -> PathBuf {
 pub struct IbtFileEntry {
     pub path: PathBuf,
     pub file_name: String,
+    pub subfolder: Option<String>,
     pub file_size_bytes: u64,
     pub modified_epoch_secs: u64,
     pub modified_display: String,
@@ -51,65 +52,109 @@ impl IbtFileEntry {
     }
 }
 
-/// Scans a directory for `.ibt` files and returns them sorted by most recently modified first.
-pub fn scan_ibt_directory(dir: &Path) -> Vec<IbtFileEntry> {
+/// Opens the specified directory (or file's parent folder) in Windows File Explorer.
+pub fn open_directory_in_explorer(dir: &Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let target = if dir.is_file() {
+            dir.parent().unwrap_or(dir)
+        } else {
+            dir
+        };
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(target)
+            .spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = dir;
+    }
+}
+
+/// Scans a directory (and optionally subdirectories up to 3 levels deep) for `.ibt` files,
+/// returning them sorted by most recently modified first.
+pub fn scan_ibt_directory(dir: &Path, include_subfolders: bool) -> Vec<IbtFileEntry> {
     let mut entries = Vec::new();
-    let read_dir = match fs::read_dir(dir) {
+    scan_ibt_dir_internal(dir, dir, include_subfolders, 0, 3, &mut entries);
+    entries.sort_by(|a, b| b.modified_epoch_secs.cmp(&a.modified_epoch_secs));
+    entries
+}
+
+fn scan_ibt_dir_internal(
+    root: &Path,
+    current_dir: &Path,
+    include_subfolders: bool,
+    depth: usize,
+    max_depth: usize,
+    entries: &mut Vec<IbtFileEntry>,
+) {
+    let read_dir = match fs::read_dir(current_dir) {
         Ok(rd) => rd,
-        Err(_) => return entries,
+        Err(_) => return,
     };
 
     for entry_res in read_dir.flatten() {
         let path = entry_res.path();
-        if !path.is_file() {
-            continue;
-        }
-        let is_ibt = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.eq_ignore_ascii_case("ibt"))
-            .unwrap_or(false);
-        if !is_ibt {
-            continue;
-        }
-
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("telemetry.ibt")
-            .to_string();
-
-        let (file_size_bytes, modified_epoch_secs) = match entry_res.metadata() {
-            Ok(meta) => {
-                let sz = meta.len();
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                (sz, mtime)
+        if path.is_file() {
+            let is_ibt = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.eq_ignore_ascii_case("ibt"))
+                .unwrap_or(false);
+            if !is_ibt {
+                continue;
             }
-            Err(_) => (0, 0),
-        };
 
-        let modified_display = if modified_epoch_secs > 0 {
-            format_unix_timestamp(modified_epoch_secs as i64)
-        } else {
-            "—".to_string()
-        };
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("telemetry.ibt")
+                .to_string();
 
-        entries.push(IbtFileEntry {
-            path,
-            file_name,
-            file_size_bytes,
-            modified_epoch_secs,
-            modified_display,
-        });
+            let (file_size_bytes, modified_epoch_secs) = match entry_res.metadata() {
+                Ok(meta) => {
+                    let sz = meta.len();
+                    let mtime = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    (sz, mtime)
+                }
+                Err(_) => (0, 0),
+            };
+
+            let modified_display = if modified_epoch_secs > 0 {
+                format_unix_timestamp(modified_epoch_secs as i64)
+            } else {
+                "—".to_string()
+            };
+
+            let subfolder = path
+                .parent()
+                .and_then(|p| p.strip_prefix(root).ok())
+                .and_then(|rel| {
+                    let s = rel.to_string_lossy().to_string();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                });
+
+            entries.push(IbtFileEntry {
+                path,
+                file_name,
+                subfolder,
+                file_size_bytes,
+                modified_epoch_secs,
+                modified_display,
+            });
+        } else if path.is_dir() && include_subfolders && depth < max_depth {
+            scan_ibt_dir_internal(root, &path, include_subfolders, depth + 1, max_depth, entries);
+        }
     }
-
-    entries.sort_by(|a, b| b.modified_epoch_secs.cmp(&a.modified_epoch_secs));
-    entries
 }
 
 pub fn format_unix_timestamp(ts: i64) -> String {

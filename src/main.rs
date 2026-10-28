@@ -220,6 +220,7 @@ pub(crate) struct WarRoomApp {
     pub(crate) settings: AppSettings,
     pub(crate) logo_texture: Option<egui::TextureHandle>,
     pub(crate) show_settings_modal: bool,
+    pub(crate) settings_active_tab: settings::SettingsTab,
     pub(crate) show_telemetry_debugger: bool,
     pub(crate) selected_driver_car_idx: Option<usize>,
     pub(crate) selected_stint_num: Option<i32>,
@@ -620,6 +621,7 @@ impl WarRoomApp {
             settings,
             logo_texture,
             show_settings_modal: false,
+            settings_active_tab: settings::SettingsTab::General,
             show_telemetry_debugger: false,
             selected_driver_car_idx: None,
             selected_stint_num: None,
@@ -657,6 +659,7 @@ impl WarRoomApp {
             settings: AppSettings::default(),
             logo_texture: None,
             show_settings_modal: false,
+            settings_active_tab: settings::SettingsTab::General,
             show_telemetry_debugger: false,
             selected_driver_car_idx: None,
             selected_stint_num: None,
@@ -820,7 +823,7 @@ impl eframe::App for WarRoomApp {
                     with_alpha(self.settings.secondary_accent(), 28)
                 };
                 let ibt_btn = egui::Button::new(
-                    egui::RichText::new("ðŸ“Š .IBT Telemetry Lab")
+                    egui::RichText::new("📈 .IBT Telemetry Lab")
                         .size(12.5)
                         .color(if is_ibt { primary } else { white })
                         .strong(),
@@ -897,7 +900,7 @@ impl eframe::App for WarRoomApp {
 
                     ui.menu_button(egui::RichText::new("…").color(white).size(15.0), |ui| {
                         ui.set_min_width(210.0);
-                        if ui.button("ðŸ“– What's New & Release Notes").clicked() {
+                        if ui.button("📖 What's New & Release Notes").clicked() {
                             self.show_release_notes_modal = true;
                             ui.close_menu();
                         }
@@ -912,11 +915,11 @@ impl eframe::App for WarRoomApp {
                             self.show_stint_analyzer_modal = true;
                             ui.close_menu();
                         }
-                        if ui.button("ðŸ“‚ Saved Stints Database (Re-Import / Share)").clicked() {
+                        if ui.button("📂 Saved Stints Database (Re-Import / Share)").clicked() {
                             self.show_stint_db_modal = true;
                             ui.close_menu();
                         }
-                        if ui.button("ðŸ“Š Offline .IBT Telemetry Lab").clicked() {
+                        if ui.button("📈 Offline .IBT Telemetry Lab").clicked() {
                             self.settings.view_mode = ActiveViewMode::IbtTelemetry;
                             ui.close_menu();
                         }
@@ -933,7 +936,7 @@ impl eframe::App for WarRoomApp {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("ðŸ”„ Reset / Clear Session Stints").on_hover_text("Cleanly resets stint counts, lap numbers, and best lap times for a new session or run, while preserving baseline fuel burn rate.").clicked() {
+                        if ui.button("🔄 Reset / Clear Session Stints").on_hover_text("Cleanly resets stint counts, lap numbers, and best lap times for a new session or run, while preserving baseline fuel burn rate.").clicked() {
                             let mut s = self.state.lock().unwrap();
                             s.reset_session_data(true);
                             self.selected_driver_car_idx = None;
@@ -1002,7 +1005,7 @@ impl eframe::App for WarRoomApp {
                     match &updater_status {
                             updater::UpdateStatus::UpdateAvailable(info) => {
                                 let info_clone = info.clone();
-                                let icon = if info_clone.is_prerelease { "ðŸ“¢" } else { "ðŸš€" };
+                                let icon = if info_clone.is_prerelease { "⚡" } else { "🚀" };
                                 let title = if info_clone.is_prerelease {
                                     format!("{} Pre-release Available: {}", icon, info_clone.tag_name)
                                 } else {
@@ -1014,7 +1017,7 @@ impl eframe::App for WarRoomApp {
                                 }
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("Ã— Dismiss").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(11.5)).clicked() {
                                         self.updater.dismiss();
                                     }
                                     if ui.button(egui::RichText::new("Skip this version").color(muted).size(11.5)).clicked() {
@@ -1022,7 +1025,7 @@ impl eframe::App for WarRoomApp {
                                         self.settings.save();
                                         self.updater.dismiss();
                                     }
-                                    if ui.button(egui::RichText::new("What's New ðŸ“–").color(white).size(12.0)).clicked() {
+                                    if ui.button(egui::RichText::new("What's New 📖").color(white).size(12.0)).clicked() {
                                         self.show_release_notes_modal = true;
                                     }
                                     let update_btn = egui::Button::new(
@@ -1038,9 +1041,9 @@ impl eframe::App for WarRoomApp {
                                 let mb_down = *downloaded_bytes as f32 / (1024.0 * 1024.0);
                                 let mb_tot = *total_bytes as f32 / (1024.0 * 1024.0);
                                 let text = if *total_bytes > 0 {
-                                    format!("ðŸ“¥ Downloading {}: {:.0}% ({:.1} / {:.1} MB)", tag, percent, mb_down, mb_tot)
+                                    format!("📥 Downloading {}: {:.0}% ({:.1} / {:.1} MB)", tag, percent, mb_down, mb_tot)
                                 } else {
-                                    format!("ðŸ“¥ Downloading {}: {:.1} MB", tag, mb_down)
+                                    format!("📥 Downloading {}: {:.1} MB", tag, mb_down)
                                 };
                                 ui.label(egui::RichText::new(text).color(white).strong().size(12.5));
 
@@ -1057,7 +1060,7 @@ impl eframe::App for WarRoomApp {
                                         self.updater.dismiss();
                                     }
                                     let restart_btn = egui::Button::new(
-                                        egui::RichText::new("Restart to Apply ðŸ”„").color(egui::Color32::BLACK).strong().size(12.0)
+                                        egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(12.0)
                                     ).fill(self.settings.status_green());
                                     if ui.add(restart_btn).clicked() {
                                         if let Err(e) = updater::apply_update_and_restart() { self.updater.status = updater::UpdateStatus::Error(e); }
@@ -1067,7 +1070,7 @@ impl eframe::App for WarRoomApp {
                             updater::UpdateStatus::Error(err) => {
                                 ui.label(egui::RichText::new(format!("⚠ Update notice: {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(12.0));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("Ã— Dismiss").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(11.5)).clicked() {
                                         self.updater.dismiss();
                                     }
                                 });
@@ -2923,6 +2926,58 @@ DriverInfo:
 
         let stint = &state.drivers.get(&0).unwrap().stints[0];
         assert_eq!(stint.numbered_valid_laps(), vec![(12, 33.0), (13, 33.0), (14, 33.1)]);
+    }
+
+    #[test]
+    fn test_telemetry_settings_serialization_and_defaults() {
+        let default_settings = settings::AppSettings::default();
+        assert_eq!(default_settings.telemetry.compare_style, settings::CompareLineStyle::DistinctColor);
+        assert!(default_settings.telemetry.include_subfolders);
+        assert!(default_settings.telemetry.enable_downsampling_lod);
+        assert!((default_settings.telemetry.trace_stroke_width - 1.8).abs() < 0.01);
+
+        // Serialize to JSON and deserialize back
+        let json = serde_json::to_string(&default_settings).expect("Serialization failed");
+        let deserialized: settings::AppSettings = serde_json::from_str(&json).expect("Deserialization failed");
+
+        assert_eq!(deserialized.telemetry.compare_style, settings::CompareLineStyle::DistinctColor);
+        assert_eq!(deserialized.telemetry.trace_colors.lap_a_primary, [255, 212, 64]);
+        assert_eq!(deserialized.telemetry.trace_colors.lap_b_reference, [0, 210, 255]);
+
+        // Test backwards compatibility: empty json should load with default telemetry
+        let minimal_json = "{}";
+        let legacy: settings::TelemetrySettings = serde_json::from_str(minimal_json).expect("Legacy deserialization failed");
+        assert_eq!(legacy.compare_style, settings::CompareLineStyle::DistinctColor);
+        assert!(legacy.include_subfolders);
+    }
+
+    #[test]
+    fn test_ibt_subfolder_scanning_discovery() {
+        let temp_dir = std::env::temp_dir().join("s4s_test_ibt_folders");
+        let sub_dir = temp_dir.join("Sebring_2026");
+        let _ = std::fs::create_dir_all(&sub_dir);
+
+        let root_file = temp_dir.join("root_session.ibt");
+        let sub_file = sub_dir.join("sub_session.ibt");
+
+        let _ = std::fs::write(&root_file, b"test-root");
+        let _ = std::fs::write(&sub_file, b"test-sub");
+
+        // Non-recursive scan: only finds root
+        let root_only = ibt::scan_ibt_directory(&temp_dir, false);
+        assert_eq!(root_only.len(), 1);
+        assert_eq!(root_only[0].file_name, "root_session.ibt");
+        assert!(root_only[0].subfolder.is_none());
+
+        // Recursive scan: finds both root and subfolder
+        let recursive = ibt::scan_ibt_directory(&temp_dir, true);
+        assert_eq!(recursive.len(), 2);
+
+        let sub_entry = recursive.iter().find(|e| e.file_name == "sub_session.ibt").expect("Subfolder entry found");
+        assert_eq!(sub_entry.subfolder.as_deref(), Some("Sebring_2026"));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
