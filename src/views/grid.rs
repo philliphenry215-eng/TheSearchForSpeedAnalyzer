@@ -187,7 +187,7 @@ impl WarRoomApp {
         let muted = self.settings.text_muted();
         let elevated = self.settings.card_elevated_color();
         let purple = self.settings.status_purple();
-        let card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10));
+        let card_stroke = egui::Stroke::new(1.0, self.settings.divider_color());
 
         // 5. Render Top Session Intelligence & Search Bar
         egui::Frame::none()
@@ -253,7 +253,7 @@ impl WarRoomApp {
                             .rounding(egui::Rounding::same(6.0))
                             .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                             .show(ui, |ui| {
-                                ui.label(egui::RichText::new(format_time(session_fastest_lap)).color(egui::Color32::from_rgb(209, 168, 255)).strong().size(12.5));
+                                ui.label(egui::RichText::new(format_time(session_fastest_lap)).color(purple).strong().size(12.5));
                             });
                         ui.label(egui::RichText::new(format!("({})", session_fastest_holder)).color(muted).size(11.5));
                     }
@@ -449,10 +449,11 @@ impl WarRoomApp {
                         for (row_idx, e) in entries.iter().enumerate() {
                             let is_player = e.is_player;
 
+                            let is_dark = self.settings.is_dark_theme();
                             let text_col = if is_player || e.stint_is_active {
                                 white
                             } else {
-                                egui::Color32::from_rgb(184, 191, 204)
+                                muted
                             };
 
                             body.row(30.0, |mut row| {
@@ -461,9 +462,17 @@ impl WarRoomApp {
                                     row.col(|ui| {
                                         let pos_str = if e.pos > 0 { format!("P{}", e.pos) } else { "—".to_string() };
                                         let (badge_bg, badge_fg) = match e.pos {
-                                            1 => (with_alpha(primary, 42), primary),
-                                            2 => (egui::Color32::from_rgba_unmultiplied(220, 225, 235, 34), egui::Color32::from_rgb(220, 225, 235)),
-                                            3 => (egui::Color32::from_rgba_unmultiplied(205, 133, 63, 40), egui::Color32::from_rgb(230, 165, 100)),
+                                            1 => (with_alpha(primary, if is_dark { 42 } else { 55 }), primary),
+                                            2 => if is_dark {
+                                                (egui::Color32::from_rgba_unmultiplied(220, 225, 235, 34), egui::Color32::from_rgb(220, 225, 235))
+                                            } else {
+                                                (egui::Color32::from_rgba_unmultiplied(100, 115, 135, 45), egui::Color32::from_rgb(55, 65, 82))
+                                            },
+                                            3 => if is_dark {
+                                                (egui::Color32::from_rgba_unmultiplied(205, 133, 63, 40), egui::Color32::from_rgb(230, 165, 100))
+                                            } else {
+                                                (egui::Color32::from_rgba_unmultiplied(190, 100, 25, 45), egui::Color32::from_rgb(160, 80, 15))
+                                            },
                                             _ => (elevated, muted),
                                         };
 
@@ -601,7 +610,7 @@ impl WarRoomApp {
                                                     .rounding(egui::Rounding::same(5.0))
                                                     .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                                                     .show(ui, |ui| {
-                                                        ui.label(egui::RichText::new(fast_str).color(egui::Color32::from_rgb(209, 168, 255)).strong().size(12.0));
+                                                        ui.label(egui::RichText::new(fast_str).color(purple).strong().size(12.0));
                                                     });
                                             } else {
                                                 ui.label(egui::RichText::new(fast_str).color(white).strong().size(12.5));
@@ -638,7 +647,7 @@ impl WarRoomApp {
                                                         .rounding(egui::Rounding::same(5.0))
                                                         .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                                                         .show(ui, |ui| {
-                                                            ui.label(egui::RichText::new(val_str).color(egui::Color32::from_rgb(209, 168, 255)).strong().size(12.0));
+                                                            ui.label(egui::RichText::new(val_str).color(purple).strong().size(12.0));
                                                         });
                                                 } else {
                                                     let is_sorted_col = current_sort_key == GridSortKey::AvgBucket(b);

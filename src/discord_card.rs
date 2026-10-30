@@ -240,15 +240,45 @@ pub fn render_discord_stint_card(
     let tire_section_h = 22.0 + 92.0 + 10.0 + 92.0;
     let img_h = (tire_section_top + tire_section_h + 22.0).round() as u32;
 
-    let bg_canvas = Color::rgb(11, 14, 20);
-    let panel_bg = Color::rgb(18, 22, 31);
-    let card_bg = Color::rgb(24, 29, 40);
-    let border_subtle = Color::rgba(255, 255, 255, 22);
-    let text_white = Color::rgb(242, 245, 250);
-    let text_muted = Color::rgb(142, 152, 170);
-    let primary_gold = Color::rgb(245, 184, 46);
-    let status_green = Color::rgb(75, 225, 110);
-    let status_amber = Color::rgb(255, 175, 45);
+    let is_dark = settings.is_dark_theme();
+    let (
+        bg_canvas,
+        panel_bg,
+        card_bg,
+        border_subtle,
+        text_white,
+        text_muted,
+        primary_gold,
+        status_green,
+        status_amber,
+        outer_border,
+    ) = if is_dark {
+        (
+            Color::rgb(11, 14, 20),
+            Color::rgb(18, 22, 31),
+            Color::rgb(24, 29, 40),
+            Color::rgba(255, 255, 255, 22),
+            Color::rgb(242, 245, 250),
+            Color::rgb(142, 152, 170),
+            Color::rgb(245, 184, 46),
+            Color::rgb(75, 225, 110),
+            Color::rgb(255, 175, 45),
+            Color::rgba(245, 184, 46, 70),
+        )
+    } else {
+        (
+            Color::rgb(238, 241, 246),       // Daylight matte canvas
+            Color::rgb(255, 255, 255),       // Pure crisp white panels
+            Color::rgb(244, 246, 250),       // Soft elevated cards
+            Color::rgba(180, 192, 210, 140), // Crisp subtle border
+            Color::rgb(16, 22, 34),          // Deep navy charcoal text
+            Color::rgb(95, 108, 128),        // Slate muted text
+            Color::rgb(212, 142, 12),        // High-contrast warm gold
+            Color::rgb(18, 150, 60),         // High-contrast green
+            Color::rgb(215, 125, 15),        // High-contrast amber
+            Color::rgba(212, 142, 12, 180),  // Warm gold border
+        )
+    };
 
     let mut img = RgbaImage::from_pixel(img_w, img_h, Rgba(bg_canvas.0));
 
@@ -261,7 +291,7 @@ pub fn render_discord_stint_card(
         img_h as f32 - 2.0,
         12.0,
         1.5,
-        Color::rgba(245, 184, 46, 70),
+        outer_border,
     );
 
     // --- 1. TOP HEADER & SESSION WEATHER / TRACK STATE BANNER ---
@@ -402,7 +432,7 @@ pub fn render_discord_stint_card(
     for (col_idx, entry) in entries.iter().enumerate() {
         let x0 = pad_x + col_idx as f32 * (col_w + col_gap);
         let accent = Color::rgb(entry.accent_rgb[0], entry.accent_rgb[1], entry.accent_rgb[2]);
-        let accent_border = Color::rgba(entry.accent_rgb[0], entry.accent_rgb[1], entry.accent_rgb[2], 170);
+        let accent_border = Color::rgba(entry.accent_rgb[0], entry.accent_rgb[1], entry.accent_rgb[2], if is_dark { 170 } else { 200 });
 
         // A. Stint & Driver & Setup Card
         let header_card_y = col_top;
@@ -430,9 +460,14 @@ pub fn render_discord_stint_card(
             badge_w,
             24.0,
             6.0,
-            Color::rgba(entry.accent_rgb[0], entry.accent_rgb[1], entry.accent_rgb[2], 32),
+            Color::rgba(entry.accent_rgb[0], entry.accent_rgb[1], entry.accent_rgb[2], if is_dark { 32 } else { 45 }),
         );
-        draw_text(&mut img, &font_display, badge_x + 9.0, header_card_y + 14.0, 14.5, text_white, &laps_badge_text);
+        let badge_text_col = if is_dark {
+            text_white
+        } else {
+            Color::rgb(entry.accent_rgb[0], entry.accent_rgb[1], entry.accent_rgb[2])
+        };
+        draw_text(&mut img, &font_display, badge_x + 9.0, header_card_y + 14.0, 14.5, badge_text_col, &laps_badge_text);
 
         // Setup row inside Stint Header Card
         draw_text(&mut img, &font_bold, x0 + 14.0, header_card_y + 44.0, 12.0, text_muted, "SETUP:");
@@ -623,8 +658,11 @@ pub fn render_discord_stint_card(
                 data,
                 is_metric,
                 primary_gold,
+                card_bg,
                 text_white,
                 text_muted,
+                border_subtle,
+                is_dark,
             );
         }
     }
@@ -644,8 +682,11 @@ fn draw_tire_card_on_image(
     data: &TireCornerData,
     use_metric: bool,
     primary_gold: Color,
+    card_bg: Color,
     text_white: Color,
     text_muted: Color,
+    border_subtle: Color,
+    is_dark: bool,
 ) {
     let avg_wear = if data.wear_m > 0.01 {
         (data.wear_l + data.wear_m + data.wear_r) / 3.0
@@ -653,25 +694,39 @@ fn draw_tire_card_on_image(
         0.0
     };
 
+    let (green_col, amber_col, red_col) = if is_dark {
+        (
+            Color::rgb(75, 225, 110),
+            Color::rgb(255, 165, 50),
+            Color::rgb(255, 75, 75),
+        )
+    } else {
+        (
+            Color::rgb(18, 150, 60),
+            Color::rgb(215, 125, 15),
+            Color::rgb(215, 45, 45),
+        )
+    };
+
     let wear_color = if avg_wear >= 90.0 {
-        Color::rgb(75, 225, 110)
+        green_col
     } else if avg_wear >= 80.0 {
         primary_gold
     } else if avg_wear >= 70.0 {
-        Color::rgb(255, 165, 50)
+        amber_col
     } else if avg_wear > 0.0 {
-        Color::rgb(255, 75, 75)
+        red_col
     } else {
         text_muted
     };
 
     let border_col = if avg_wear > 0.0 {
-        Color::rgba(wear_color.0[0], wear_color.0[1], wear_color.0[2], 95)
+        Color::rgba(wear_color.0[0], wear_color.0[1], wear_color.0[2], if is_dark { 95 } else { 150 })
     } else {
-        Color::rgba(255, 255, 255, 22)
+        border_subtle
     };
 
-    fill_rounded_rect(img, x, y, w, h, 9.0, Color::rgb(25, 29, 38));
+    fill_rounded_rect(img, x, y, w, h, 9.0, card_bg);
     stroke_rounded_rect(img, x, y, w, h, 9.0, 1.2, border_col);
 
     let press_str = if data.pressure > 0.1 {
@@ -956,12 +1011,139 @@ mod tests {
         let dib = encode_rgba_to_cf_dib(&single_img);
         assert_eq!(dib.len(), 40 + (single_img.width() * single_img.height() * 4) as usize);
 
+        // Light mode rendering test
+        let mut light_settings = settings.clone();
+        light_settings.theme = crate::settings::ThemePreset::S4SGoldBlueLight;
+        let light_single_entries = [DiscordStintEntry {
+            slot_label: None,
+            driver_name: "James Grantham",
+            car_num: "9",
+            setup_name: &stint_a.setup_name,
+            is_player: true,
+            stint: &stint_a,
+            accent_rgb: [212, 142, 12],
+        }];
+        let light_single_img = render_discord_stint_card(&light_single_entries, &state, &light_settings).expect("render light single card");
+        assert!(light_single_img.width() > 500 && light_single_img.height() > 500);
+
+        let light_compare_entries = [
+            DiscordStintEntry {
+                slot_label: Some("STINT A"),
+                driver_name: "James Grantham",
+                car_num: "9",
+                setup_name: &stint_a.setup_name,
+                is_player: true,
+                stint: &stint_a,
+                accent_rgb: [20, 105, 220],
+            },
+            DiscordStintEntry {
+                slot_label: Some("STINT B"),
+                driver_name: "James Grantham",
+                car_num: "9",
+                setup_name: &stint_b.setup_name,
+                is_player: true,
+                stint: &stint_b,
+                accent_rgb: [205, 110, 10],
+            },
+        ];
+        let light_compare_img = render_discord_stint_card(&light_compare_entries, &state, &light_settings).expect("render light compare card");
+        assert!(light_compare_img.width() > 900 && light_compare_img.height() > 500);
+
         if let Ok(out_dir) = std::env::var("DISCORD_CARD_PREVIEW_DIR") {
             let dir = std::path::PathBuf::from(out_dir);
             let _ = std::fs::create_dir_all(&dir);
             single_img.save(dir.join("discord_single_stint_preview.png")).unwrap();
             compare_img.save(dir.join("discord_compare_stints_preview.png")).unwrap();
+            light_single_img.save(dir.join("discord_light_stint_preview.png")).unwrap();
+            light_compare_img.save(dir.join("discord_light_compare_preview.png")).unwrap();
+            let lap_log_img = render_sample_lap_log_preview();
+            lap_log_img.save(dir.join("lap_log_light_preview.png")).unwrap();
         }
+    }
+
+    fn render_sample_lap_log_preview() -> RgbaImage {
+        let font_regular = FontRef::try_from_slice(include_bytes!("../assets/fonts/Inter-Medium.ttf")).unwrap();
+        let font_bold = FontRef::try_from_slice(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")).unwrap();
+        let w = 820u32;
+        let h = 300u32;
+        let bg_color = Color::rgb(238, 241, 246);
+        let mut img = RgbaImage::from_pixel(w, h, Rgba(bg_color.0));
+
+        let pad_x = 18.0f32;
+        let top_y = 14.0f32;
+
+        let muted = Color::rgb(95, 108, 128);
+        let charcoal = Color::rgb(16, 22, 34);
+        let green = Color::rgb(18, 150, 60);
+        let panel_bg = Color::rgb(255, 255, 255);
+        let border_col = Color::rgb(212, 220, 232);
+        let pill_bg = Color::rgb(228, 233, 242);
+        let gold_bg = Color::rgb(212, 142, 12);
+
+        // Header Title
+        draw_text(&mut img, &font_bold, pad_x, top_y + 4.0, 11.5, muted, "LAP-BY-LAP LOG");
+
+        // Action Buttons on Right
+        let btn3_w = 175.0f32;
+        let btn3_x = w as f32 - pad_x - btn3_w;
+        fill_rounded_rect(&mut img, btn3_x, top_y, btn3_w, 24.0, 5.0, gold_bg);
+        draw_text(&mut img, &font_bold, btn3_x + 10.0, top_y + 5.0, 11.5, Color::rgb(0, 0, 0), "Copy Spreadsheet (TSV)");
+
+        let btn2_w = 115.0f32;
+        let btn2_x = btn3_x - btn2_w - 8.0;
+        fill_rounded_rect(&mut img, btn2_x, top_y, btn2_w, 24.0, 5.0, pill_bg);
+        draw_text(&mut img, &font_regular, btn2_x + 10.0, top_y + 5.0, 11.5, charcoal, "Copy Lap Times");
+
+        let btn1_w = 125.0f32;
+        let btn1_x = btn2_x - btn1_w - 8.0;
+        fill_rounded_rect(&mut img, btn1_x, top_y, btn1_w, 24.0, 5.0, pill_bg);
+        draw_text(&mut img, &font_regular, btn1_x + 10.0, top_y + 5.0, 11.5, charcoal, "Add to Compare");
+
+        // Table Frame
+        let table_y = top_y + 32.0;
+        let table_w = w as f32 - pad_x * 2.0;
+        let table_h = h as f32 - table_y - 14.0;
+        fill_rounded_rect(&mut img, pad_x, table_y, table_w, table_h, 8.0, panel_bg);
+        stroke_rounded_rect(&mut img, pad_x, table_y, table_w, table_h, 8.0, 1.0, border_col);
+
+        // Header columns
+        let row_h = 28.0f32;
+        let col_x = [pad_x + 16.0, pad_x + 115.0, pad_x + 215.0, pad_x + 345.0, pad_x + 485.0];
+        draw_text(&mut img, &font_bold, col_x[0], table_y + 8.0, 11.5, muted, "Stint Lap");
+        draw_text(&mut img, &font_bold, col_x[1], table_y + 8.0, 11.5, muted, "Session Lap");
+        draw_text(&mut img, &font_bold, col_x[2], table_y + 8.0, 11.5, muted, "Lap Time");
+        draw_text(&mut img, &font_bold, col_x[3], table_y + 8.0, 11.5, muted, "Running Avg");
+        draw_text(&mut img, &font_bold, col_x[4], table_y + 8.0, 11.5, muted, "Action");
+
+        // Header divider
+        fill_rounded_rect(&mut img, pad_x + 8.0, table_y + 26.0, table_w - 16.0, 1.0, 0.5, border_col);
+
+        let laps_data = [
+            ("L1", "5", "1:45.960", "1:45.960", false),
+            ("L2", "6", "1:45.574", "1:45.767", false),
+            ("L3", "7", "1:46.142", "1:45.892", false),
+            ("L4", "8", "1:45.488", "1:45.791", false),
+            ("L5", "9", "1:45.701", "1:45.773", false),
+            ("L6", "10", "1:45.421", "1:45.714", true),
+            ("L7", "11", "1:46.324", "1:45.801", false),
+        ];
+
+        for (idx, (stint_lap, sess_lap, lap_t, avg_t, is_fast)) in laps_data.iter().enumerate() {
+            let ry = table_y + 28.0 + idx as f32 * row_h;
+            if idx % 2 == 1 {
+                fill_rounded_rect(&mut img, pad_x + 6.0, ry, table_w - 12.0, row_h, 4.0, Color::rgb(246, 248, 252));
+            }
+            draw_text(&mut img, &font_bold, col_x[0], ry + 6.0, 12.5, charcoal, stint_lap);
+            draw_text(&mut img, &font_regular, col_x[1], ry + 6.0, 12.5, muted, sess_lap);
+            let t_col = if *is_fast { green } else { charcoal };
+            draw_text(&mut img, &font_bold, col_x[2], ry + 6.0, 12.5, t_col, lap_t);
+            draw_text(&mut img, &font_regular, col_x[3], ry + 6.0, 12.5, muted, avg_t);
+
+            fill_rounded_rect(&mut img, col_x[4], ry + 3.0, 68.0, 20.0, 4.0, pill_bg);
+            draw_text(&mut img, &font_regular, col_x[4] + 8.0, ry + 5.0, 11.0, muted, "Copy row");
+        }
+
+        img
     }
 }
 

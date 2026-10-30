@@ -1,3 +1,27 @@
+# The Search For Speed Analyzer — v0.4.1
+
+### ✨ Light Mode Accessibility & Contrast Overhaul:
+* **Theme-Aware Stint Report & Visual Tire Cards:**
+  * Fixed dark container fills in the single-stint and multi-stint comparison views that caused dark charcoal text to render unreadable black-on-black in Light (`S4SGoldBlueLight` / Daylight) mode.
+  * 4-corner post-stint tire cards (LF, RF, LR, RR) now fill with soft elevated card surfaces (`#f4f6fa`) with clear wear-tinted borders and high-contrast text.
+  * Lap-by-Lap log table now renders on a crisp white card surface with clean borders, legible slate headers, and bold dark charcoal lap times.
+  * Telemetry line graphs and multi-stint overlays now dynamically switch between dark and daylight canvases with soft grid lines and theme-aware tooltips.
+  * Stint Database modal table container and information banner updated to use crisp daylight surfaces.
+
+### 📸 Dynamic Discord Screenshot Capture (Theme-Aware):
+* **Automatic Daylight Screenshot Rendering:**
+  * Discord stint cards copied via "📸 Copy Discord Image" now dynamically evaluate the user's active theme.
+  * When Daylight / Light mode is active, generated Discord summary images render on a daylight canvas with pure white panels, soft elevated tiles, high-contrast dark text, and warm gold accents instead of remaining dark.
+  * Side-by-side comparison Discord captures now utilize high-contrast daytime hues (Royal Blue `#1469dc`, Deep Amber `#cd6e0a`, and Deep Violet) replacing washed-out neon pastels.
+
+### 🎨 General UI Polish & Contrast Refinements:
+* **Cockpit & Grid Views:**
+  * Replaced fixed low-contrast card strokes with dynamic theme divider colors.
+  * Inactive stint rows now utilize legible slate muted text rather than low-contrast silver.
+  * Position badges (P2 silver/slate, P3 bronze) and session best lap highlights tuned for WCAG AAA contrast in Daylight mode.
+
+---
+
 # The Search For Speed Analyzer — v0.4.0
 
 ### 📁 Intuitive Stint File Sharing & Native File Import:

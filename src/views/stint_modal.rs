@@ -12,9 +12,7 @@ pub(crate) fn render_tire_corner_card(
     corner_title: &str,
     data: &TireCornerData,
     use_metric: bool,
-    primary: egui::Color32,
-    _secondary: egui::Color32,
-    white: egui::Color32,
+    settings: &crate::settings::AppSettings,
 ) {
     let avg_wear = if data.wear_m > 0.01 {
         (data.wear_l + data.wear_m + data.wear_r) / 3.0
@@ -22,15 +20,19 @@ pub(crate) fn render_tire_corner_card(
         0.0
     };
 
-    let muted = egui::Color32::from_rgb(139, 147, 163);
+    let is_dark = settings.is_dark_theme();
+    let white = settings.text_color();
+    let muted = settings.text_muted();
+    let primary = settings.primary_accent();
+
     let wear_color = if avg_wear >= 90.0 {
-        egui::Color32::from_rgb(75, 225, 110) // Crisp green (>90%)
+        settings.status_green()
     } else if avg_wear >= 80.0 {
-        primary // Vibrant Gold (80-89%)
+        primary
     } else if avg_wear >= 70.0 {
-        egui::Color32::from_rgb(255, 165, 50) // Amber (70-79%)
+        settings.status_amber()
     } else if avg_wear > 0.0 {
-        egui::Color32::from_rgb(255, 75, 75) // Red (<70%)
+        settings.status_red()
     } else {
         muted
     };
@@ -70,13 +72,23 @@ pub(crate) fn render_tire_corner_card(
     };
 
     let card_border = if avg_wear > 0.0 {
-        with_alpha(wear_color, 70)
+        if is_dark {
+            with_alpha(wear_color, 70)
+        } else {
+            with_alpha(wear_color, 140)
+        }
     } else {
-        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10)
+        settings.divider_color()
+    };
+
+    let card_fill = if is_dark {
+        egui::Color32::from_rgb(25, 29, 38)
+    } else {
+        settings.card_elevated_color()
     };
 
     egui::Frame::none()
-        .fill(egui::Color32::from_rgb(25, 29, 38))
+        .fill(card_fill)
         .stroke(egui::Stroke::new(1.0, card_border))
         .rounding(egui::Rounding::same(10.0))
         .inner_margin(egui::Margin::symmetric(8.0, 7.0))
@@ -128,11 +140,19 @@ pub(crate) fn render_stint_lap_chart(
     ui: &mut egui::Ui,
     stint: &StintData,
     height: f32,
-    primary: egui::Color32,
-    _secondary: egui::Color32,
-    white: egui::Color32,
+    settings: &crate::settings::AppSettings,
 ) {
-    let muted = egui::Color32::from_rgb(139, 147, 163);
+    let is_dark = settings.is_dark_theme();
+    let muted = settings.text_muted();
+    let white = settings.text_color();
+    let primary = settings.primary_accent();
+    let chart_bg = if is_dark { egui::Color32::from_rgb(14, 17, 23) } else { settings.panel_color() };
+    let chart_border = if is_dark { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12) } else { settings.divider_color() };
+    let grid_line_col = if is_dark { egui::Color32::from_rgb(28, 33, 44) } else { egui::Color32::from_rgb(226, 232, 240) };
+    let tooltip_bg = if is_dark { egui::Color32::from_rgb(25, 29, 38) } else { settings.panel_color() };
+    let tooltip_stroke = if is_dark { primary } else { settings.divider_color() };
+    let green_col = settings.status_green();
+
     let valid_laps = stint.valid_laps();
     if valid_laps.is_empty() {
         ui.label(egui::RichText::new("No completed green laps recorded yet for this stint.").color(muted));
@@ -151,8 +171,8 @@ pub(crate) fn render_stint_lap_chart(
     let rect = response.rect;
 
     // Background & Soft Rounding
-    painter.rect_filled(rect, 10.0, egui::Color32::from_rgb(14, 17, 23));
-    painter.rect_stroke(rect, 10.0, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)));
+    painter.rect_filled(rect, 10.0, chart_bg);
+    painter.rect_stroke(rect, 10.0, egui::Stroke::new(1.0, chart_border));
 
     let left_pad = 58.0;
     let right_pad = 20.0;
@@ -173,7 +193,7 @@ pub(crate) fn render_stint_lap_chart(
 
         painter.line_segment(
             [egui::pos2(chart_rect.min.x, y_pos), egui::pos2(chart_rect.max.x, y_pos)],
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(28, 33, 44)),
+            egui::Stroke::new(1.0, grid_line_col),
         );
 
         painter.text(
@@ -218,11 +238,11 @@ pub(crate) fn render_stint_lap_chart(
         let is_fast = (t - min_t).abs() < 0.0001;
 
         if is_fast {
-            painter.circle_filled(pt, 5.5, egui::Color32::from_rgb(75, 225, 110));
+            painter.circle_filled(pt, 5.5, green_col);
             painter.circle_stroke(pt, 5.5, egui::Stroke::new(1.5, white));
         } else {
             painter.circle_filled(pt, 3.5, primary);
-            painter.circle_stroke(pt, 3.5, egui::Stroke::new(1.0, egui::Color32::BLACK));
+            painter.circle_stroke(pt, 3.5, egui::Stroke::new(1.0, if is_dark { egui::Color32::BLACK } else { egui::Color32::WHITE }));
         }
 
         if let Some(mp) = mouse_pos {
@@ -245,8 +265,8 @@ pub(crate) fn render_stint_lap_chart(
         let tooltip_pos = egui::pos2(pt.x, pt.y - 18.0);
         let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(12.0), white);
         let bg_rect = egui::Rect::from_center_size(tooltip_pos, galley.size() + egui::vec2(14.0, 8.0));
-        painter.rect_filled(bg_rect, 6.0, egui::Color32::from_rgb(25, 29, 38));
-        painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, primary));
+        painter.rect_filled(bg_rect, 6.0, tooltip_bg);
+        painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, tooltip_stroke));
         painter.galley(bg_rect.min + egui::vec2(7.0, 4.0), galley, white);
     }
 }
@@ -255,9 +275,16 @@ pub(crate) fn render_multi_stint_lap_chart(
     ui: &mut egui::Ui,
     stints: &[(&StintData, String, egui::Color32)],
     height: f32,
-    white: egui::Color32,
+    settings: &crate::settings::AppSettings,
 ) {
-    let muted = egui::Color32::from_rgb(139, 147, 163);
+    let is_dark = settings.is_dark_theme();
+    let muted = settings.text_muted();
+    let white = settings.text_color();
+    let chart_bg = if is_dark { egui::Color32::from_rgb(14, 17, 23) } else { settings.panel_color() };
+    let chart_border = if is_dark { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12) } else { settings.divider_color() };
+    let grid_line_col = if is_dark { egui::Color32::from_rgb(28, 33, 44) } else { egui::Color32::from_rgb(226, 232, 240) };
+    let tooltip_bg = if is_dark { egui::Color32::from_rgb(20, 24, 32) } else { settings.panel_color() };
+    let tooltip_stroke = if is_dark { egui::Color32::from_rgb(60, 70, 90) } else { settings.divider_color() };
 
     let mut all_valid: Vec<Vec<f32>> = Vec::new();
     let mut max_laps = 0;
@@ -290,8 +317,8 @@ pub(crate) fn render_multi_stint_lap_chart(
     let rect = response.rect;
 
     // Background & Soft Rounding
-    painter.rect_filled(rect, 10.0, egui::Color32::from_rgb(14, 17, 23));
-    painter.rect_stroke(rect, 10.0, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)));
+    painter.rect_filled(rect, 10.0, chart_bg);
+    painter.rect_stroke(rect, 10.0, egui::Stroke::new(1.0, chart_border));
 
     let left_pad = 58.0;
     let right_pad = 20.0;
@@ -312,7 +339,7 @@ pub(crate) fn render_multi_stint_lap_chart(
 
         painter.line_segment(
             [egui::pos2(chart_rect.min.x, y_pos), egui::pos2(chart_rect.max.x, y_pos)],
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(28, 33, 44)),
+            egui::Stroke::new(1.0, grid_line_col),
         );
 
         painter.text(
@@ -382,7 +409,7 @@ pub(crate) fn render_multi_stint_lap_chart(
                 painter.circle_stroke(pt, 5.0, egui::Stroke::new(1.5, white));
             } else {
                 painter.circle_filled(pt, 3.0, col);
-                painter.circle_stroke(pt, 3.0, egui::Stroke::new(0.8, egui::Color32::BLACK));
+                painter.circle_stroke(pt, 3.0, egui::Stroke::new(0.8, if is_dark { egui::Color32::BLACK } else { egui::Color32::WHITE }));
             }
         }
 
@@ -403,7 +430,7 @@ pub(crate) fn render_multi_stint_lap_chart(
             // Draw vertical cursor line
             painter.line_segment(
                 [egui::pos2(nearest_x, chart_rect.min.y), egui::pos2(nearest_x, chart_rect.max.y)],
-                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60)),
+                egui::Stroke::new(1.0, if is_dark { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60) } else { egui::Color32::from_rgba_unmultiplied(0, 0, 0, 80) }),
             );
 
             // Find best time on this lap among active stints
@@ -447,8 +474,8 @@ pub(crate) fn render_multi_stint_lap_chart(
             }
 
             let bg_rect = egui::Rect::from_min_size(tooltip_pos, galley.size() + egui::vec2(16.0, 10.0));
-            painter.rect_filled(bg_rect, 6.0, egui::Color32::from_rgb(20, 24, 32));
-            painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 90)));
+            painter.rect_filled(bg_rect, 6.0, tooltip_bg);
+            painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, tooltip_stroke));
             painter.galley(bg_rect.min + egui::vec2(8.0, 5.0), galley, white);
         }
     }
@@ -563,11 +590,20 @@ impl WarRoomApp {
             slot_label: &'static str,
         }
 
-        let slot_colors = [
-            egui::Color32::from_rgb(0, 210, 255),  // Slot 0: Cyan
-            egui::Color32::from_rgb(255, 175, 40), // Slot 1: Amber
-            egui::Color32::from_rgb(220, 95, 255), // Slot 2: Purple
-        ];
+        let is_dark = self.settings.is_dark_theme();
+        let slot_colors = if is_dark {
+            [
+                egui::Color32::from_rgb(0, 210, 255),  // Slot 0: Cyan
+                egui::Color32::from_rgb(255, 175, 40), // Slot 1: Amber
+                egui::Color32::from_rgb(220, 95, 255), // Slot 2: Purple
+            ]
+        } else {
+            [
+                egui::Color32::from_rgb(20, 105, 220),  // Slot 0: Deep Royal Blue
+                egui::Color32::from_rgb(205, 110, 10),  // Slot 1: Deep Amber
+                egui::Color32::from_rgb(140, 45, 210),  // Slot 2: Deep Violet
+            ]
+        };
         let slot_labels = ["STINT A", "STINT B", "STINT C"];
 
         let mut resolved: Vec<ResolvedCompareEntry> = Vec::new();
@@ -981,7 +1017,7 @@ impl WarRoomApp {
                 let lbl = format!("{} (#{} {})", e.slot_label, e.car_num, e.driver_name);
                 (e.stint, lbl, e.color)
             }).collect();
-            render_multi_stint_lap_chart(ui, &chart_stints, 185.0, white);
+            render_multi_stint_lap_chart(ui, &chart_stints, 185.0, &self.settings);
 
             ui.add_space(12.0);
 
@@ -1005,9 +1041,15 @@ impl WarRoomApp {
             ui.add_space(4.0);
 
             if max_laps > 0 {
+                let (table_bg, table_stroke) = if is_dark {
+                    (egui::Color32::from_rgb(14, 17, 23), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10))
+                } else {
+                    (self.settings.panel_color(), self.settings.divider_color())
+                };
+
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(14, 17, 23))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10)))
+                    .fill(table_bg)
+                    .stroke(egui::Stroke::new(1.0, table_stroke))
                     .rounding(egui::Rounding::same(10.0))
                     .inner_margin(10.0)
                     .show(ui, |ui| {
@@ -1136,9 +1178,10 @@ impl WarRoomApp {
                             });
                     });
             } else {
+                let empty_bg = if is_dark { egui::Color32::from_rgb(14, 17, 23) } else { elevated };
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(14, 17, 23))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10)))
+                    .fill(empty_bg)
+                    .stroke(egui::Stroke::new(1.0, self.settings.divider_color()))
                     .rounding(egui::Rounding::same(8.0))
                     .inner_margin(12.0)
                     .show(ui, |ui| {
@@ -1171,20 +1214,20 @@ impl WarRoomApp {
                                 };
                                 ui.columns(2, |corner_cols| {
                                     corner_cols[0].vertical(|ui| {
-                                        render_tire_corner_card(ui, lf_lbl, &entry.stint.tires.lf, is_metric, primary, secondary, white);
+                                        render_tire_corner_card(ui, lf_lbl, &entry.stint.tires.lf, is_metric, &self.settings);
                                         ui.add_space(6.0);
-                                        render_tire_corner_card(ui, lr_lbl, &entry.stint.tires.lr, is_metric, primary, secondary, white);
+                                        render_tire_corner_card(ui, lr_lbl, &entry.stint.tires.lr, is_metric, &self.settings);
                                     });
                                     corner_cols[1].vertical(|ui| {
-                                        render_tire_corner_card(ui, rf_lbl, &entry.stint.tires.rf, is_metric, primary, secondary, white);
+                                        render_tire_corner_card(ui, rf_lbl, &entry.stint.tires.rf, is_metric, &self.settings);
                                         ui.add_space(6.0);
-                                        render_tire_corner_card(ui, rr_lbl, &entry.stint.tires.rr, is_metric, primary, secondary, white);
+                                        render_tire_corner_card(ui, rr_lbl, &entry.stint.tires.rr, is_metric, &self.settings);
                                     });
                                 });
                             } else {
                                 egui::Frame::none()
-                                    .fill(egui::Color32::from_rgb(20, 24, 32))
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)))
+                                    .fill(if is_dark { egui::Color32::from_rgb(20, 24, 32) } else { elevated })
+                                    .stroke(egui::Stroke::new(1.0, self.settings.divider_color()))
                                     .rounding(egui::Rounding::same(8.0))
                                     .inner_margin(12.0)
                                     .show(ui, |ui| {
@@ -1195,8 +1238,8 @@ impl WarRoomApp {
                             }
                         } else {
                             egui::Frame::none()
-                                .fill(egui::Color32::from_rgb(20, 24, 32))
-                                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)))
+                                .fill(if is_dark { egui::Color32::from_rgb(20, 24, 32) } else { elevated })
+                                .stroke(egui::Stroke::new(1.0, self.settings.divider_color()))
                                 .rounding(egui::Rounding::same(8.0))
                                 .inner_margin(12.0)
                                 .show(ui, |ui| {
@@ -1705,7 +1748,7 @@ impl WarRoomApp {
                     // Line Graph
                     ui.label(egui::RichText::new("LAP TIME PROGRESSION").color(muted).size(11.0).extra_letter_spacing(0.8));
                     ui.add_space(4.0);
-                    render_stint_lap_chart(ui, stint, 160.0, primary, secondary, white);
+                    render_stint_lap_chart(ui, stint, 160.0, &self.settings);
 
                     ui.add_space(12.0);
 
@@ -1744,9 +1787,15 @@ impl WarRoomApp {
                     if !valid_laps.is_empty() {
                         let mut sum_lap_times = 0.0;
 
+                        let (table_bg, table_stroke) = if self.settings.is_dark_theme() {
+                            (egui::Color32::from_rgb(14, 17, 23), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10))
+                        } else {
+                            (self.settings.panel_color(), self.settings.divider_color())
+                        };
+
                         egui::Frame::none()
-                            .fill(egui::Color32::from_rgb(14, 17, 23))
-                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10)))
+                            .fill(table_bg)
+                            .stroke(egui::Stroke::new(1.0, table_stroke))
                             .rounding(egui::Rounding::same(10.0))
                             .inner_margin(10.0)
                             .show(ui, |ui| {
@@ -1894,14 +1943,14 @@ impl WarRoomApp {
                     // 4 Visual Tire Cards
                     ui.columns(2, |tire_cols| {
                         tire_cols[0].vertical(|ui| {
-                            render_tire_corner_card(ui, "LF · Left Front", &stint_tires.lf, is_metric, primary, secondary, white);
+                            render_tire_corner_card(ui, "LF · Left Front", &stint_tires.lf, is_metric, &self.settings);
                             ui.add_space(6.0);
-                            render_tire_corner_card(ui, "LR · Left Rear", &stint_tires.lr, is_metric, primary, secondary, white);
+                            render_tire_corner_card(ui, "LR · Left Rear", &stint_tires.lr, is_metric, &self.settings);
                         });
                         tire_cols[1].vertical(|ui| {
-                            render_tire_corner_card(ui, "RF · Right Front", &stint_tires.rf, is_metric, primary, secondary, white);
+                            render_tire_corner_card(ui, "RF · Right Front", &stint_tires.rf, is_metric, &self.settings);
                             ui.add_space(6.0);
-                            render_tire_corner_card(ui, "RR · Right Rear", &stint_tires.rr, is_metric, primary, secondary, white);
+                            render_tire_corner_card(ui, "RR · Right Rear", &stint_tires.rr, is_metric, &self.settings);
                         });
                     });
 

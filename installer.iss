@@ -3,7 +3,7 @@
   #define MyAppName "The Search For Speed Analyzer"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "0.4.0"
+  #define MyAppVersion "0.4.1"
 #endif
 #ifndef MyAppPublisher
   #define MyAppPublisher "The Henry Boys"
@@ -19,7 +19,7 @@
 #endif
 ; Purely numeric version (e.g. 0.3.9) for the Windows file "Details" tab, which rejects text like "v0.3.9-beta.1".
 #ifndef MyAppNumericVersion
-  #define MyAppNumericVersion "0.4.0"
+  #define MyAppNumericVersion "0.4.1"
 #endif
 
 ; Beta and stable are separate apps in Windows: own AppId (uninstall entry) and own folder,

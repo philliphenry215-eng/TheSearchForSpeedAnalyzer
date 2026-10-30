@@ -55,7 +55,7 @@ impl WarRoomApp {
         let col3_w = (total_avail_w * 0.33).clamp(345.0, 420.0);
         let col2_w = (total_avail_w - col1_w - col3_w - 24.0).max(300.0);
 
-        let card_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10));
+        let card_stroke = egui::Stroke::new(1.0, self.settings.divider_color());
 
         ui.horizontal_top(|ui| {
             // --- COLUMN 1: FUEL & STINT ---
@@ -256,7 +256,7 @@ impl WarRoomApp {
                             .body(|mut body| {
                                 if let Some(drv) = player {
                                     for stint in drv.stints.iter().rev() {
-                                        let row_color = if stint.is_active { white } else { egui::Color32::from_rgb(184, 191, 204) };
+                                        let row_color = if stint.is_active { white } else { muted };
                                         let is_selected = self.selected_stint_num == Some(stint.stint_number);
                                         let stint_lbl = stint.short_label();
 
@@ -408,7 +408,8 @@ impl WarRoomApp {
                                         ui.add_space(10.0);
                                         ui.vertical(|ui| {
                                             ui.add_space(4.0);
-                                            ui.label(egui::RichText::new(window_str).color(egui::Color32::from_rgb(143, 180, 238)).size(13.0).strong());
+                                            let win_color = if self.settings.is_dark_theme() { egui::Color32::from_rgb(143, 180, 238) } else { secondary };
+                                            ui.label(egui::RichText::new(window_str).color(win_color).size(13.0).strong());
                                             ui.label(egui::RichText::new("Full tank + 4 tires").color(muted).size(12.0));
                                         });
                                     });
@@ -469,14 +470,14 @@ impl WarRoomApp {
 
                             ui.columns(2, |tire_cols| {
                                 tire_cols[0].vertical(|ui| {
-                                    render_tire_corner_card(ui, "LF", &tires_to_show.lf, is_metric, primary, secondary, white);
+                                    render_tire_corner_card(ui, "LF", &tires_to_show.lf, is_metric, &self.settings);
                                     ui.add_space(6.0);
-                                    render_tire_corner_card(ui, "LR", &tires_to_show.lr, is_metric, primary, secondary, white);
-                                });
+                                    render_tire_corner_card(ui, "LR", &tires_to_show.lr, is_metric, &self.settings);
+                                 });
                                 tire_cols[1].vertical(|ui| {
-                                    render_tire_corner_card(ui, "RF", &tires_to_show.rf, is_metric, primary, secondary, white);
+                                    render_tire_corner_card(ui, "RF", &tires_to_show.rf, is_metric, &self.settings);
                                     ui.add_space(6.0);
-                                    render_tire_corner_card(ui, "RR", &tires_to_show.rr, is_metric, primary, secondary, white);
+                                    render_tire_corner_card(ui, "RR", &tires_to_show.rr, is_metric, &self.settings);
                                 });
                             });
 

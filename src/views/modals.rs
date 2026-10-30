@@ -146,8 +146,10 @@ impl WarRoomApp {
 
                 // Live Event Stream
                 ui.label(egui::RichText::new("EVENT STREAM").color(muted).size(11.0).extra_letter_spacing(0.8));
+                let debug_log_bg = if self.settings.is_dark_theme() { egui::Color32::from_rgb(12, 14, 20) } else { self.settings.card_elevated_color() };
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(12, 14, 20))
+                    .fill(debug_log_bg)
+                    .stroke(egui::Stroke::new(1.0, self.settings.divider_color()))
                     .rounding(egui::Rounding::same(8.0))
                     .inner_margin(10.0)
                     .show(ui, |ui| {
@@ -1376,9 +1378,10 @@ impl WarRoomApp {
                 ui.add_space(6.0);
 
                 // Info Banner
+                let info_bg = if self.settings.is_dark_theme() { egui::Color32::from_rgb(16, 22, 32) } else { self.settings.card_elevated_color() };
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(16, 22, 32))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 14)))
+                    .fill(info_bg)
+                    .stroke(egui::Stroke::new(1.0, self.settings.divider_color()))
                     .rounding(egui::Rounding::same(8.0))
                     .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                     .show(ui, |ui| {
@@ -1491,9 +1494,15 @@ impl WarRoomApp {
                     let player_drv = s.drivers.get(&s.player_car_idx);
                     let avail_h = (ui.available_height() - 10.0).max(200.0);
 
+                    let (table_bg, table_stroke) = if self.settings.is_dark_theme() {
+                        (egui::Color32::from_rgb(14, 17, 23), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10))
+                    } else {
+                        (self.settings.panel_color(), self.settings.divider_color())
+                    };
+
                     egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(14, 17, 23))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10)))
+                        .fill(table_bg)
+                        .stroke(egui::Stroke::new(1.0, table_stroke))
                         .rounding(egui::Rounding::same(10.0))
                         .inner_margin(10.0)
                         .show(ui, |ui| {
