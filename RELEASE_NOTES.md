@@ -1,3 +1,21 @@
+# The Search For Speed Analyzer — v0.4.2
+
+### 🏁 Initial Stint & First-Lap Detection Fixes:
+* **First S/F Crossing (`CarIdxLapCompleted` `-1 -> 0`):**
+  * Fixed a bug where the very first lap or two of the first stint after loading into a session could be ignored. When a car enters the world for the first time in a session, iRacing reports `CarIdxLapCompleted == -1` on the out-lap and steps it to `0` at the first start/finish crossing. That `-1 -> 0` transition is now recognized as the out-lap S/F crossing so Flying Lap 1 is always recorded cleanly.
+* **Bounded Late Out-Lap Time Absorption (`LATE_LAP_TIME_WINDOW_S`):**
+  * Bounded the delayed out-lap/caution lap-time filter (`5.0s` window after the S/F crossing) so that if Flying Lap 1's lap time arrives a frame ahead of its `CarIdxLapCompleted` increment, it is recorded as Lap 1 instead of being swallowed as a late out-lap time.
+* **Off-Track Surface Handling (`irsdk_TrkLoc`):**
+  * Aligned `CarIdxTrackSurface` checks with iRacing's `irsdk_TrkLoc` enum (`-1 = NotInWorld`, `0 = OffTrack`, `1 = InPitStall`, `2 = ApproachingPits`, `3 = OnTrack`) so a 4-wheel off-track excursion (`0`) never closes the active stint or turns the next lap into a fake out-lap.
+
+### ◎ Post-Pit Tire Popup & HUD Preview Fixes:
+* **Trigger on Pit-Road Exit (Instead of Exiting Car):**
+  * Fixed the post-pit 4-corner tire popup so it arms when entering pit road after completing a stint, captures tire wear and temperatures while stationary in the pit stall (reading `*tempCL/CM/CR` with fallback to `*tempL/M/R`), and pops up automatically as you drive off pit road to start your next run—rather than only firing when exiting the car to the garage.
+* **Auto-Hide HUD & Tire Popup Previews on Settings Close:**
+  * Closing the Settings window (`Done ✓`, `Save & Close`, `X`, or `Esc`) now automatically turns off both the In-Car HUD preview and the Tire Popup preview so neither remains stuck on screen.
+
+---
+
 # The Search For Speed Analyzer — v0.4.1
 
 ### ✨ Light Mode Accessibility & Contrast Overhaul:

@@ -610,24 +610,18 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     }
 
     // 3. Extract definitive garage tire measurements from CarSetup (exact match to iRacing garage screen)
+    // iRacing typically refreshes these only when the player returns to the garage, so they are recorded on the closed
+    // stint but no longer fire the post-pit popup (that is fired on pit-road exit in `process_telemetry_frame`).
     if let Some(car_setup) = root.get("CarSetup") {
         if let Some(garage_tires) = parse_car_setup_tires(car_setup) {
             if garage_tires.is_valid() {
                 s.latest_tire_data = garage_tires.clone();
-                let mut triggered_stint_num = None;
                 if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
                     if let Some(last_stint) = player_drv.last_live_stint_mut() {
                         if !last_stint.is_active && last_stint.laps_completed > 0 {
-                            if last_stint.tires.should_trigger_popup(&garage_tires) {
-                                triggered_stint_num = Some(last_stint.stint_number);
-                            }
                             last_stint.tires = garage_tires;
                         }
                     }
-                }
-                if let Some(s_num) = triggered_stint_num {
-                    s.tire_popup_trigger_seq += 1;
-                    s.tire_popup_stint_num = s_num;
                 }
             }
         }
@@ -888,15 +882,24 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
         }
     };
 
+    let read_temp = |cl: &'static str, l: &'static str| -> f32 {
+        let v_cl = get_sample_f32(live, cl);
+        if v_cl > 1.0 {
+            v_cl
+        } else {
+            get_sample_f32(live, l)
+        }
+    };
+
     let prev_lf = previous_hot.map(|p| p.lf.pressure).unwrap_or(0.0);
     let prev_rf = previous_hot.map(|p| p.rf.pressure).unwrap_or(0.0);
     let prev_lr = previous_hot.map(|p| p.lr.pressure).unwrap_or(0.0);
     let prev_rr = previous_hot.map(|p| p.rr.pressure).unwrap_or(0.0);
 
     let lf = TireCornerData {
-        temp_l: get_sample_f32(live, "LFtempCL"),
-        temp_m: get_sample_f32(live, "LFtempCM"),
-        temp_r: get_sample_f32(live, "LFtempCR"),
+        temp_l: read_temp("LFtempCL", "LFtempL"),
+        temp_m: read_temp("LFtempCM", "LFtempM"),
+        temp_r: read_temp("LFtempCR", "LFtempR"),
         wear_l: to_wear(get_sample_f32(live, "LFwearL")),
         wear_m: to_wear(get_sample_f32(live, "LFwearM")),
         wear_r: to_wear(get_sample_f32(live, "LFwearR")),
@@ -904,9 +907,9 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
     };
 
     let rf = TireCornerData {
-        temp_l: get_sample_f32(live, "RFtempCL"),
-        temp_m: get_sample_f32(live, "RFtempCM"),
-        temp_r: get_sample_f32(live, "RFtempCR"),
+        temp_l: read_temp("RFtempCL", "RFtempL"),
+        temp_m: read_temp("RFtempCM", "RFtempM"),
+        temp_r: read_temp("RFtempCR", "RFtempR"),
         wear_l: to_wear(get_sample_f32(live, "RFwearL")),
         wear_m: to_wear(get_sample_f32(live, "RFwearM")),
         wear_r: to_wear(get_sample_f32(live, "RFwearR")),
@@ -914,9 +917,9 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
     };
 
     let lr = TireCornerData {
-        temp_l: get_sample_f32(live, "LRtempCL"),
-        temp_m: get_sample_f32(live, "LRtempCM"),
-        temp_r: get_sample_f32(live, "LRtempCR"),
+        temp_l: read_temp("LRtempCL", "LRtempL"),
+        temp_m: read_temp("LRtempCM", "LRtempM"),
+        temp_r: read_temp("LRtempCR", "LRtempR"),
         wear_l: to_wear(get_sample_f32(live, "LRwearL")),
         wear_m: to_wear(get_sample_f32(live, "LRwearM")),
         wear_r: to_wear(get_sample_f32(live, "LRwearR")),
@@ -924,9 +927,9 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
     };
 
     let rr = TireCornerData {
-        temp_l: get_sample_f32(live, "RRtempCL"),
-        temp_m: get_sample_f32(live, "RRtempCM"),
-        temp_r: get_sample_f32(live, "RRtempCR"),
+        temp_l: read_temp("RRtempCL", "RRtempL"),
+        temp_m: read_temp("RRtempCM", "RRtempM"),
+        temp_r: read_temp("RRtempCR", "RRtempR"),
         wear_l: to_wear(get_sample_f32(live, "RRwearL")),
         wear_m: to_wear(get_sample_f32(live, "RRwearM")),
         wear_r: to_wear(get_sample_f32(live, "RRwearR")),

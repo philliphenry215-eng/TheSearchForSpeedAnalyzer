@@ -546,7 +546,7 @@ impl WarRoomApp {
                             let last_laps = match live.get("CarIdxLastLapTime") { Ok(Value::FloatVec(v)) => v, _ => vec![0.0; 64] };
                             let fast_laps = match live.get("CarIdxFastestLapTime") { Ok(Value::FloatVec(v)) => v, _ => vec![0.0; 64] };
                             let positions = match live.get("CarIdxPosition") { Ok(Value::IntVec(v)) => v, _ => vec![0; 64] };
-                            let surfaces = match live.get("CarIdxTrackSurface") { Ok(Value::IntVec(v)) => v, _ => vec![0; 64] };
+                            let surfaces = match live.get("CarIdxTrackSurface") { Ok(Value::IntVec(v)) => v, _ => vec![-1; 64] }; // -1 = irsdk_NotInWorld
                             let lap_dist_pcts = match live.get("CarIdxLapDistPct") { Ok(Value::FloatVec(v)) => v, _ => vec![0.0; 64] };
 
                             let player_live_pressures = [
@@ -2926,6 +2926,130 @@ DriverInfo:
 
         let stint = &state.drivers.get(&0).unwrap().stints[0];
         assert_eq!(stint.numbered_valid_laps(), vec![(12, 33.0), (13, 33.0), (14, 33.1)]);
+    }
+
+    #[test]
+    fn test_first_stint_from_minus_one_lap_completed_and_off_track_excursion() {
+        // Reproduces the exact initial-load bug: when entering the car for the very first time in a session,
+        // iRacing reports `CarIdxLapCompleted == -1` on the out-lap and increments it to `0` at the first S/F crossing.
+        // Previously `is_new_lap_count` required `current_lap_sdk > 0`, so the `-1 -> 0` S/F crossing was ignored,
+        // `out_lap_completed` stayed false, and Flying Lap 1 (or Lap 2 if the time arrived ahead of the count) was dropped!
+        let mut state = WarRoomState::default();
+        state.session_type = "PRACTICE".to_string();
+        state.player_car_idx = 0;
+
+        feed_single_car_frame(&mut state, 10.0, true, -1, 0.0);  // Spawn in pit stall (`CarIdxLapCompleted == -1`)
+        feed_single_car_frame(&mut state, 15.0, false, -1, 0.0); // Exit pit road onto out-lap (`CarIdxLapCompleted == -1`)
+        feed_single_car_frame(&mut state, 50.0, false, 0, 0.0);  // Cross S/F to finish out-lap (`-1 -> 0`, untimed)
+
+        let stint = &state.drivers.get(&0).unwrap().stints[0];
+        assert!(stint.out_lap_completed, "First S/F crossing (-1 -> 0) must mark out-lap completed");
+        assert_eq!(stint.laps_completed, 0);
+
+        // Simulate a brief off-track excursion (`irsdk_OffTrack == 0`) during Flying Lap 1 — must NOT close the stint
+        let pit_road = vec![false];
+        let laps_comp = vec![0];
+        let last_laps = vec![0.0];
+        let fast_laps = vec![0.0];
+        let positions = vec![1];
+        let surfaces_off_track = vec![TRK_LOC_OFF_TRACK]; // 0 = OffTrack
+        let lap_dist_pcts = vec![0.50];
+        let off_track_frame = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 65.0,
+            current_fuel_sample: 50.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces_off_track,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&off_track_frame, None, false);
+        assert!(state.drivers.get(&0).unwrap().stints[0].is_active, "OffTrack (0) must not close active stint");
+
+        // Flying Lap 1: test the case where `CarIdxLastLapTime` updates 1 frame BEFORE `CarIdxLapCompleted` increments (0 -> 1)
+        feed_single_car_frame(&mut state, 82.5, false, 0, 32.500);
+        feed_single_car_frame(&mut state, 82.6, false, 1, 32.500);
+
+        // Flying Lap 2: normal order (`CarIdxLapCompleted` 1 -> 2, then time updates)
+        feed_single_car_frame(&mut state, 114.9, false, 2, 32.500);
+        feed_single_car_frame(&mut state, 115.0, false, 2, 32.400);
+
+        let stint = &state.drivers.get(&0).unwrap().stints[0];
+        assert_eq!(stint.laps_completed, 2, "Both Flying Lap 1 and Flying Lap 2 must be recorded on the very first stint");
+        assert_eq!(stint.numbered_valid_laps(), vec![(1, 32.500), (2, 32.400)]);
+    }
+
+    #[test]
+    fn test_post_pit_tire_popup_fires_on_pit_exit_not_on_exit_car() {
+        let mut state = WarRoomState::default();
+        state.session_type = "PRACTICE".to_string();
+        state.player_car_idx = 0;
+
+        // Complete a 2-lap stint
+        feed_single_car_frame(&mut state, 10.0, true, 0, 0.0);
+        feed_single_car_frame(&mut state, 15.0, false, 0, 0.0);
+        feed_single_car_frame(&mut state, 50.0, false, 1, 0.0);
+        feed_single_car_frame(&mut state, 82.0, false, 2, 32.0);
+        feed_single_car_frame(&mut state, 114.0, false, 3, 31.8);
+        assert_eq!(state.tire_popup_trigger_seq, 0);
+
+        // Enter pit road after completing 2 laps -> arms popup for Stint S1, but does NOT fire yet
+        feed_single_car_frame(&mut state, 130.0, true, 3, 31.8);
+        assert_eq!(state.tire_popup_armed_stint, 1);
+        assert_eq!(state.tire_popup_trigger_seq, 0, "Popup must not fire while entering or sitting in pits");
+
+        // Populate tire wear/temps on closed Stint S1 (as read from pit stall or CarSetup)
+        let mut pit_tires = StintTireSet::default();
+        pit_tires.lf.wear_m = 92.0;
+        pit_tires.rf.wear_m = 84.0;
+        pit_tires.lf.temp_m = 90.0;
+        pit_tires.rf.temp_m = 102.0;
+        pit_tires.has_data = true;
+        state.drivers.get_mut(&0).unwrap().stints[0].tires = pit_tires.clone();
+        state.latest_tire_data = pit_tires;
+
+        // Leave pit road to start Stint S2 -> popup MUST fire now for Stint S1!
+        feed_single_car_frame(&mut state, 155.0, false, 3, 31.8);
+        assert_eq!(state.tire_popup_trigger_seq, 1, "Popup must fire when leaving pit road");
+        assert_eq!(state.tire_popup_stint_num, 1, "Popup must reference completed Stint S1");
+        assert_eq!(state.tire_popup_armed_stint, 0);
+
+        // Now complete a lap in S2 and exit the car to the garage (`NotInWorld = -1`) -> must NOT fire popup
+        feed_single_car_frame(&mut state, 190.0, false, 4, 31.8); // S2 out-lap S/F
+        feed_single_car_frame(&mut state, 222.0, false, 5, 31.5); // S2 Lap 1
+        let pit_road = vec![true];
+        let laps_comp = vec![5];
+        let last_laps = vec![31.5];
+        let fast_laps = vec![31.5];
+        let positions = vec![1];
+        let surfaces_garage = vec![TRK_LOC_NOT_IN_WORLD]; // -1 = exited car to garage
+        let lap_dist_pcts = vec![0.10];
+        let exit_car_frame = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 235.0,
+            current_fuel_sample: 40.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: false,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces_garage,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&exit_car_frame, None, false);
+        assert_eq!(state.tire_popup_trigger_seq, 1, "Exiting the car must NOT trigger the pit-exit tire popup");
+        assert_eq!(state.tire_popup_armed_stint, 0);
     }
 
     #[test]

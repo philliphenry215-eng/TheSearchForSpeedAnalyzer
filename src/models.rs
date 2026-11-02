@@ -121,6 +121,10 @@ impl Default for StintData {
 
 pub const MAX_VALID_LAP_TIME_SECS: f32 = 1800.0; // 30 minutes: accommodates Nürburgring Nordschleife, Le Mans, wet conditions & incident limps
 
+/// How long after an ignored S/F crossing (out-lap / pace lap / caution lap) a late `CarIdxLastLapTime` update is still
+/// attributed to that ignored lap. iRacing posts lap times within a few frames, and no real lap is this short.
+pub const LATE_LAP_TIME_WINDOW_S: f64 = 5.0;
+
 impl StintData {
     pub fn short_label(&self) -> String {
         if self.is_imported {
@@ -357,6 +361,15 @@ pub const STATE_PARADE_LAPS: i32   = 3;
 pub const STATE_RACING: i32        = 4;
 pub const STATE_CHECKERED: i32     = 5;
 
+// iRacing `irsdk_TrkLoc` values reported by `CarIdxTrackSurface` / `PlayerTrackSurface`
+pub const TRK_LOC_NOT_IN_WORLD: i32    = -1;
+pub const TRK_LOC_OFF_TRACK: i32       = 0;
+pub const TRK_LOC_IN_PIT_STALL: i32    = 1;
+#[allow(dead_code)]
+pub const TRK_LOC_APPROACHING_PITS: i32 = 2;
+#[allow(dead_code)]
+pub const TRK_LOC_ON_TRACK: i32        = 3;
+
 #[derive(Clone, Debug, Default)]
 pub struct DriverState {
     pub car_idx: usize,
@@ -508,6 +521,9 @@ pub struct WarRoomState {
     pub latest_tire_data: StintTireSet,
     pub tire_popup_trigger_seq: u64,
     pub tire_popup_stint_num: i32,
+    /// Stint number whose tires should be shown when the player next leaves pit road (0 = nothing pending).
+    /// Armed when the player enters pit road after a stint with completed laps; fired on pit exit.
+    pub tire_popup_armed_stint: i32,
     pub player_is_in_car: bool,
     pub player_yaw_north: f32,
     pub player_incidents: i32,
@@ -582,6 +598,7 @@ impl Default for WarRoomState {
             latest_tire_data: StintTireSet::default(),
             tire_popup_trigger_seq: 0,
             tire_popup_stint_num: 1,
+            tire_popup_armed_stint: 0,
             player_is_in_car: false,
             player_yaw_north: 0.0,
             player_incidents: 0,
@@ -777,8 +794,10 @@ impl WarRoomState {
         self.debug_lap_best_time = 0.0;
         self.debug_lap_best_lap_num = 0;
         self.latest_tire_data = StintTireSet::default();
-        self.tire_popup_trigger_seq = 0;
+        // NOTE: `tire_popup_trigger_seq` is intentionally NOT reset. The UI compares it against the last value it
+        // has seen, so resetting it to 0 silently suppressed every popup after a session change.
         self.tire_popup_stint_num = 1;
+        self.tire_popup_armed_stint = 0;
         self.player_yaw_north = 0.0;
 
         if manual {
@@ -970,12 +989,20 @@ impl WarRoomState {
         let player_surface = *frame.surfaces.get(player_idx).unwrap_or(&-1) as i32;
         self.debug_track_surface = player_surface;
         self.debug_on_pit_road = *frame.pit_road.get(player_idx).unwrap_or(&false);
-        self.player_is_in_car = frame.is_on_track && !frame.is_replay && player_surface >= 1;
+        // irsdk_TrkLoc: -1 = NotInWorld, 0 = OffTrack, 1 = InPitStall, 2 = ApproachingPits, 3 = OnTrack.
+        // OffTrack (0) is still "in the car / in the world" — treating it as not-in-world used to close the stint
+        // whenever all four wheels left the track and then drop the next lap as a fake out-lap.
+        self.player_is_in_car = frame.is_on_track && !frame.is_replay && player_surface >= TRK_LOC_OFF_TRACK;
+
+        // Post-pit tire popup bookkeeping (applied after the per-car loop)
+        let mut arm_tire_popup_stint: Option<i32> = None;
+        let mut fire_tire_popup = false;
+        let mut disarm_tire_popup = false;
 
         for (idx, &is_pit) in frame.pit_road.iter().enumerate() {
             let pos = *frame.positions.get(idx).unwrap_or(&0) as i32;
-            let surface = *frame.surfaces.get(idx).unwrap_or(&0) as i32;
-            let in_world = surface >= 1;
+            let surface = *frame.surfaces.get(idx).unwrap_or(&TRK_LOC_NOT_IN_WORLD) as i32;
+            let in_world = surface >= TRK_LOC_OFF_TRACK;
             let car_dist_pct = *frame.lap_dist_pcts.get(idx).unwrap_or(&0.0);
 
             if !self.drivers.contains_key(&idx) && !in_world && pos <= 0 && idx != player_idx {
@@ -1331,11 +1358,34 @@ impl WarRoomState {
                 state_changed = true;
             }
 
+            // Post-pit tire popup: arm on pit-road entry (stint may already have been closed by a caution),
+            // fire when the player leaves pit road, cancel if the player leaves the car / world.
+            if idx == player_idx {
+                if !was_in_pit && is_pit && in_world {
+                    if let Some(last) = driver.last_live_stint() {
+                        if !last.is_active && last.laps_completed > 0 {
+                            arm_tire_popup_stint = Some(last.stint_number);
+                        }
+                    }
+                }
+                if was_in_pit && !is_pit && in_world && was_in_world {
+                    fire_tire_popup = true;
+                }
+                if !in_world {
+                    disarm_tire_popup = true;
+                }
+            }
+
             // 3. NEW LAP TIME / COUNT EMITTED BY IRACING ON TRACK (Direct SDK Fire)
             // iRacing times laps to 0.1 ms, so any change larger than 0.05 ms is a new lap time. (A 0.5 ms threshold used to
             // silently drop a lap whenever two consecutive laps were within half a millisecond, e.g. 33.1875 → 33.1871.)
             let is_new_lap_time = (last_lap_time - driver.last_known_lap_time).abs() > 0.00005 && last_lap_time > 3.0;
-            let is_new_lap_count = current_lap_sdk > driver.last_processed_lap && current_lap_sdk > 0;
+            // `CarIdxLapCompleted` is -1 until a car crosses the S/F line for the first time in a session, then 0.
+            // That -1 -> 0 step is the first out-lap crossing and MUST count as an S/F crossing; requiring `> 0` here
+            // meant the first out-lap was never marked complete, so the first flying lap of the first run after the
+            // app started was mistaken for the out-lap and discarded.
+            let is_new_lap_count = current_lap_sdk > driver.last_processed_lap && current_lap_sdk >= 0;
+            let prev_sf_crossing_time = driver.last_sf_crossing_time;
 
             if (is_new_lap_count || is_new_lap_time) && in_world {
                 driver.last_sf_crossing_time = frame.cur_session_time;
@@ -1372,8 +1422,14 @@ impl WarRoomState {
                     driver.total_laps_completed = current_lap_sdk.max(0);
                     state_changed = true;
                 }
-            } else if current_lap_sdk > 0 && current_lap_sdk == driver.ignored_lap_sdk && (is_new_lap_time || is_new_lap_count) {
-                // 3B. Delayed last_lap_time update for a caution/pace/out-lap that was already ignored at S/F
+            } else if current_lap_sdk >= 0
+                && current_lap_sdk == driver.ignored_lap_sdk
+                && (is_new_lap_count
+                    || (is_new_lap_time && (frame.cur_session_time - prev_sf_crossing_time) <= LATE_LAP_TIME_WINDOW_S))
+            {
+                // 3B. Delayed last_lap_time update for a caution/pace/out-lap that was already ignored at S/F.
+                // Only absorbs a time that shows up shortly after that crossing; a time arriving a full lap later is
+                // the next (flying) lap posted ahead of its lap count and must be recorded, not swallowed.
                 driver.last_known_lap_time = last_lap_time;
                 driver.last_processed_lap = current_lap_sdk;
                 driver.total_laps_completed = current_lap_sdk.max(0);
@@ -1617,41 +1673,64 @@ impl WarRoomState {
         }
 
         // Continuous Pit Stall / Garage Tire Capture for Player (only after completed laps)
-        // Latch tire wear & temperatures when the car is stationary in the pit stall or in the garage
-        let is_in_stall_or_garage = frame.surfaces.get(player_idx).map_or(false, |&s| s == 2)
+        // Latch tire wear & temperatures when the car is stationary in the pit stall or in the garage.
+        // This only *records* the data on the closed stint; the popup itself is fired on pit exit (see below).
+        let is_in_stall_or_garage = frame.surfaces.get(player_idx).map_or(false, |&s| s == TRK_LOC_IN_PIT_STALL)
             || (self.debug_on_pit_road && self.debug_speed < 2.0)
             || !self.debug_is_on_track
-            || !self.player_is_in_car;
+            || !self.player_is_in_car
+            || fire_tire_popup;
 
         if is_in_stall_or_garage {
             if let Some(live) = live_sample {
                 let player_drv_opt = self.drivers.get(&player_idx);
-                let has_completed_laps = player_drv_opt.and_then(|d| d.last_live_stint()).map_or(false, |st| st.laps_completed > 0);
+                let closed_stint_opt = player_drv_opt.and_then(|d| {
+                    d.stints.iter().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0)
+                });
 
-                if has_completed_laps {
-                    let prev_hot = player_drv_opt.and_then(|d| d.last_live_stint()).map(|st| &st.tires);
+                if let Some(closed_stint) = closed_stint_opt {
+                    let prev_hot = Some(&closed_stint.tires);
                     let pit_tires = read_player_tires(live, prev_hot);
                     if pit_tires.is_valid() {
-                        self.latest_tire_data = pit_tires.clone();
-                        let mut triggered_stint_num = None;
                         if let Some(player_drv) = self.drivers.get_mut(&player_idx) {
-                            if let Some(last_stint) = player_drv.last_live_stint_mut() {
-                                if !last_stint.is_active {
-                                    if last_stint.tires.should_trigger_popup(&pit_tires) {
-                                        triggered_stint_num = Some(last_stint.stint_number);
-                                    }
-                                    last_stint.tires = pit_tires;
+                            if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
+                                // Never replace real wear/temps (e.g. from the garage CarSetup YAML) with a pressure-only sample
+                                let keeps_detail = pit_tires.has_wear_or_temps() || !target_stint.tires.has_wear_or_temps();
+                                if keeps_detail {
+                                    target_stint.tires = pit_tires.clone();
                                     state_changed = true;
                                 }
                             }
                         }
-                        if let Some(s_num) = triggered_stint_num {
-                            self.tire_popup_trigger_seq += 1;
-                            self.tire_popup_stint_num = s_num;
+                        if pit_tires.has_wear_or_temps() || !self.latest_tire_data.has_wear_or_temps() {
+                            self.latest_tire_data = pit_tires;
                         }
                     }
                 }
             }
+        }
+
+        // Post-pit tire popup: show the tires of the stint that just ended as the player drives off pit road.
+        if disarm_tire_popup {
+            self.tire_popup_armed_stint = 0;
+        }
+        if let Some(stint_num) = arm_tire_popup_stint {
+            self.tire_popup_armed_stint = stint_num;
+        }
+        if fire_tire_popup && self.tire_popup_armed_stint > 0 {
+            let stint_num = self.tire_popup_armed_stint;
+            self.tire_popup_armed_stint = 0;
+            let has_real_tire_data = self.drivers.get(&player_idx).map_or(false, |d| {
+                d.stints.iter().any(|st| !st.is_imported && st.stint_number == stint_num && st.tires.has_wear_or_temps())
+            }) || self.latest_tire_data.has_wear_or_temps();
+            if has_real_tire_data {
+                self.tire_popup_trigger_seq += 1;
+                self.tire_popup_stint_num = stint_num;
+                self.debug_event_logs.push(format!("[TIRE POPUP] Pit exit — showing tires from Stint S{}.", stint_num));
+            } else {
+                self.debug_event_logs.push(format!("[TIRE POPUP] Pit exit — no tire wear/temperature data was reported for Stint S{}; popup skipped.", stint_num));
+            }
+            state_changed = true;
         }
 
         for log in pending_logs {

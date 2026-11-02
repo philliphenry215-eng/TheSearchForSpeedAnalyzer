@@ -92,11 +92,11 @@ impl WarRoomApp {
 
                             ui.label(egui::RichText::new("TrackSurface").color(muted));
                             let surf_desc = match s.debug_track_surface {
-                                0 => "0 NotInWorld",
-                                1 => "1 OffTrack",
-                                2 => "2 InPitStall",
-                                3 => "3 Aprox",
-                                4 => "4 OnTrack",
+                                -1 => "-1 NotInWorld",
+                                0 => "0 OffTrack",
+                                1 => "1 InPitStall",
+                                2 => "2 ApproachingPits",
+                                3 => "3 OnTrack",
                                 _ => "Unknown",
                             };
                             ui.label(egui::RichText::new(surf_desc).color(white));
@@ -431,6 +431,10 @@ impl WarRoomApp {
         if !is_open || close_modal {
             self.settings.save();
             self.show_settings_modal = false;
+            // Previews only make sense while the user is positioning/sizing HUDs inside Settings.
+            // Leaving them on after closing left the HUD / tire popup stuck on screen until Settings was reopened.
+            self.preview_overlay_hud = false;
+            self.preview_tire_popup_hud = false;
         }
     }
 

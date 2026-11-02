@@ -5,6 +5,21 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.4.2] — 2026-11-01
+
+### Fixed
+* **First Stint / Initial Lap Detection:**
+  * Recognized the `-1 -> 0` `CarIdxLapCompleted` transition at the first start/finish crossing of a session so the out-lap is marked complete and Flying Lap 1 & Lap 2 are never dropped on initial load.
+  * Bounded delayed out-lap time absorption to `5.0s` after the S/F crossing so Flying Lap 1 is never swallowed when `CarIdxLastLapTime` updates a frame ahead of `CarIdxLapCompleted`.
+  * Corrected `CarIdxTrackSurface` (`irsdk_TrkLoc`) handling so `OffTrack (0)` is treated as in-world and never closes an active stint.
+* **Post-Pit Tire Popup Timing:**
+  * Decoupled the post-pit tire popup trigger from garage `CarSetup` YAML updates (which only fire when exiting the car) and instead armed the popup on pit-road entry and fired it on pit-road exit.
+  * Added live telemetry fallback from `*tempCL/CM/CR` to `*tempL/M/R` in `read_player_tires` and preserved `tire_popup_trigger_seq` across session resets.
+* **HUD & Tire Popup Previews:**
+  * Automatically reset `preview_overlay_hud` and `preview_tire_popup_hud` when closing the Settings modal so previews never remain stuck on screen.
+
+---
+
 ## [0.3.9] — 2026-10-26
 
 ### Improved & Fixed
