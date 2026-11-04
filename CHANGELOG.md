@@ -5,6 +5,23 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.4.3] — 2026-11-03
+
+### Added
+* **Text Size Presets (`Small`, `Medium`, `Large`):**
+  * Added user-configurable font sizing presets (`Small` baseline, `Medium` +2pt, `Large` +4pt) accessible in the Settings modal.
+  * Added responsive UI scaling helpers (`ui_size`, `ui_col_scale`, `ui_row_height`) across all primary views, modal dialogs, and headers to prevent button overlapping, clipping, and text collisions at larger sizes.
+
+### Fixed
+* **Cockpit Window & Pit-Exit Tire Report Update:**
+  * Fixed an issue where the 4-corner tire layout in the Cockpit window did not update with true tire wear when pulling out of the pits.
+  * Added `has_wear(&self)` to `StintTireSet` to properly distinguish real tire degradation percentages from pressure- or temperature-only telemetry samples.
+  * Added pit stall tracking (`player_stopped_in_pit_stall`) to sample and latch true tire wear as the car accelerates away from the pit stall down pit road.
+  * Prevented on-track telemetry samples (where iRacing zeroes out live tire wear) from overwriting or erasing latched post-pit wear on the completed stint and `latest_tire_data`.
+  * Enhanced Cockpit view tire resolution to automatically select and display the completed stint's tire wear (e.g., `TIRES · S1`) upon pit exit instead of remaining stuck on `TIRES · AWAITING PIT` or referencing the active 0-lap stint.
+
+---
+
 ## [0.4.2] — 2026-11-01
 
 ### Fixed

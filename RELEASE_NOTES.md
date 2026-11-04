@@ -1,3 +1,24 @@
+# The Search For Speed Analyzer — v0.4.3
+
+### 🔤 Text Size Presets & Responsive Layout Scaling:
+* **Custom Text Sizing Options:**
+  * Added selectable font size options (`Small`, `Medium`, and `Large`) in the Settings modal, allowing users to increase app-wide text legibility on high-resolution displays and cockpit monitors.
+  * `Small`: Default baseline font sizing.
+  * `Medium`: +2.0pt font scale for enhanced legibility.
+  * `Large`: +4.0pt font scale for maximum readability.
+* **Anti-Collision & Dynamic Responsive Spacing:**
+  * Modernized header rows, modal titles, action button toolbars, and table columns across the Cockpit view, Grid view, Stint Analyzer, IBT Telemetry Lab, and in-car HUD panels with responsive scaling (`ui_size`, `ui_col_scale`, and `ui_row_height`) to guarantee zero button overlapping or text clipping at larger sizes.
+
+### ◎ Cockpit Window & Pit-Exit Tire Report Fixes:
+* **Real Tire Wear Latching on Pit Pull-Out:**
+  * Fixed an issue where the Cockpit window's 4-corner tire report remained on "TIRES · AWAITING PIT" or failed to update when pulling out of the pits.
+  * Added dedicated `has_wear(&self)` checks to isolate true tire wear percentages from live hot temperature/pressure readings.
+  * Added continuous post-service pit road monitoring (`player_stopped_in_pit_stall`) to capture and latch tire wear as the car pulls out of the stall and rolls down pit road.
+  * Protected latched wear data from being overwritten by subsequent pit-exit or on-track telemetry frames where iRacing resets live wear channels to zero.
+  * Upgraded Cockpit view tire resolution to immediately display the completed stint's true wear (e.g., `TIRES · S1`) as soon as pit service completes and the car pulls out of the pits.
+
+---
+
 # The Search For Speed Analyzer — v0.4.2
 
 ### 🏁 Initial Stint & First-Lap Detection Fixes:

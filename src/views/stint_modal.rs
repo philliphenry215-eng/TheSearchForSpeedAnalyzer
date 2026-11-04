@@ -1,6 +1,6 @@
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
-use crate::{display_font, with_alpha, WarRoomApp};
+use crate::{display_font, ui_size, with_alpha, WarRoomApp};
 use crate::formatters::*;
 use crate::models::*;
 use crate::views::*;
@@ -96,19 +96,19 @@ pub(crate) fn render_tire_corner_card(
             ui.spacing_mut().button_padding = egui::vec2(2.0, 2.0);
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(corner_title).color(white).size(12.5).strong());
+                ui.label(egui::RichText::new(corner_title).color(white).size(ui_size(12.5)).strong());
                 if avg_wear > 0.0 {
-                    ui.label(egui::RichText::new(format!("{:.0}%", avg_wear)).color(wear_color).size(12.0).strong());
+                    ui.label(egui::RichText::new(format!("{:.0}%", avg_wear)).color(wear_color).size(ui_size(12.0)).strong());
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(press_str).color(muted).size(11.5));
+                    ui.label(egui::RichText::new(press_str).color(muted).size(ui_size(11.5)));
                 });
             });
             ui.add_space(5.0);
 
-            ui.label(egui::RichText::new(format!("TEMPS ({})", zone_label)).color(muted).size(9.5).extra_letter_spacing(0.4));
+            ui.label(egui::RichText::new(format!("TEMPS ({})", zone_label)).color(muted).size(ui_size(9.5)).extra_letter_spacing(0.4));
             let temp_resp = ui.add(
-                egui::Button::new(egui::RichText::new(&temp_str).color(white).size(12.0).strong())
+                egui::Button::new(egui::RichText::new(&temp_str).color(white).size(ui_size(12.0)).strong())
                     .fill(egui::Color32::TRANSPARENT)
                     .frame(false)
                     .wrap(false)
@@ -121,9 +121,9 @@ pub(crate) fn render_tire_corner_card(
 
             ui.add_space(3.0);
 
-            ui.label(egui::RichText::new(format!("WEAR ({})", zone_label)).color(muted).size(9.5).extra_letter_spacing(0.4));
+            ui.label(egui::RichText::new(format!("WEAR ({})", zone_label)).color(muted).size(ui_size(9.5)).extra_letter_spacing(0.4));
             let wear_resp = ui.add(
-                egui::Button::new(egui::RichText::new(&wear_str).color(wear_color).size(12.0).strong())
+                egui::Button::new(egui::RichText::new(&wear_str).color(wear_color).size(ui_size(12.0)).strong())
                     .fill(egui::Color32::TRANSPARENT)
                     .frame(false)
                     .wrap(false)
@@ -167,17 +167,18 @@ pub(crate) fn render_stint_lap_chart(
     let y_max = max_t + margin;
     let y_range = (y_max - y_min).max(0.001);
 
-    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let scaled_h = height + settings.font_size_offset * 5.0;
+    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::hover());
     let rect = response.rect;
 
     // Background & Soft Rounding
     painter.rect_filled(rect, 10.0, chart_bg);
     painter.rect_stroke(rect, 10.0, egui::Stroke::new(1.0, chart_border));
 
-    let left_pad = 58.0;
+    let left_pad = 58.0 * settings.ui_col_scale();
     let right_pad = 20.0;
-    let top_pad = 20.0;
-    let bottom_pad = 26.0;
+    let top_pad = 20.0 + settings.font_size_offset * 1.0;
+    let bottom_pad = 26.0 + settings.font_size_offset * 1.5;
 
     let chart_rect = egui::Rect::from_min_max(
         egui::pos2(rect.min.x + left_pad, rect.min.y + top_pad),
@@ -200,7 +201,7 @@ pub(crate) fn render_stint_lap_chart(
             egui::pos2(rect.min.x + 10.0, y_pos),
             egui::Align2::LEFT_CENTER,
             format_time(y_val),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(ui_size(11.0)),
             muted,
         );
     }
@@ -216,10 +217,10 @@ pub(crate) fn render_stint_lap_chart(
         points.push(egui::pos2(x, y));
 
         painter.text(
-            egui::pos2(x, chart_rect.max.y + 12.0),
+            egui::pos2(x, chart_rect.max.y + 12.0 + settings.font_size_offset * 0.6),
             egui::Align2::CENTER_CENTER,
             format!("L{}", i + 1),
-            egui::FontId::proportional(10.0),
+            egui::FontId::proportional(ui_size(10.0)),
             muted,
         );
     }
@@ -263,7 +264,7 @@ pub(crate) fn render_stint_lap_chart(
         };
 
         let tooltip_pos = egui::pos2(pt.x, pt.y - 18.0);
-        let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(12.0), white);
+        let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(ui_size(12.0)), white);
         let bg_rect = egui::Rect::from_center_size(tooltip_pos, galley.size() + egui::vec2(14.0, 8.0));
         painter.rect_filled(bg_rect, 6.0, tooltip_bg);
         painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, tooltip_stroke));
@@ -313,17 +314,18 @@ pub(crate) fn render_multi_stint_lap_chart(
     let y_max = global_max + margin;
     let y_range = (y_max - y_min).max(0.001);
 
-    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let scaled_h = height + settings.font_size_offset * 5.0;
+    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::hover());
     let rect = response.rect;
 
     // Background & Soft Rounding
     painter.rect_filled(rect, 10.0, chart_bg);
     painter.rect_stroke(rect, 10.0, egui::Stroke::new(1.0, chart_border));
 
-    let left_pad = 58.0;
+    let left_pad = 58.0 * settings.ui_col_scale();
     let right_pad = 20.0;
-    let top_pad = 28.0; // Space for legend
-    let bottom_pad = 26.0;
+    let top_pad = 28.0 + settings.font_size_offset * 1.5; // Space for legend
+    let bottom_pad = 26.0 + settings.font_size_offset * 1.5;
 
     let chart_rect = egui::Rect::from_min_max(
         egui::pos2(rect.min.x + left_pad, rect.min.y + top_pad),
@@ -346,18 +348,18 @@ pub(crate) fn render_multi_stint_lap_chart(
             egui::pos2(rect.min.x + 10.0, y_pos),
             egui::Align2::LEFT_CENTER,
             format_time(y_val),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(ui_size(11.0)),
             muted,
         );
     }
 
     // Legend inside chart at top
     let mut legend_x = chart_rect.min.x;
-    let legend_y = rect.min.y + 12.0;
+    let legend_y = rect.min.y + 12.0 + settings.font_size_offset * 0.5;
     for (_, label, col) in stints {
         painter.circle_filled(egui::pos2(legend_x + 5.0, legend_y), 4.5, *col);
         let text_pos = egui::pos2(legend_x + 14.0, legend_y);
-        let galley = painter.layout_no_wrap(label.clone(), egui::FontId::proportional(11.0), white);
+        let galley = painter.layout_no_wrap(label.clone(), egui::FontId::proportional(ui_size(11.0)), white);
         let text_w = galley.size().x;
         painter.galley(egui::pos2(text_pos.x, text_pos.y - galley.size().y * 0.5), galley, white);
         legend_x += text_w + 24.0;
@@ -373,10 +375,10 @@ pub(crate) fn render_multi_stint_lap_chart(
         if lap_num == 1 || lap_num == max_laps || lap_num % label_interval == 0 {
             let x = if max_laps > 1 { chart_rect.min.x + lap_idx as f32 * x_step } else { chart_rect.center().x };
             painter.text(
-                egui::pos2(x, chart_rect.max.y + 12.0),
+                egui::pos2(x, chart_rect.max.y + 12.0 + settings.font_size_offset * 0.6),
                 egui::Align2::CENTER_CENTER,
                 format!("L{}", lap_num),
-                egui::FontId::proportional(10.0),
+                egui::FontId::proportional(ui_size(10.0)),
                 muted,
             );
         }
@@ -464,7 +466,7 @@ pub(crate) fn render_multi_stint_lap_chart(
 
             let tooltip_text = tooltip_lines.join("\n");
             let tooltip_anchor = egui::pos2(nearest_x, chart_rect.min.y + 20.0);
-            let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(11.5), white);
+            let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(ui_size(11.5)), white);
 
             let mut tooltip_pos = tooltip_anchor;
             if tooltip_pos.x + galley.size().x + 20.0 > rect.max.x {
@@ -561,12 +563,12 @@ impl WarRoomApp {
         if self.stint_compare_slots.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(30.0);
-                ui.label(egui::RichText::new("No stints recorded yet in this session.").color(muted).size(15.0));
+                ui.label(egui::RichText::new("No stints recorded yet in this session.").color(muted).size(ui_size(15.0)));
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("Complete laps on track (or re-import a saved stint from your database) to compare stints side by side.").color(muted).size(12.5));
+                ui.label(egui::RichText::new("Complete laps on track (or re-import a saved stint from your database) to compare stints side by side.").color(muted).size(ui_size(12.5)));
                 ui.add_space(12.0);
                 if ui.add(
-                    egui::Button::new(egui::RichText::new("📂 Open Saved Stints / Re-Import").color(egui::Color32::BLACK).size(12.5).strong())
+                    egui::Button::new(egui::RichText::new("📂 Open Saved Stints / Re-Import").color(egui::Color32::BLACK).size(ui_size(12.5)).strong())
                         .fill(primary)
                         .rounding(egui::Rounding::same(6.0))
                 ).clicked() {
@@ -671,62 +673,77 @@ impl WarRoomApp {
         let mut new_driver_for_slot: Option<(usize, usize)> = None;
         let mut new_stint_for_slot: Option<(usize, i32)> = None;
         let mut updated_notes: Option<(usize, i32, String)> = None;
+        let col_scale = self.settings.ui_col_scale();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            // Action & Export Bar
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("COMPARE UP TO 3 STINTS SIDE-BY-SIDE").color(muted).size(11.0).extra_letter_spacing(0.8));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(
-                        egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(11.5).strong())
-                            .fill(primary)
-                    ).on_hover_text("Generate a Stint Comparison graphic card and copy to clipboard for pasting (Ctrl+V) into Discord").clicked() {
-                        let card_entries: Vec<discord_card::DiscordStintEntry> = resolved.iter().map(|e| {
-                            discord_card::DiscordStintEntry {
-                                slot_label: Some(e.slot_label),
-                                driver_name: e.driver_name,
-                                car_num: e.car_num,
-                                setup_name: e.setup_name,
-                                is_player: e.is_player,
-                                stint: e.stint,
-                                accent_rgb: [e.color.r(), e.color.g(), e.color.b()],
-                            }
-                        }).collect();
-                        match discord_card::render_discord_stint_card(&card_entries, s, &self.settings)
-                            .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
-                        {
-                            Ok(()) => {
-                                self.toast_message = Some(("📸 Copied Stint Comparison image — press Ctrl+V in Discord!".to_string(), std::time::Instant::now()));
-                            }
-                            Err(err) => {
-                                self.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
-                            }
+            // Action & Export Bar (responsive: wraps onto second row if narrow or large font)
+            let render_compare_export_btns = |ui: &mut egui::Ui,
+                                              this: &mut WarRoomApp,
+                                              add_third_stint: &mut bool| {
+                if ui.add(
+                    egui::Button::new(egui::RichText::new("📂 Load Saved Stint").color(white).size(ui_size(11.5)))
+                        .fill(elevated)
+                ).on_hover_text("Re-import a saved stint from your database or paste a shared stint to compare").clicked() {
+                    this.show_stint_db_modal = true;
+                }
+
+                if resolved.len() < 3 {
+                    if ui.add(egui::Button::new(egui::RichText::new("➕ Add Stint").color(white).size(ui_size(11.5))).fill(elevated)).on_hover_text("Add another stint to comparison (up to 3)").clicked() {
+                        *add_third_stint = true;
+                    }
+                }
+
+                if ui.add(egui::Button::new(egui::RichText::new("Copy Comparison Table (TSV)").color(white).size(ui_size(11.5))).fill(elevated)).clicked() {
+                    let export_info: Vec<(&StintData, &str, &str, &str, &str, bool)> = resolved.iter().map(|e| {
+                        (e.stint, e.slot_label, e.driver_name, e.car_num, e.setup_name, e.is_player)
+                    }).collect();
+                    let tsv = format_stints_comparison_tsv(&export_info, &this.settings.active_avg_buckets, is_metric);
+                    ui.output_mut(|o| o.copied_text = tsv);
+                    this.toast_message = Some(("Copied Stint Comparison spreadsheet for Excel".to_string(), std::time::Instant::now()));
+                }
+
+                if ui.add(
+                    egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(ui_size(11.5)).strong())
+                        .fill(primary)
+                ).on_hover_text("Generate a Stint Comparison graphic card and copy to clipboard for pasting (Ctrl+V) into Discord").clicked() {
+                    let card_entries: Vec<discord_card::DiscordStintEntry> = resolved.iter().map(|e| {
+                        discord_card::DiscordStintEntry {
+                            slot_label: Some(e.slot_label),
+                            driver_name: e.driver_name,
+                            car_num: e.car_num,
+                            setup_name: e.setup_name,
+                            is_player: e.is_player,
+                            stint: e.stint,
+                            accent_rgb: [e.color.r(), e.color.g(), e.color.b()],
+                        }
+                    }).collect();
+                    match discord_card::render_discord_stint_card(&card_entries, s, &this.settings)
+                        .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
+                    {
+                        Ok(()) => {
+                            this.toast_message = Some(("📸 Copied Stint Comparison image — press Ctrl+V in Discord!".to_string(), std::time::Instant::now()));
+                        }
+                        Err(err) => {
+                            this.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
                         }
                     }
+                }
+            };
 
-                    if ui.add(egui::Button::new(egui::RichText::new("Copy Comparison Table (TSV)").color(white).size(11.5)).fill(elevated)).clicked() {
-                        let export_info: Vec<(&StintData, &str, &str, &str, &str, bool)> = resolved.iter().map(|e| {
-                            (e.stint, e.slot_label, e.driver_name, e.car_num, e.setup_name, e.is_player)
-                        }).collect();
-                        let tsv = format_stints_comparison_tsv(&export_info, &self.settings.active_avg_buckets, is_metric);
-                        ui.output_mut(|o| o.copied_text = tsv);
-                        self.toast_message = Some(("Copied Stint Comparison spreadsheet for Excel".to_string(), std::time::Instant::now()));
-                    }
-
-                    if resolved.len() < 3 {
-                        if ui.add(egui::Button::new(egui::RichText::new("➕ Add Stint").color(white).size(11.5)).fill(elevated)).on_hover_text("Add another stint to comparison (up to 3)").clicked() {
-                            add_third_stint = true;
-                        }
-                    }
-
-                    if ui.add(
-                        egui::Button::new(egui::RichText::new("📂 Load Saved Stint").color(white).size(11.5))
-                            .fill(elevated)
-                    ).on_hover_text("Re-import a saved stint from your database or paste a shared stint to compare").clicked() {
-                        self.show_stint_db_modal = true;
-                    }
+            if ui.available_width() >= 900.0 * col_scale {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("COMPARE UP TO 3 STINTS SIDE-BY-SIDE").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        render_compare_export_btns(ui, self, &mut add_third_stint);
+                    });
                 });
-            });
+            } else {
+                ui.label(egui::RichText::new("COMPARE UP TO 3 STINTS SIDE-BY-SIDE").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    render_compare_export_btns(ui, self, &mut add_third_stint);
+                });
+            }
 
             ui.add_space(6.0);
 
@@ -743,15 +760,15 @@ impl WarRoomApp {
                                 .inner_margin(egui::Margin::symmetric(10.0, 8.0))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("●").color(entry.color).size(13.0));
-                                        ui.label(egui::RichText::new(entry.slot_label).color(entry.color).strong().size(12.5));
+                                        ui.label(egui::RichText::new("●").color(entry.color).size(ui_size(13.0)));
+                                        ui.label(egui::RichText::new(entry.slot_label).color(entry.color).strong().size(ui_size(12.5)));
                                         if entry.stint.is_imported {
                                             egui::Frame::none()
                                                 .fill(with_alpha(secondary, 42))
                                                 .rounding(egui::Rounding::same(4.0))
                                                 .inner_margin(egui::Margin::symmetric(4.0, 1.0))
                                                 .show(ui, |ui| {
-                                                    ui.label(egui::RichText::new("Imported").color(secondary).strong().size(10.0));
+                                                    ui.label(egui::RichText::new("Imported").color(secondary).strong().size(ui_size(10.0)));
                                                 });
                                         } else if entry.is_player {
                                             egui::Frame::none()
@@ -759,12 +776,12 @@ impl WarRoomApp {
                                                 .rounding(egui::Rounding::same(4.0))
                                                 .inner_margin(egui::Margin::symmetric(4.0, 1.0))
                                                 .show(ui, |ui| {
-                                                    ui.label(egui::RichText::new("You").color(primary).strong().size(10.0));
+                                                    ui.label(egui::RichText::new("You").color(primary).strong().size(ui_size(10.0)));
                                                 });
                                         }
                                         if resolved.len() > 1 {
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                if ui.add(egui::Button::new(egui::RichText::new("×").color(muted).size(11.0)).fill(egui::Color32::TRANSPARENT)).on_hover_text("Remove this stint from comparison").clicked() {
+                                                if ui.add(egui::Button::new(egui::RichText::new("×").color(muted).size(ui_size(11.0))).fill(egui::Color32::TRANSPARENT)).on_hover_text("Remove this stint from comparison").clicked() {
                                                     remove_slot_idx = Some(c_idx);
                                                 }
                                             });
@@ -776,9 +793,9 @@ impl WarRoomApp {
                                     // Driver Picker
                                     let current_drv_name = format!("#{} {}", entry.car_num, entry.driver_name);
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("Driver:").color(muted).size(11.0));
+                                        ui.label(egui::RichText::new("Driver:").color(muted).size(ui_size(11.0)));
                                         egui::ComboBox::from_id_source(format!("cmp_drv_slot_{}", c_idx))
-                                            .selected_text(egui::RichText::new(&current_drv_name).color(white).size(11.5))
+                                            .selected_text(egui::RichText::new(&current_drv_name).color(white).size(ui_size(11.5)))
                                             .width(ui.available_width().max(80.0))
                                             .show_ui(ui, |ui| {
                                                 for (car_idx, _c_num, d_label, _is_p) in &available_drivers {
@@ -795,9 +812,9 @@ impl WarRoomApp {
                                     // Stint Picker
                                     let st_curr_label = format!("{} ({} laps · Fast: {})", entry.stint.short_label(), entry.stint.laps_completed, format_time(entry.stint.fast_lap));
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("Stint:").color(muted).size(11.0));
+                                        ui.label(egui::RichText::new("Stint:").color(muted).size(ui_size(11.0)));
                                         egui::ComboBox::from_id_source(format!("cmp_stint_slot_{}", c_idx))
-                                            .selected_text(egui::RichText::new(&st_curr_label).color(white).size(11.5))
+                                            .selected_text(egui::RichText::new(&st_curr_label).color(white).size(ui_size(11.5)))
                                             .width(ui.available_width().max(80.0))
                                             .show_ui(ui, |ui| {
                                                 if let Some(drv) = s.drivers.get(&entry.car_idx) {
@@ -821,26 +838,26 @@ impl WarRoomApp {
 
                                     ui.add_space(4.0);
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label(egui::RichText::new("Setup:").color(muted).size(10.5));
-                                        ui.label(egui::RichText::new(entry.setup_name).color(if entry.is_player { white } else { muted }).size(11.0));
+                                        ui.label(egui::RichText::new("Setup:").color(muted).size(ui_size(10.5)));
+                                        ui.label(egui::RichText::new(entry.setup_name).color(if entry.is_player { white } else { muted }).size(ui_size(11.0)));
                                     });
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label(egui::RichText::new("Track:").color(muted).size(10.5));
+                                        ui.label(egui::RichText::new("Track:").color(muted).size(ui_size(10.5)));
                                         let trk = if !entry.stint.track_temp_at_start.is_empty() && entry.stint.track_temp_at_start != "—" {
                                             &entry.stint.track_temp_at_start
                                         } else {
                                             &s.track_temp_raw
                                         };
-                                        ui.label(egui::RichText::new(convert_unit(trk, is_metric)).color(white).size(11.0));
+                                        ui.label(egui::RichText::new(convert_unit(trk, is_metric)).color(white).size(ui_size(11.0)));
 
                                         ui.add_space(8.0);
-                                        ui.label(egui::RichText::new("Air:").color(muted).size(10.5));
+                                        ui.label(egui::RichText::new("Air:").color(muted).size(ui_size(10.5)));
                                         let air = if !entry.stint.air_temp_at_start.is_empty() && entry.stint.air_temp_at_start != "—" {
                                             &entry.stint.air_temp_at_start
                                         } else {
                                             &s.air_temp_raw
                                         };
-                                        ui.label(egui::RichText::new(convert_unit(air, is_metric)).color(white).size(11.0));
+                                        ui.label(egui::RichText::new(convert_unit(air, is_metric)).color(white).size(ui_size(11.0)));
                                     });
                                 });
                         });
@@ -857,7 +874,7 @@ impl WarRoomApp {
                                         let add_btn = egui::Button::new(
                                             egui::RichText::new(format!("➕ Add Stint {} to Compare", (b'A' + c_idx as u8) as char))
                                                 .color(primary)
-                                                .size(12.5)
+                                                .size(ui_size(12.5))
                                                 .strong()
                                         )
                                         .fill(with_alpha(primary, 30))
@@ -866,7 +883,7 @@ impl WarRoomApp {
                                             add_third_stint = true;
                                         }
                                         ui.add_space(6.0);
-                                        ui.label(egui::RichText::new("Select another stint or driver to compare").color(muted).size(10.5));
+                                        ui.label(egui::RichText::new("Select another stint or driver to compare").color(muted).size(ui_size(10.5)));
                                         ui.add_space(16.0);
                                     });
                                 });
@@ -878,7 +895,7 @@ impl WarRoomApp {
             ui.add_space(10.0);
 
             // 2. Summary Metrics Side-by-Side Comparison Card
-            ui.label(egui::RichText::new("KEY METRICS & PACE COMPARISON").color(muted).size(11.0).extra_letter_spacing(0.8));
+            ui.label(egui::RichText::new("KEY METRICS & PACE COMPARISON").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
             ui.add_space(4.0);
 
             let overall_fastest_lap = resolved.iter().map(|e| e.stint.fast_lap).filter(|&t| t > 0.0).fold(f32::INFINITY, f32::min);
@@ -894,31 +911,31 @@ impl WarRoomApp {
                         for (i, entry) in resolved.iter().enumerate() {
                             cols[i].vertical(|ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("●").color(entry.color).size(13.0));
-                                    ui.label(egui::RichText::new(format!("{} (#{} {})", entry.slot_label, entry.car_num, entry.driver_name)).color(entry.color).strong().size(12.0));
+                                    ui.label(egui::RichText::new("●").color(entry.color).size(ui_size(13.0)));
+                                    ui.label(egui::RichText::new(format!("{} (#{} {})", entry.slot_label, entry.car_num, entry.driver_name)).color(entry.color).strong().size(ui_size(12.0)));
                                 });
                                 ui.add_space(6.0);
 
                                 // Laps Completed
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Stint Laps:").color(muted).size(11.5));
+                                    ui.label(egui::RichText::new("Stint Laps:").color(muted).size(ui_size(11.5)));
                                     ui.label(egui::RichText::new(format!("{}", entry.stint.laps_completed)).font(display_font(16.0)).color(white));
                                 });
 
                                 // Fastest Lap
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Fastest:").color(muted).size(11.5));
+                                    ui.label(egui::RichText::new("Fastest:").color(muted).size(ui_size(11.5)));
                                     if entry.stint.fast_lap > 0.0 {
                                         let is_best = (entry.stint.fast_lap - overall_fastest_lap).abs() < 0.0001;
                                         let delta = entry.stint.fast_lap - overall_fastest_lap;
                                         if is_best || resolved.len() == 1 {
                                             ui.label(egui::RichText::new(format_time(entry.stint.fast_lap)).font(display_font(16.0)).color(green));
                                             if resolved.len() > 1 {
-                                                ui.label(egui::RichText::new("BEST").color(green).size(10.0).strong());
+                                                ui.label(egui::RichText::new("BEST").color(green).size(ui_size(10.0)).strong());
                                             }
                                         } else {
                                             ui.label(egui::RichText::new(format_time(entry.stint.fast_lap)).font(display_font(16.0)).color(white));
-                                            ui.label(egui::RichText::new(format!("(+{:.3}s)", delta)).color(amber).size(11.0));
+                                            ui.label(egui::RichText::new(format!("(+{:.3}s)", delta)).color(amber).size(ui_size(11.0)));
                                         }
                                     } else {
                                         ui.label(egui::RichText::new("—").font(display_font(16.0)).color(muted));
@@ -927,7 +944,7 @@ impl WarRoomApp {
 
                                 // Average Lap
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Average:").color(muted).size(11.5));
+                                    ui.label(egui::RichText::new("Average:").color(muted).size(ui_size(11.5)));
                                     let avg = entry.stint.full_average();
                                     if avg > 0.0 {
                                         let is_best = (avg - overall_best_avg).abs() < 0.0001;
@@ -935,11 +952,11 @@ impl WarRoomApp {
                                         if is_best || resolved.len() == 1 {
                                             ui.label(egui::RichText::new(format_time(avg)).font(display_font(16.0)).color(green));
                                             if resolved.len() > 1 {
-                                                ui.label(egui::RichText::new("BEST").color(green).size(10.0).strong());
+                                                ui.label(egui::RichText::new("BEST").color(green).size(ui_size(10.0)).strong());
                                             }
                                         } else {
                                             ui.label(egui::RichText::new(format_time(avg)).font(display_font(16.0)).color(white));
-                                            ui.label(egui::RichText::new(format!("(+{:.3}s)", delta)).color(amber).size(11.0));
+                                            ui.label(egui::RichText::new(format!("(+{:.3}s)", delta)).color(amber).size(ui_size(11.0)));
                                         }
                                     } else {
                                         ui.label(egui::RichText::new("—").font(display_font(16.0)).color(muted));
@@ -948,14 +965,14 @@ impl WarRoomApp {
 
                                 // Consistency σ
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Consistency σ:").color(muted).size(11.5));
+                                    ui.label(egui::RichText::new("Consistency σ:").color(muted).size(ui_size(11.5)));
                                     let s_dev = entry.stint.std_dev();
                                     if s_dev > 0.0001 {
                                         let is_best = (s_dev - overall_best_std_dev).abs() < 0.0001;
                                         let col = if is_best && resolved.len() > 1 { green } else { white };
                                         ui.label(egui::RichText::new(format!("{:.3}", s_dev)).font(display_font(15.0)).color(col));
                                         if is_best && resolved.len() > 1 {
-                                            ui.label(egui::RichText::new("LOWEST").color(green).size(10.0).strong());
+                                            ui.label(egui::RichText::new("LOWEST").color(green).size(ui_size(10.0)).strong());
                                         }
                                     } else {
                                         ui.label(egui::RichText::new("—").font(display_font(15.0)).color(muted));
@@ -964,29 +981,29 @@ impl WarRoomApp {
 
                                 // Pace Fall-off
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Fall-off (1-5 vs End):").color(muted).size(11.5));
+                                    ui.label(egui::RichText::new("Fall-off (1-5 vs End):").color(muted).size(ui_size(11.5)));
                                     let drop = entry.stint.drop_off();
                                     if drop.abs() > 0.0001 {
                                         let sign = if drop >= 0.0 { "+" } else { "" };
                                         let col = if drop <= 0.20 { green } else if drop <= 0.60 { white } else { amber };
-                                        ui.label(egui::RichText::new(format!("{}{:.3}s", sign, drop)).color(col).size(12.5).strong());
+                                        ui.label(egui::RichText::new(format!("{}{:.3}s", sign, drop)).color(col).size(ui_size(12.5)).strong());
                                     } else {
-                                        ui.label(egui::RichText::new("—").color(muted).size(12.0));
+                                        ui.label(egui::RichText::new("—").color(muted).size(ui_size(12.0)));
                                     }
                                 });
 
                                 // Fuel / Lap
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Fuel / Lap:").color(muted).size(11.5));
+                                    ui.label(egui::RichText::new("Fuel / Lap:").color(muted).size(ui_size(11.5)));
                                     if entry.is_player {
                                         let f_rate = entry.stint.fuel_per_lap();
                                         if f_rate > 0.0005 {
-                                            ui.label(egui::RichText::new(format!("{:.3} {}", f_rate * fuel_conv, fuel_unit_str)).color(white).size(12.0).strong());
+                                            ui.label(egui::RichText::new(format!("{:.3} {}", f_rate * fuel_conv, fuel_unit_str)).color(white).size(ui_size(12.0)).strong());
                                         } else {
-                                            ui.label(egui::RichText::new("—").color(muted).size(12.0));
+                                            ui.label(egui::RichText::new("—").color(muted).size(ui_size(12.0)));
                                         }
                                     } else {
-                                        ui.label(egui::RichText::new("— (Rival telemetry hidden)").color(muted).size(11.0));
+                                        ui.label(egui::RichText::new("— (Rival telemetry hidden)").color(muted).size(ui_size(11.0)));
                                     }
                                 });
 
@@ -997,8 +1014,8 @@ impl WarRoomApp {
                                         for &b in &self.settings.active_avg_buckets {
                                             let avg_val = entry.stint.avg_first_n(b);
                                             let val_str = if avg_val > 0.0 { format_time(avg_val) } else { "—".to_string() };
-                                            ui.label(egui::RichText::new(format!("Avg {}:", b)).color(muted).size(11.0));
-                                            ui.label(egui::RichText::new(val_str).color(white).size(11.5).strong());
+                                            ui.label(egui::RichText::new(format!("Avg {}:", b)).color(muted).size(ui_size(11.0)));
+                                            ui.label(egui::RichText::new(val_str).color(white).size(ui_size(11.5)).strong());
                                             ui.add_space(4.0);
                                         }
                                     });
@@ -1011,7 +1028,7 @@ impl WarRoomApp {
             ui.add_space(10.0);
 
             // 3. Multi-Stint Overlay Line Chart
-            ui.label(egui::RichText::new("LAP TIME PROGRESSION OVERLAY").color(muted).size(11.0).extra_letter_spacing(0.8));
+            ui.label(egui::RichText::new("LAP TIME PROGRESSION OVERLAY").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
             ui.add_space(4.0);
             let chart_stints: Vec<(&StintData, String, egui::Color32)> = resolved.iter().map(|e| {
                 let lbl = format!("{} (#{} {})", e.slot_label, e.car_num, e.driver_name);
@@ -1026,9 +1043,9 @@ impl WarRoomApp {
             let max_laps = valid_laps_per_stint.iter().map(|v| v.len()).max().unwrap_or(0);
 
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("LAP-BY-LAP COMPARISON LOG").color(muted).size(11.0).extra_letter_spacing(0.8));
+                ui.label(egui::RichText::new("LAP-BY-LAP COMPARISON LOG").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new(egui::RichText::new("Copy Laps TSV").color(white).size(11.5)).fill(elevated)).clicked() {
+                    if ui.add(egui::Button::new(egui::RichText::new("Copy Laps TSV").color(white).size(ui_size(11.5))).fill(elevated)).clicked() {
                         let export_info: Vec<(&StintData, &str, &str, &str, &str, bool)> = resolved.iter().map(|e| {
                             (e.stint, e.slot_label, e.driver_name, e.car_num, e.setup_name, e.is_player)
                         }).collect();
@@ -1046,6 +1063,7 @@ impl WarRoomApp {
                 } else {
                     (self.settings.panel_color(), self.settings.divider_color())
                 };
+                let row_h = self.settings.ui_row_height(26.0);
 
                 egui::Frame::none()
                     .fill(table_bg)
@@ -1056,19 +1074,20 @@ impl WarRoomApp {
                         let mut table = TableBuilder::new(ui)
                             .striped(true)
                             .resizable(true)
+                            .vscroll(false)
                             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                            .column(Column::initial(70.0)); // Stint Lap
+                            .column(Column::initial(70.0 * col_scale)); // Stint Lap
 
                         for i in 0..resolved.len() {
-                            table = table.column(Column::initial(130.0)); // Stint time
+                            table = table.column(Column::initial(130.0 * col_scale)); // Stint time
                             if i > 0 {
-                                table = table.column(Column::initial(110.0)); // Delta vs Stint A
+                                table = table.column(Column::initial(110.0 * col_scale)); // Delta vs Stint A
                             }
                         }
                         if resolved.len() > 1 {
-                            table = table.column(Column::remainder().at_least(120.0)); // Fastest on lap
+                            table = table.column(Column::remainder().at_least(120.0 * col_scale)); // Fastest on lap
                         } else {
-                            table = table.column(Column::remainder().at_least(160.0)); // Single stint info
+                            table = table.column(Column::remainder().at_least(160.0 * col_scale)); // Single stint info
                         }
 
                         let stint_best_laps: Vec<f32> = valid_laps_per_stint.iter().map(|v| {
@@ -1076,23 +1095,23 @@ impl WarRoomApp {
                         }).collect();
 
                         table
-                            .header(26.0, |mut header| {
-                                header.col(|ui| { ui.label(egui::RichText::new("Stint Lap").color(muted).size(11.5)); });
+                            .header(row_h, |mut header| {
+                                header.col(|ui| { ui.label(egui::RichText::new("Stint Lap").color(muted).size(ui_size(11.5))); });
                                 for (i, entry) in resolved.iter().enumerate() {
                                     header.col(|ui| {
-                                        ui.label(egui::RichText::new(format!("{} (#{})", entry.slot_label, entry.car_num)).color(entry.color).strong().size(11.5));
+                                        ui.label(egui::RichText::new(format!("{} (#{})", entry.slot_label, entry.car_num)).color(entry.color).strong().size(ui_size(11.5)));
                                     });
                                     if i > 0 {
                                         let letter = (b'A' + i as u8) as char;
                                         header.col(|ui| {
-                                            ui.label(egui::RichText::new(format!("Delta ({} vs A)", letter)).color(muted).size(11.5));
+                                            ui.label(egui::RichText::new(format!("Delta ({} vs A)", letter)).color(muted).size(ui_size(11.5)));
                                         });
                                     }
                                 }
                                 if resolved.len() > 1 {
-                                    header.col(|ui| { ui.label(egui::RichText::new("Fastest on Lap").color(muted).size(11.5)); });
+                                    header.col(|ui| { ui.label(egui::RichText::new("Fastest on Lap").color(muted).size(ui_size(11.5))); });
                                 } else {
-                                    header.col(|ui| { ui.label(egui::RichText::new("Comparison Status").color(muted).size(11.5)); });
+                                    header.col(|ui| { ui.label(egui::RichText::new("Comparison Status").color(muted).size(ui_size(11.5))); });
                                 }
                             })
                             .body(|mut body| {
@@ -1108,10 +1127,10 @@ impl WarRoomApp {
 
                                     let min_lap_in_row = lap_times.iter().filter_map(|&t| t).fold(f32::INFINITY, f32::min);
 
-                                    body.row(26.0, |mut row| {
+                                    body.row(row_h, |mut row| {
                                         // Stint Lap
                                         row.col(|ui| {
-                                            let resp = ui.selectable_label(false, egui::RichText::new(format!("L{}", lap_idx + 1)).color(white).size(12.5));
+                                            let resp = ui.selectable_label(false, egui::RichText::new(format!("L{}", lap_idx + 1)).color(white).size(ui_size(12.5)));
                                             if resp.clicked() {
                                                 ui.output_mut(|o| o.copied_text = format!("{}", lap_idx + 1));
                                                 self.toast_message = Some((format!("Copied Lap L{}", lap_idx + 1), std::time::Instant::now()));
@@ -1125,13 +1144,13 @@ impl WarRoomApp {
                                                     let is_stint_pb = stint_best_laps.get(i).map(|&b| (t - b).abs() < 0.0001).unwrap_or(false);
                                                     let is_row_fastest = (t - min_lap_in_row).abs() < 0.0001 && resolved.len() > 1;
                                                     let col = if is_stint_pb { green } else if is_row_fastest { entry.color } else { white };
-                                                    let resp = ui.selectable_label(false, egui::RichText::new(format_time(t)).color(col).strong().size(12.5));
+                                                    let resp = ui.selectable_label(false, egui::RichText::new(format_time(t)).color(col).strong().size(ui_size(12.5)));
                                                     if resp.clicked() {
                                                         ui.output_mut(|o| o.copied_text = format!("{:.3}", t));
                                                         self.toast_message = Some((format!("Copied Lap Time {:.3}", t), std::time::Instant::now()));
                                                     }
                                                 } else {
-                                                    ui.label(egui::RichText::new("—").color(muted).size(12.0));
+                                                    ui.label(egui::RichText::new("—").color(muted).size(ui_size(12.0)));
                                                 }
                                             });
 
@@ -1141,14 +1160,14 @@ impl WarRoomApp {
                                                         (Some(ta), Some(ti)) => {
                                                             let delta = ti - ta;
                                                             if delta < -0.0001 {
-                                                                ui.label(egui::RichText::new(format!("{:.3}s", delta)).color(green).strong().size(12.0));
+                                                                ui.label(egui::RichText::new(format!("{:.3}s", delta)).color(green).strong().size(ui_size(12.0)));
                                                             } else if delta > 0.0001 {
-                                                                ui.label(egui::RichText::new(format!("+{:.3}s", delta)).color(amber).size(12.0));
+                                                                ui.label(egui::RichText::new(format!("+{:.3}s", delta)).color(amber).size(ui_size(12.0)));
                                                             } else {
-                                                                ui.label(egui::RichText::new("0.000s").color(muted).size(12.0));
+                                                                ui.label(egui::RichText::new("0.000s").color(muted).size(ui_size(12.0)));
                                                             }
                                                         }
-                                                        _ => { ui.label(egui::RichText::new("—").color(muted).size(12.0)); }
+                                                        _ => { ui.label(egui::RichText::new("—").color(muted).size(ui_size(12.0))); }
                                                     }
                                                 });
                                             }
@@ -1160,17 +1179,17 @@ impl WarRoomApp {
                                                 if min_lap_in_row < f32::INFINITY {
                                                     let fast_idx = lap_times.iter().position(|&ot| ot == Some(min_lap_in_row)).unwrap_or(0);
                                                     if let Some(fast_entry) = resolved.get(fast_idx) {
-                                                        ui.label(egui::RichText::new(format!("★ {} ({})", fast_entry.slot_label, format_time(min_lap_in_row))).color(fast_entry.color).strong().size(11.5));
+                                                        ui.label(egui::RichText::new(format!("★ {} ({})", fast_entry.slot_label, format_time(min_lap_in_row))).color(fast_entry.color).strong().size(ui_size(11.5)));
                                                     } else {
-                                                        ui.label(egui::RichText::new(format_time(min_lap_in_row)).color(white).size(11.5));
+                                                        ui.label(egui::RichText::new(format_time(min_lap_in_row)).color(white).size(ui_size(11.5)));
                                                     }
                                                 } else {
-                                                    ui.label(egui::RichText::new("—").color(muted).size(12.0));
+                                                    ui.label(egui::RichText::new("—").color(muted).size(ui_size(12.0)));
                                                 }
                                             });
                                         } else {
                                             row.col(|ui| {
-                                                ui.label(egui::RichText::new("Add Stint B above to compare deltas").color(muted).size(11.0));
+                                                ui.label(egui::RichText::new("Add Stint B above to compare deltas").color(muted).size(ui_size(11.0)));
                                             });
                                         }
                                     });
@@ -1185,28 +1204,28 @@ impl WarRoomApp {
                     .rounding(egui::Rounding::same(8.0))
                     .inner_margin(12.0)
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("No completed green flag laps recorded yet in the selected stints.").color(muted).size(12.0));
+                        ui.label(egui::RichText::new("No completed green flag laps recorded yet in the selected stints.").color(muted).size(ui_size(12.0)));
                     });
             }
 
             ui.add_space(12.0);
 
             // 5. Post-Stint 4-Corner Tire Data Comparison (2x2 Side-by-Side: Fronts on top row, Rears on bottom row)
-            ui.label(egui::RichText::new("POST-STINT TIRE WEAR & TEMPERATURES").color(muted).size(11.0).extra_letter_spacing(0.8));
+            ui.label(egui::RichText::new("POST-STINT TIRE WEAR & TEMPERATURES").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
             ui.add_space(6.0);
 
             ui.columns(resolved.len(), |tire_cols| {
                 for (i, entry) in resolved.iter().enumerate() {
                     tire_cols[i].vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("●").color(entry.color).size(13.0));
-                            ui.label(egui::RichText::new(format!("{} (#{} {})", entry.slot_label, entry.car_num, entry.driver_name)).color(entry.color).strong().size(12.0));
+                            ui.label(egui::RichText::new("●").color(entry.color).size(ui_size(13.0)));
+                            ui.label(egui::RichText::new(format!("{} (#{} {})", entry.slot_label, entry.car_num, entry.driver_name)).color(entry.color).strong().size(ui_size(12.0)));
                         });
                         ui.add_space(4.0);
 
                         if entry.is_player {
                             if entry.stint.tires.has_data && entry.stint.laps_completed > 0 {
-                                let compact_titles = ui.available_width() < 420.0;
+                                let compact_titles = ui.available_width() < 420.0 * col_scale;
                                 let (lf_lbl, rf_lbl, lr_lbl, rr_lbl) = if compact_titles {
                                     ("LF", "RF", "LR", "RR")
                                 } else {
@@ -1231,9 +1250,9 @@ impl WarRoomApp {
                                     .rounding(egui::Rounding::same(8.0))
                                     .inner_margin(12.0)
                                     .show(ui, |ui| {
-                                        ui.label(egui::RichText::new("ℹ No Pit Service Tire Data").color(muted).strong().size(12.0));
+                                        ui.label(egui::RichText::new("ℹ No Pit Service Tire Data").color(muted).strong().size(ui_size(12.0)));
                                         ui.add_space(4.0);
-                                        ui.label(egui::RichText::new("Tires were not changed on pit road during this stint. Tire wear and temperatures are recorded when a fresh set of tires is fitted.").color(muted).size(11.0));
+                                        ui.label(egui::RichText::new("Tires were not changed on pit road during this stint. Tire wear and temperatures are recorded when a fresh set of tires is fitted.").color(muted).size(ui_size(11.0)));
                                     });
                             }
                         } else {
@@ -1243,11 +1262,11 @@ impl WarRoomApp {
                                 .rounding(egui::Rounding::same(8.0))
                                 .inner_margin(12.0)
                                 .show(ui, |ui| {
-                                    ui.label(egui::RichText::new("ℹ Rival Telemetry Notice").color(secondary).strong().size(12.0));
+                                    ui.label(egui::RichText::new("ℹ Rival Telemetry Notice").color(secondary).strong().size(ui_size(12.0)));
                                     ui.add_space(4.0);
-                                    ui.label(egui::RichText::new("Tire wear, temps, and pressures are not broadcast over telemetry by iRacing for rival competitors.").color(muted).size(11.0));
+                                    ui.label(egui::RichText::new("Tire wear, temps, and pressures are not broadcast over telemetry by iRacing for rival competitors.").color(muted).size(ui_size(11.0)));
                                     ui.add_space(4.0);
-                                    ui.label(egui::RichText::new("Lap times, sector pace, and consistency are fully tracked for comparison.").color(white).size(11.0));
+                                    ui.label(egui::RichText::new("Lap times, sector pace, and consistency are fully tracked for comparison.").color(white).size(ui_size(11.0)));
                                 });
                         }
                     });
@@ -1257,15 +1276,15 @@ impl WarRoomApp {
             ui.add_space(12.0);
 
             // 6. Driver & Engineer Notes
-            ui.label(egui::RichText::new("DRIVER & ENGINEER NOTES").color(muted).size(11.0).extra_letter_spacing(0.8));
+            ui.label(egui::RichText::new("DRIVER & ENGINEER NOTES").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
             ui.add_space(4.0);
 
             ui.columns(resolved.len(), |note_cols| {
                 for (i, entry) in resolved.iter().enumerate() {
                     note_cols[i].vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("●").color(entry.color).size(12.0));
-                            ui.label(egui::RichText::new(format!("{} Notes:", entry.slot_label)).color(entry.color).strong().size(11.5));
+                            ui.label(egui::RichText::new("●").color(entry.color).size(ui_size(12.0)));
+                            ui.label(egui::RichText::new(format!("{} Notes:", entry.slot_label)).color(entry.color).strong().size(ui_size(11.5)));
                         });
                         ui.add_space(2.0);
 
@@ -1285,7 +1304,7 @@ impl WarRoomApp {
                             } else {
                                 &entry.stint.notes
                             };
-                            ui.label(egui::RichText::new(notes_text).color(muted).size(11.5));
+                            ui.label(egui::RichText::new(notes_text).color(muted).size(ui_size(11.5)));
                         }
                     });
                 }
@@ -1377,6 +1396,7 @@ impl WarRoomApp {
         let win_h = (screen_rect.height() * 0.88).clamp(580.0, 920.0);
         let elevated = self.settings.card_elevated_color();
         let white = self.settings.text_color();
+        let btn_h = self.settings.ui_btn_height(26.0);
 
         let mut is_open = self.show_stint_comparison_window;
         let mut close_modal = false;
@@ -1394,9 +1414,9 @@ impl WarRoomApp {
                 }
 
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("COMPARE UP TO 3 STINTS SIDE-BY-SIDE").color(self.settings.text_muted()).size(11.0).extra_letter_spacing(0.8));
+                    ui.label(egui::RichText::new("COMPARE UP TO 3 STINTS SIDE-BY-SIDE").color(self.settings.text_muted()).size(ui_size(11.0)).extra_letter_spacing(0.8));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized(egui::vec2(72.0, 26.0), egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("× Close").color(white).size(ui_size(12.0))).fill(elevated).min_size(egui::vec2(72.0, btn_h))).clicked() {
                             close_modal = true;
                         }
                     });
@@ -1426,6 +1446,9 @@ impl WarRoomApp {
         let is_metric = self.settings.use_metric;
         let fuel_conv = if is_metric { 1.0 } else { 0.264172 };
         let fuel_unit_str = if is_metric { "L" } else { "gal" };
+        let btn_h = self.settings.ui_btn_height(26.0);
+        let row_h = self.settings.ui_row_height(26.0);
+        let col_scale = self.settings.ui_col_scale();
 
         let is_compare = self.stint_analyzer_tab == StintAnalyzerTab::Compare;
         let any_driver_has_stints = s.drivers.values().any(|d| !d.stints.is_empty());
@@ -1482,12 +1505,12 @@ impl WarRoomApp {
         let win_w = if is_compare {
             (screen_rect.width() * 0.90).clamp(980.0, 1420.0)
         } else {
-            (screen_rect.width() * 0.75).clamp(720.0, 1050.0)
+            (screen_rect.width() * 0.78).clamp(760.0, 1140.0)
         };
         let win_h = if is_compare {
             (screen_rect.height() * 0.88).clamp(580.0, 920.0)
         } else {
-            (screen_rect.height() * 0.82).clamp(520.0, 850.0)
+            (screen_rect.height() * 0.82).clamp(520.0, 860.0)
         };
 
         let mut is_open = self.show_stint_analyzer_modal;
@@ -1512,16 +1535,108 @@ impl WarRoomApp {
                     close_modal = true;
                 }
 
-                // Top Header Row with Segmented Mode Switcher + Stint tabs + Popout + Close
+                // Helper to render the secondary action buttons (Discord Image, Share File, Saved Stints)
+                let render_secondary_actions = |ui: &mut egui::Ui, this: &mut WarRoomApp| {
+                    if !is_compare {
+                        let discord_btn = egui::Button::new(
+                            egui::RichText::new("📸 Copy Discord Image")
+                                .color(egui::Color32::BLACK)
+                                .size(ui_size(11.5))
+                                .strong(),
+                        )
+                        .fill(primary)
+                        .min_size(egui::vec2(0.0, btn_h));
+                        if ui
+                            .add(discord_btn)
+                            .on_hover_text("Generate a Stint Summary graphic card and copy to clipboard for pasting (Ctrl+V) into Discord")
+                            .clicked()
+                        {
+                            let single_entry = [discord_card::DiscordStintEntry {
+                                slot_label: None,
+                                driver_name: &drv_ref.driver_name,
+                                car_num: &drv_ref.car_num,
+                                setup_name: single_setup_display,
+                                is_player: target_car_idx == s.player_car_idx,
+                                stint,
+                                accent_rgb: [primary.r(), primary.g(), primary.b()],
+                            }];
+                            match discord_card::render_discord_stint_card(&single_entry, s, &this.settings)
+                                .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
+                            {
+                                Ok(()) => {
+                                    this.toast_message = Some((format!("📸 Copied Stint S{} image — press Ctrl+V in Discord!", stint.stint_number), std::time::Instant::now()));
+                                }
+                                Err(err) => {
+                                    this.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
+                                }
+                            }
+                        }
+
+                        let share_btn = egui::Button::new(
+                            egui::RichText::new("📎 Share Stint File")
+                                .color(white)
+                                .size(ui_size(11.5)),
+                        )
+                        .fill(elevated)
+                        .min_size(egui::vec2(0.0, btn_h));
+                        if ui
+                            .add(share_btn)
+                            .on_hover_text("Save this stint to your database and copy the physical .s4s.json file to clipboard (press Ctrl+V in Discord to attach)")
+                            .clicked()
+                        {
+                            let record = stint_db::build_record_from_state(s, target_car_idx, stint);
+                            this.stint_db.upsert_stint(record.clone());
+                            let file_path = this.stint_db.record_file_path(&record);
+                            match stint_db::copy_stint_file_to_clipboard(&file_path) {
+                                Ok(()) => {
+                                    this.toast_message = Some((
+                                        format!("📎 Saved & copied Stint {} (.s4s.json) to clipboard — press Ctrl+V in Discord to attach!", stint.short_label()),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                                Err(_) => {
+                                    if let Ok(code) = stint_db::export_share_string(&record) {
+                                        ui.output_mut(|o| o.copied_text = code);
+                                    }
+                                    this.toast_message = Some((
+                                        format!("💾 Saved Stint {} to local Stint Database!", stint.short_label()),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    let saved_btn = egui::Button::new(
+                        egui::RichText::new("📂 Saved Stints")
+                            .color(white)
+                            .size(ui_size(11.5)),
+                    )
+                    .fill(elevated)
+                    .min_size(egui::vec2(0.0, btn_h));
+                    if ui
+                        .add(saved_btn)
+                        .on_hover_text("Open Saved Stints Database to re-import or share stints")
+                        .clicked()
+                    {
+                        this.show_stint_db_modal = true;
+                    }
+                };
+
+                // Row 1: Segmented Mode Switcher (Left) + Global Window Actions (Right)
+                let single_row_min_w = if is_compare { 580.0 } else { 860.0 } * col_scale;
+                let can_fit_single_action_row = ui.available_width() >= single_row_min_w;
+
                 ui.horizontal(|ui| {
                     let single_btn = egui::Button::new(
                         egui::RichText::new("🔍 Single Stint")
                             .color(if !is_compare { egui::Color32::WHITE } else { muted })
-                            .size(12.0)
+                            .size(ui_size(12.0))
                             .strong()
                     )
                     .fill(if !is_compare { with_alpha(primary, 190) } else { elevated })
-                    .rounding(egui::Rounding::same(6.0));
+                    .rounding(egui::Rounding::same(6.0))
+                    .min_size(egui::vec2(0.0, btn_h));
                     if ui.add(single_btn).clicked() {
                         self.stint_analyzer_tab = StintAnalyzerTab::SingleStint;
                     }
@@ -1530,123 +1645,90 @@ impl WarRoomApp {
                     let compare_btn = egui::Button::new(
                         egui::RichText::new(format!("⚖ Compare Stints ({})", num_slots))
                             .color(if is_compare { egui::Color32::WHITE } else { muted })
-                            .size(12.0)
+                            .size(ui_size(12.0))
                             .strong()
                     )
                     .fill(if is_compare { with_alpha(secondary, 190) } else { elevated })
-                    .rounding(egui::Rounding::same(6.0));
+                    .rounding(egui::Rounding::same(6.0))
+                    .min_size(egui::vec2(0.0, btn_h));
                     if ui.add(compare_btn).clicked() {
                         self.ensure_compare_slots_populated(s);
                         self.stint_analyzer_tab = StintAnalyzerTab::Compare;
                     }
 
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    if !is_compare {
-                        ui.label(egui::RichText::new("STINT").color(muted).size(11.0).extra_letter_spacing(0.8));
-                        for st in player_stints.iter() {
-                            let is_sel = st.stint_number == selected_num;
-                            let tab_title = if st.is_active {
-                                format!("{} · Live ({})", st.short_label(), st.laps_completed)
-                            } else {
-                                format!("{} ({})", st.short_label(), st.laps_completed)
-                            };
-
-                            let btn = egui::Button::new(
-                                egui::RichText::new(tab_title)
-                                    .color(if is_sel { egui::Color32::WHITE } else { muted })
-                                    .size(12.0)
-                            )
-                            .fill(if is_sel { with_alpha(secondary, 190) } else { elevated })
-                            .rounding(egui::Rounding::same(6.0));
-
-                            if ui.add(btn).clicked() {
-                                self.selected_stint_num = Some(st.stint_number);
-                            }
-                        }
-                    }
-
-                    let single_setup_display = if !stint.setup_name.is_empty() && stint.setup_name != "—" && stint.setup_name != "Baseline" {
-                        stint.setup_name.as_str()
-                    } else if !drv_ref.setup_name.is_empty() && drv_ref.setup_name != "—" && drv_ref.setup_name != "Baseline" {
-                        drv_ref.setup_name.as_str()
-                    } else if target_car_idx == s.player_car_idx && !s.player_setup_name.is_empty() && s.player_setup_name != "Baseline" {
-                        s.player_setup_name.as_str()
-                    } else {
-                        "Baseline"
-                    };
-
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized(egui::vec2(72.0, 26.0), egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated)).clicked() {
+                        let close_btn = egui::Button::new(
+                            egui::RichText::new("× Close").color(white).size(ui_size(12.0)),
+                        )
+                        .fill(elevated)
+                        .min_size(egui::vec2(0.0, btn_h));
+                        if ui.add(close_btn).clicked() {
                             close_modal = true;
                         }
 
-                        if ui.add_sized(egui::vec2(95.0, 26.0), egui::Button::new(egui::RichText::new("↗ Pop Out").color(white).size(12.0)).fill(elevated)).on_hover_text("Open Stint Comparison in a separate floating window").clicked() {
+                        let pop_btn = egui::Button::new(
+                            egui::RichText::new("↗ Pop Out").color(white).size(ui_size(12.0)),
+                        )
+                        .fill(elevated)
+                        .min_size(egui::vec2(0.0, btn_h));
+                        if ui
+                            .add(pop_btn)
+                            .on_hover_text("Open Stint Comparison in a separate floating window")
+                            .clicked()
+                        {
                             self.ensure_compare_slots_populated(s);
                             self.show_stint_comparison_window = true;
                             self.show_stint_analyzer_modal = false;
                         }
 
-                        if ui.add_sized(egui::vec2(108.0, 26.0), egui::Button::new(egui::RichText::new("📂 Saved Stints").color(white).size(11.5)).fill(elevated)).on_hover_text("Open Saved Stints Database to re-import or share stints").clicked() {
-                            self.show_stint_db_modal = true;
-                        }
-
-                        if !is_compare {
-                            if ui.add_sized(
-                                egui::vec2(125.0, 26.0),
-                                egui::Button::new(egui::RichText::new("📎 Share Stint File").color(white).size(11.5)).fill(elevated)
-                            ).on_hover_text("Save this stint to your database and copy the physical .s4s.json file to clipboard (press Ctrl+V in Discord to attach)").clicked() {
-                                let record = stint_db::build_record_from_state(s, target_car_idx, stint);
-                                self.stint_db.upsert_stint(record.clone());
-                                let file_path = self.stint_db.record_file_path(&record);
-                                match stint_db::copy_stint_file_to_clipboard(&file_path) {
-                                    Ok(()) => {
-                                        self.toast_message = Some((
-                                            format!("📎 Saved & copied Stint {} (.s4s.json) to clipboard — press Ctrl+V in Discord to attach!", stint.short_label()),
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                    Err(_) => {
-                                        if let Ok(code) = stint_db::export_share_string(&record) {
-                                            ui.output_mut(|o| o.copied_text = code);
-                                        }
-                                        self.toast_message = Some((
-                                            format!("💾 Saved Stint {} to local Stint Database!", stint.short_label()),
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                }
-                            }
-
-                            if ui.add_sized(
-                                egui::vec2(148.0, 26.0),
-                                egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(11.5).strong()).fill(primary)
-                            ).on_hover_text("Generate a Stint Summary graphic card and copy to clipboard for pasting (Ctrl+V) into Discord").clicked() {
-                                let single_entry = [discord_card::DiscordStintEntry {
-                                    slot_label: None,
-                                    driver_name: &drv_ref.driver_name,
-                                    car_num: &drv_ref.car_num,
-                                    setup_name: single_setup_display,
-                                    is_player: target_car_idx == s.player_car_idx,
-                                    stint,
-                                    accent_rgb: [primary.r(), primary.g(), primary.b()],
-                                }];
-                                match discord_card::render_discord_stint_card(&single_entry, s, &self.settings)
-                                    .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
-                                {
-                                    Ok(()) => {
-                                        self.toast_message = Some((format!("📸 Copied Stint S{} image — press Ctrl+V in Discord!", stint.stint_number), std::time::Instant::now()));
-                                    }
-                                    Err(err) => {
-                                        self.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
-                                    }
-                                }
-                            }
+                        if can_fit_single_action_row {
+                            render_secondary_actions(ui, self);
                         }
                     });
                 });
+
+                if !can_fit_single_action_row {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        render_secondary_actions(ui, self);
+                    });
+                }
+
+                // Row 2 (Single Stint Mode): Dedicated Stint Selector Strip (never collides with top buttons!)
+                if !is_compare {
+                    ui.add_space(5.0);
+                    egui::Frame::none()
+                        .fill(with_alpha(elevated, 140))
+                        .rounding(egui::Rounding::same(8.0))
+                        .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(egui::RichText::new("STINT").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                                ui.add_space(4.0);
+                                for st in player_stints.iter() {
+                                    let is_sel = st.stint_number == selected_num;
+                                    let tab_title = if st.is_active {
+                                        format!("{} · Live ({})", st.short_label(), st.laps_completed)
+                                    } else {
+                                        format!("{} ({})", st.short_label(), st.laps_completed)
+                                    };
+
+                                    let btn = egui::Button::new(
+                                        egui::RichText::new(tab_title)
+                                            .color(if is_sel { egui::Color32::WHITE } else { muted })
+                                            .size(ui_size(12.0))
+                                    )
+                                    .fill(if is_sel { with_alpha(secondary, 190) } else { elevated })
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, self.settings.ui_btn_height(24.0)));
+
+                                    if ui.add(btn).clicked() {
+                                        self.selected_stint_num = Some(st.stint_number);
+                                    }
+                                }
+                            });
+                        });
+                }
 
                 ui.add_space(6.0);
 
@@ -1665,19 +1747,19 @@ impl WarRoomApp {
                         .show(ui, |ui| {
                             ui.columns(5, |cols| {
                                 cols[0].vertical(|ui| {
-                                    ui.label(egui::RichText::new("STINT LAPS").color(muted).size(10.5).extra_letter_spacing(0.6));
+                                    ui.label(egui::RichText::new("STINT LAPS").color(muted).size(ui_size(10.5)).extra_letter_spacing(0.6));
                                     ui.label(egui::RichText::new(format!("{}", stint.laps_completed)).font(display_font(20.0)).color(white));
                                 });
                                 cols[1].vertical(|ui| {
-                                    ui.label(egui::RichText::new("FASTEST LAP").color(muted).size(10.5).extra_letter_spacing(0.6));
+                                    ui.label(egui::RichText::new("FASTEST LAP").color(muted).size(ui_size(10.5)).extra_letter_spacing(0.6));
                                     ui.label(egui::RichText::new(format_time(stint.fast_lap)).font(display_font(20.0)).color(green));
                                 });
                                 cols[2].vertical(|ui| {
-                                    ui.label(egui::RichText::new("AVERAGE LAP").color(muted).size(10.5).extra_letter_spacing(0.6));
+                                    ui.label(egui::RichText::new("AVERAGE LAP").color(muted).size(ui_size(10.5)).extra_letter_spacing(0.6));
                                     ui.label(egui::RichText::new(format_time(stint.full_average())).font(display_font(20.0)).color(white));
                                 });
                                 cols[3].vertical(|ui| {
-                                    ui.label(egui::RichText::new("FUEL / LAP").color(muted).size(10.5).extra_letter_spacing(0.6));
+                                    ui.label(egui::RichText::new("FUEL / LAP").color(muted).size(ui_size(10.5)).extra_letter_spacing(0.6));
                                     let f_rate = stint.fuel_per_lap();
                                     let fuel_str = if f_rate > 0.0005 {
                                         format!("{:.3} {}", f_rate * fuel_conv, fuel_unit_str)
@@ -1687,7 +1769,7 @@ impl WarRoomApp {
                                     ui.label(egui::RichText::new(fuel_str).font(display_font(20.0)).color(white));
                                 });
                                 cols[4].vertical(|ui| {
-                                    ui.label(egui::RichText::new("CONSISTENCY σ").color(muted).size(10.5).extra_letter_spacing(0.6));
+                                    ui.label(egui::RichText::new("CONSISTENCY σ").color(muted).size(ui_size(10.5)).extra_letter_spacing(0.6));
                                     ui.label(egui::RichText::new(format!("{:.3}", stint.std_dev())).font(display_font(20.0)).color(primary));
                                 });
                             });
@@ -1696,8 +1778,8 @@ impl WarRoomApp {
                     ui.add_space(8.0);
 
                     // Key Setup & Conditions Bar
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Setup").color(muted).size(12.0));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("Setup").color(muted).size(ui_size(12.0)));
                         let setup_display = if !stint.setup_name.is_empty() && stint.setup_name != "—" && stint.setup_name != "Baseline" {
                             &stint.setup_name
                         } else if !drv_ref.setup_name.is_empty() && drv_ref.setup_name != "—" && drv_ref.setup_name != "Baseline" {
@@ -1707,37 +1789,37 @@ impl WarRoomApp {
                         } else {
                             "Baseline"
                         };
-                        ui.label(egui::RichText::new(setup_display).color(white).strong().size(12.5));
+                        ui.label(egui::RichText::new(setup_display).color(white).strong().size(ui_size(12.5)));
                         
                         ui.add_space(16.0);
-                        ui.label(egui::RichText::new("Track").color(muted).size(12.0));
+                        ui.label(egui::RichText::new("Track").color(muted).size(ui_size(12.0)));
                         let track_raw = if !stint.track_temp_at_start.is_empty() && stint.track_temp_at_start != "—" {
                             &stint.track_temp_at_start
                         } else {
                             &s.track_temp_raw
                         };
-                        ui.label(egui::RichText::new(convert_unit(track_raw, is_metric)).color(white).size(12.5));
+                        ui.label(egui::RichText::new(convert_unit(track_raw, is_metric)).color(white).size(ui_size(12.5)));
 
                         ui.add_space(16.0);
-                        ui.label(egui::RichText::new("Air").color(muted).size(12.0));
+                        ui.label(egui::RichText::new("Air").color(muted).size(ui_size(12.0)));
                         let air_raw = if !stint.air_temp_at_start.is_empty() && stint.air_temp_at_start != "—" {
                             &stint.air_temp_at_start
                         } else {
                             &s.air_temp_raw
                         };
-                        ui.label(egui::RichText::new(convert_unit(air_raw, is_metric)).color(white).size(12.5));
+                        ui.label(egui::RichText::new(convert_unit(air_raw, is_metric)).color(white).size(ui_size(12.5)));
                     });
 
                     // Rolling Averages Breakdown
                     if !self.settings.active_avg_buckets.is_empty() {
                         ui.add_space(4.0);
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(egui::RichText::new("Rolling pace:").color(muted).size(12.0));
+                            ui.label(egui::RichText::new("Rolling pace:").color(muted).size(ui_size(12.0)));
                             for &b in &self.settings.active_avg_buckets {
                                 let avg_val = stint.avg_first_n(b);
                                 let val_str = if avg_val > 0.0 { format_time(avg_val) } else { "—".to_string() };
-                                ui.label(egui::RichText::new(format!("Avg {}:", b)).color(muted).size(11.5));
-                                ui.label(egui::RichText::new(val_str).color(white).size(12.0).strong());
+                                ui.label(egui::RichText::new(format!("Avg {}:", b)).color(muted).size(ui_size(11.5)));
+                                ui.label(egui::RichText::new(val_str).color(white).size(ui_size(12.0)).strong());
                                 ui.add_space(8.0);
                             }
                         });
@@ -1746,7 +1828,7 @@ impl WarRoomApp {
                     ui.add_space(10.0);
 
                     // Line Graph
-                    ui.label(egui::RichText::new("LAP TIME PROGRESSION").color(muted).size(11.0).extra_letter_spacing(0.8));
+                    ui.label(egui::RichText::new("LAP TIME PROGRESSION").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                     ui.add_space(4.0);
                     render_stint_lap_chart(ui, stint, 160.0, &self.settings);
 
@@ -1755,33 +1837,45 @@ impl WarRoomApp {
                     // --- SECTION: LAP-BY-LAP SPREADSHEET TABLE ---
                     let valid_laps = stint.valid_laps();
                     let numbered_laps = stint.numbered_valid_laps();
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("LAP-BY-LAP LOG").color(muted).size(11.0).extra_letter_spacing(0.8));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(egui::RichText::new("Copy Spreadsheet (TSV)").color(egui::Color32::BLACK).size(11.5).strong()).fill(primary)).clicked() {
-                                let tsv = format_stint_laps_spreadsheet_tsv(stint);
-                                ui.output_mut(|o| o.copied_text = tsv);
-                                self.toast_message = Some((format!("Copied {} laps spreadsheet for Excel", valid_laps.len()), std::time::Instant::now()));
-                            }
-                            if ui.add(egui::Button::new(egui::RichText::new("Copy Lap Times").color(white).size(11.5)).fill(elevated)).clicked() {
-                                let tsv = format_laps_column_tsv(stint);
-                                ui.output_mut(|o| o.copied_text = tsv);
-                                self.toast_message = Some((format!("Copied {} lap times for Excel", valid_laps.len()), std::time::Instant::now()));
-                            }
-                            if ui.add(egui::Button::new(egui::RichText::new("⚖ Add to Compare").color(white).size(11.5)).fill(elevated)).on_hover_text("Add this stint into the Side-by-Side Comparison").clicked() {
-                                let slot_entry = StintCompareSlot { car_idx: target_car_idx, stint_number: stint.stint_number };
-                                if !self.stint_compare_slots.contains(&slot_entry) {
-                                    if self.stint_compare_slots.len() >= 3 {
-                                        self.stint_compare_slots.pop();
-                                    }
-                                    self.stint_compare_slots.push(slot_entry);
+                    let render_lap_log_btns = |ui: &mut egui::Ui, this: &mut WarRoomApp| {
+                        if ui.add(egui::Button::new(egui::RichText::new("⚖ Add to Compare").color(white).size(ui_size(11.5))).fill(elevated)).on_hover_text("Add this stint into the Side-by-Side Comparison").clicked() {
+                            let slot_entry = StintCompareSlot { car_idx: target_car_idx, stint_number: stint.stint_number };
+                            if !this.stint_compare_slots.contains(&slot_entry) {
+                                if this.stint_compare_slots.len() >= 3 {
+                                    this.stint_compare_slots.pop();
                                 }
-                                self.ensure_compare_slots_populated(s);
-                                self.stint_analyzer_tab = StintAnalyzerTab::Compare;
-                                self.toast_message = Some((format!("Added S{} to Stint Comparison", stint.stint_number), std::time::Instant::now()));
+                                this.stint_compare_slots.push(slot_entry);
                             }
+                            this.ensure_compare_slots_populated(s);
+                            this.stint_analyzer_tab = StintAnalyzerTab::Compare;
+                            this.toast_message = Some((format!("Added S{} to Stint Comparison", stint.stint_number), std::time::Instant::now()));
+                        }
+                        if ui.add(egui::Button::new(egui::RichText::new("Copy Lap Times").color(white).size(ui_size(11.5))).fill(elevated)).clicked() {
+                            let tsv = format_laps_column_tsv(stint);
+                            ui.output_mut(|o| o.copied_text = tsv);
+                            this.toast_message = Some((format!("Copied {} lap times for Excel", valid_laps.len()), std::time::Instant::now()));
+                        }
+                        if ui.add(egui::Button::new(egui::RichText::new("Copy Spreadsheet (TSV)").color(egui::Color32::BLACK).size(ui_size(11.5)).strong()).fill(primary)).clicked() {
+                            let tsv = format_stint_laps_spreadsheet_tsv(stint);
+                            ui.output_mut(|o| o.copied_text = tsv);
+                            this.toast_message = Some((format!("Copied {} laps spreadsheet for Excel", valid_laps.len()), std::time::Instant::now()));
+                        }
+                    };
+
+                    if ui.available_width() >= 640.0 * col_scale {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("LAP-BY-LAP LOG").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                render_lap_log_btns(ui, self);
+                            });
                         });
-                    });
+                    } else {
+                        ui.label(egui::RichText::new("LAP-BY-LAP LOG").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            render_lap_log_btns(ui, self);
+                        });
+                    }
                     ui.add_space(4.0);
 
                     if !valid_laps.is_empty() {
@@ -1802,18 +1896,19 @@ impl WarRoomApp {
                                 TableBuilder::new(ui)
                                     .striped(true)
                                     .resizable(true)
+                                    .vscroll(false)
                                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                    .column(Column::initial(95.0))  // Stint Lap
-                                    .column(Column::initial(90.0))  // Lap
-                                    .column(Column::initial(130.0)) // Lap Time
-                                    .column(Column::initial(140.0)) // Avg Lap Time
-                                    .column(Column::remainder().at_least(90.0)) // Action
-                                    .header(26.0, |mut header| {
-                                        header.col(|ui| { ui.label(egui::RichText::new("Stint Lap").color(muted).size(11.5)); });
-                                        header.col(|ui| { ui.label(egui::RichText::new("Session Lap").color(muted).size(11.5)); });
-                                        header.col(|ui| { ui.label(egui::RichText::new("Lap Time").color(muted).size(11.5)); });
-                                        header.col(|ui| { ui.label(egui::RichText::new("Running Avg").color(muted).size(11.5)); });
-                                        header.col(|ui| { ui.label(egui::RichText::new("Action").color(muted).size(11.5)); });
+                                    .column(Column::initial(95.0 * col_scale))  // Stint Lap
+                                    .column(Column::initial(95.0 * col_scale))  // Lap
+                                    .column(Column::initial(130.0 * col_scale)) // Lap Time
+                                    .column(Column::initial(140.0 * col_scale)) // Avg Lap Time
+                                    .column(Column::remainder().at_least(95.0 * col_scale)) // Action
+                                    .header(row_h, |mut header| {
+                                        header.col(|ui| { ui.label(egui::RichText::new("Stint Lap").color(muted).size(ui_size(11.5))); });
+                                        header.col(|ui| { ui.label(egui::RichText::new("Session Lap").color(muted).size(ui_size(11.5))); });
+                                        header.col(|ui| { ui.label(egui::RichText::new("Lap Time").color(muted).size(ui_size(11.5))); });
+                                        header.col(|ui| { ui.label(egui::RichText::new("Running Avg").color(muted).size(ui_size(11.5))); });
+                                        header.col(|ui| { ui.label(egui::RichText::new("Action").color(muted).size(ui_size(11.5))); });
                                     })
                                     .body(|mut body| {
                                         let min_t = valid_laps.iter().cloned().fold(f32::INFINITY, f32::min);
@@ -1822,9 +1917,9 @@ impl WarRoomApp {
                                             let cum_avg = sum_lap_times / (i + 1) as f32;
                                             let is_fast = (t - min_t).abs() < 0.0001;
 
-                                            body.row(26.0, |mut row| {
+                                            body.row(row_h, |mut row| {
                                                 row.col(|ui| {
-                                                    let resp = ui.selectable_label(false, egui::RichText::new(format!("L{}", i + 1)).color(white).size(12.5));
+                                                    let resp = ui.selectable_label(false, egui::RichText::new(format!("L{}", i + 1)).color(white).size(ui_size(12.5)));
                                                     if resp.clicked() {
                                                         ui.output_mut(|o| o.copied_text = format!("{}", i + 1));
                                                         self.toast_message = Some((format!("Copied Stint Lap {}", i + 1), std::time::Instant::now()));
@@ -1832,7 +1927,7 @@ impl WarRoomApp {
                                                 });
 
                                                 row.col(|ui| {
-                                                    let resp = ui.selectable_label(false, egui::RichText::new(format!("{}", overall_lap)).color(muted).size(12.5));
+                                                    let resp = ui.selectable_label(false, egui::RichText::new(format!("{}", overall_lap)).color(muted).size(ui_size(12.5)));
                                                     if resp.clicked() {
                                                         ui.output_mut(|o| o.copied_text = format!("{}", overall_lap));
                                                         self.toast_message = Some((format!("Copied Lap {}", overall_lap), std::time::Instant::now()));
@@ -1842,7 +1937,7 @@ impl WarRoomApp {
                                                 row.col(|ui| {
                                                     let time_text = format_time(t);
                                                     let col = if is_fast { green } else { white };
-                                                    let resp = ui.selectable_label(false, egui::RichText::new(time_text).color(col).strong().size(12.5));
+                                                    let resp = ui.selectable_label(false, egui::RichText::new(time_text).color(col).strong().size(ui_size(12.5)));
                                                     if resp.clicked() {
                                                         ui.output_mut(|o| o.copied_text = format!("{:.3}", t));
                                                         self.toast_message = Some((format!("Copied Lap Time {:.3}", t), std::time::Instant::now()));
@@ -1851,7 +1946,7 @@ impl WarRoomApp {
 
                                                 row.col(|ui| {
                                                     let avg_text = format_time(cum_avg);
-                                                    let resp = ui.selectable_label(false, egui::RichText::new(avg_text).color(muted).size(12.5));
+                                                    let resp = ui.selectable_label(false, egui::RichText::new(avg_text).color(muted).size(ui_size(12.5)));
                                                     if resp.clicked() {
                                                         ui.output_mut(|o| o.copied_text = format!("{:.3}", cum_avg));
                                                         self.toast_message = Some((format!("Copied Avg Lap Time {:.3}", cum_avg), std::time::Instant::now()));
@@ -1859,7 +1954,7 @@ impl WarRoomApp {
                                                 });
 
                                                 row.col(|ui| {
-                                                    if ui.add(egui::Button::new(egui::RichText::new("Copy row").color(muted).size(11.0)).fill(elevated)).clicked() {
+                                                    if ui.add(egui::Button::new(egui::RichText::new("Copy row").color(muted).size(ui_size(11.0))).fill(elevated)).clicked() {
                                                         let row_tsv = format!("{}\t{}\t{:.3}\t{:.3}", i + 1, overall_lap, t, cum_avg);
                                                         ui.output_mut(|o| o.copied_text = row_tsv);
                                                         self.toast_message = Some((format!("Copied Lap {} row for Excel", i + 1), std::time::Instant::now()));
@@ -1888,56 +1983,69 @@ impl WarRoomApp {
                         "POST-STINT TIRES · NO PIT SERVICE"
                     };
 
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(header_lbl).color(muted).size(11.0).extra_letter_spacing(0.8));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(
-                                egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(11.0).strong()).fill(primary)
-                            ).on_hover_text("Copy Stint S{} summary graphic card to clipboard for Discord (Ctrl+V)").clicked() {
-                                let single_entry = [discord_card::DiscordStintEntry {
-                                    slot_label: None,
-                                    driver_name: &drv_ref.driver_name,
-                                    car_num: &drv_ref.car_num,
-                                    setup_name: single_setup_display,
-                                    is_player: target_car_idx == s.player_car_idx,
-                                    stint,
-                                    accent_rgb: [primary.r(), primary.g(), primary.b()],
-                                }];
-                                match discord_card::render_discord_stint_card(&single_entry, s, &self.settings)
-                                    .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
-                                {
-                                    Ok(()) => {
-                                        self.toast_message = Some((format!("📸 Copied Stint S{} image — press Ctrl+V in Discord!", stint.stint_number), std::time::Instant::now()));
-                                    }
-                                    Err(err) => {
-                                        self.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
-                                    }
-                                }
-                            }
-                            if ui.add(egui::Button::new(egui::RichText::new("Copy Full Stint").color(white).size(11.0)).fill(elevated)).clicked() {
-                                let tsv = format_full_stint_excel_tsv(stint, &self.settings.active_avg_buckets, is_metric);
+                    let render_tire_export_btns = |ui: &mut egui::Ui, this: &mut WarRoomApp| {
+                        if stint_has_tires {
+                            if ui.add(egui::Button::new(egui::RichText::new("Copy Temps").color(white).size(ui_size(11.0))).fill(elevated)).clicked() {
+                                let tsv = format_temps_excel_tsv(stint_tires, is_metric);
                                 ui.output_mut(|o| o.copied_text = tsv);
-                                self.toast_message = Some((format!("Copied Stint S{} Full Log for Excel", stint.stint_number), std::time::Instant::now()));
+                                this.toast_message = Some(("Copied 4-Corner Temps for Excel".to_string(), std::time::Instant::now()));
                             }
-                            if stint_has_tires {
-                                if ui.add(egui::Button::new(egui::RichText::new("Copy 4-Tire Table").color(white).size(11.0)).fill(elevated)).clicked() {
-                                    let tsv = format_tires_excel_tsv(stint_tires, is_metric);
-                                    ui.output_mut(|o| o.copied_text = tsv);
-                                    self.toast_message = Some(("Copied 4-Corner Tires Table for Excel".to_string(), std::time::Instant::now()));
+                            if ui.add(egui::Button::new(egui::RichText::new("Copy Wear").color(white).size(ui_size(11.0))).fill(elevated)).clicked() {
+                                let tsv = format_wear_excel_tsv(stint_tires);
+                                ui.output_mut(|o| o.copied_text = tsv);
+                                this.toast_message = Some(("Copied 4-Corner Wear for Excel".to_string(), std::time::Instant::now()));
+                            }
+                            if ui.add(egui::Button::new(egui::RichText::new("Copy 4-Tire Table").color(white).size(ui_size(11.0))).fill(elevated)).clicked() {
+                                let tsv = format_tires_excel_tsv(stint_tires, is_metric);
+                                ui.output_mut(|o| o.copied_text = tsv);
+                                this.toast_message = Some(("Copied 4-Corner Tires Table for Excel".to_string(), std::time::Instant::now()));
+                            }
+                        }
+                        if ui.add(egui::Button::new(egui::RichText::new("Copy Full Stint").color(white).size(ui_size(11.0))).fill(elevated)).clicked() {
+                            let tsv = format_full_stint_excel_tsv(stint, &this.settings.active_avg_buckets, is_metric);
+                            ui.output_mut(|o| o.copied_text = tsv);
+                            this.toast_message = Some((format!("Copied Stint S{} Full Log for Excel", stint.stint_number), std::time::Instant::now()));
+                        }
+                        if ui.add(
+                            egui::Button::new(egui::RichText::new("📸 Copy Discord Image").color(egui::Color32::BLACK).size(ui_size(11.0)).strong()).fill(primary)
+                        ).on_hover_text("Copy Stint S{} summary graphic card to clipboard for Discord (Ctrl+V)").clicked() {
+                            let single_entry = [discord_card::DiscordStintEntry {
+                                slot_label: None,
+                                driver_name: &drv_ref.driver_name,
+                                car_num: &drv_ref.car_num,
+                                setup_name: single_setup_display,
+                                is_player: target_car_idx == s.player_car_idx,
+                                stint,
+                                accent_rgb: [primary.r(), primary.g(), primary.b()],
+                            }];
+                            match discord_card::render_discord_stint_card(&single_entry, s, &this.settings)
+                                .and_then(|img| discord_card::copy_rgba_image_to_clipboard(&img))
+                            {
+                                Ok(()) => {
+                                    this.toast_message = Some((format!("📸 Copied Stint S{} image — press Ctrl+V in Discord!", stint.stint_number), std::time::Instant::now()));
                                 }
-                                if ui.add(egui::Button::new(egui::RichText::new("Copy Wear").color(white).size(11.0)).fill(elevated)).clicked() {
-                                    let tsv = format_wear_excel_tsv(stint_tires);
-                                    ui.output_mut(|o| o.copied_text = tsv);
-                                    self.toast_message = Some(("Copied 4-Corner Wear for Excel".to_string(), std::time::Instant::now()));
-                                }
-                                if ui.add(egui::Button::new(egui::RichText::new("Copy Temps").color(white).size(11.0)).fill(elevated)).clicked() {
-                                    let tsv = format_temps_excel_tsv(stint_tires, is_metric);
-                                    ui.output_mut(|o| o.copied_text = tsv);
-                                    self.toast_message = Some(("Copied 4-Corner Temps for Excel".to_string(), std::time::Instant::now()));
+                                Err(err) => {
+                                    this.toast_message = Some((format!("⚠ Image copy failed: {}", err), std::time::Instant::now()));
                                 }
                             }
+                        }
+                    };
+
+                    let tire_bar_min_w = if stint_has_tires { 820.0 } else { 560.0 } * col_scale;
+                    if ui.available_width() >= tire_bar_min_w {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(header_lbl).color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                render_tire_export_btns(ui, self);
+                            });
                         });
-                    });
+                    } else {
+                        ui.label(egui::RichText::new(header_lbl).color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            render_tire_export_btns(ui, self);
+                        });
+                    }
                     ui.add_space(6.0);
 
                     // 4 Visual Tire Cards
@@ -1957,7 +2065,7 @@ impl WarRoomApp {
                     ui.add_space(12.0);
 
                     // Notes Section
-                    ui.label(egui::RichText::new("DRIVER & ENGINEER NOTES").color(muted).size(11.0).extra_letter_spacing(0.8));
+                    ui.label(egui::RichText::new("DRIVER & ENGINEER NOTES").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                     ui.add_space(4.0);
                     let mut notes_buf = stint.notes.clone();
                     if ui.add(

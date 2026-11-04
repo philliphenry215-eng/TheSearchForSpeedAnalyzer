@@ -1,6 +1,6 @@
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
-use crate::{display_font, with_alpha, WarRoomApp};
+use crate::{display_font, ui_size, with_alpha, WarRoomApp};
 use crate::formatters::*;
 use crate::models::*;
 use crate::settings::*;
@@ -23,7 +23,7 @@ fn render_color_picker_row(
         if ui.color_edit_button_srgb(color).on_hover_text(tooltip).changed() {
             changed = true;
         }
-        ui.label(egui::RichText::new(name).color(text_color).size(11.5));
+        ui.label(egui::RichText::new(name).color(text_color).size(ui_size(11.5)));
     });
     ui.add_space(2.0);
     changed
@@ -43,15 +43,15 @@ impl WarRoomApp {
         let active_stint = player.and_then(|p| p.stints.iter().rev().find(|st| st.is_active).or_else(|| p.stints.last()));
 
         egui::Window::new("Live Telemetry & Stint Inspector")
-            .fixed_size([620.0, 560.0])
+            .default_size([620.0 * self.settings.ui_col_scale(), 560.0 + self.settings.font_size_offset * 16.0])
             .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
             .collapsible(true)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("RAW SDK VARIABLES · 60 HZ").color(muted).size(11.0).extra_letter_spacing(0.8));
+                    ui.label(egui::RichText::new("RAW SDK VARIABLES · 60 HZ").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("× Close").color(white).size(ui_size(12.0))).fill(elevated)).clicked() {
                             self.show_telemetry_debugger = false;
                         }
                     });
@@ -131,13 +131,13 @@ impl WarRoomApp {
                 ui.add_space(10.0);
 
                 // Live Active Stint Summary
-                ui.label(egui::RichText::new("ACTIVE STINT").color(muted).size(11.0).extra_letter_spacing(0.8));
+                ui.label(egui::RichText::new("ACTIVE STINT").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                 if let Some(st) = active_stint {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Stint S{}", st.stint_number)).color(primary).strong());
                         ui.label(egui::RichText::new(format!("· Start lap {} · {} laps · Best {}", st.start_lap, st.laps_completed, format_time(st.fast_lap))).color(white));
                     });
-                    ui.label(egui::RichText::new(format!("Laps: {:?}", st.lap_times.iter().map(|t| format!("{:.3}", *t)).collect::<Vec<String>>())).color(muted).size(12.0));
+                    ui.label(egui::RichText::new(format!("Laps: {:?}", st.lap_times.iter().map(|t| format!("{:.3}", *t)).collect::<Vec<String>>())).color(muted).size(ui_size(12.0)));
                 } else {
                     ui.label(egui::RichText::new("No active stint running.").color(muted));
                 }
@@ -145,7 +145,7 @@ impl WarRoomApp {
                 ui.add_space(10.0);
 
                 // Live Event Stream
-                ui.label(egui::RichText::new("EVENT STREAM").color(muted).size(11.0).extra_letter_spacing(0.8));
+                ui.label(egui::RichText::new("EVENT STREAM").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                 let debug_log_bg = if self.settings.is_dark_theme() { egui::Color32::from_rgb(12, 14, 20) } else { self.settings.card_elevated_color() };
                 egui::Frame::none()
                     .fill(debug_log_bg)
@@ -158,7 +158,7 @@ impl WarRoomApp {
                                 ui.label(egui::RichText::new("Waiting for track events (pit exit, lap line crossing)...").color(muted).small());
                             } else {
                                 for log in &s.debug_event_logs {
-                                    ui.label(egui::RichText::new(log).color(white).size(12.0).monospace());
+                                    ui.label(egui::RichText::new(log).color(white).size(ui_size(12.0)).monospace());
                                 }
                             }
                         });
@@ -177,6 +177,7 @@ impl WarRoomApp {
         let elevated = self.settings.card_elevated_color();
         let panel_bg = self.settings.panel_color();
         let border = self.settings.divider_color();
+        let btn_h = self.settings.ui_btn_height(28.0);
 
         let embedded_notes = include_str!("../../RELEASE_NOTES.md");
         let (display_title, display_body, html_url) = if let Some(ref custom) = self.release_notes_custom_content {
@@ -187,8 +188,11 @@ impl WarRoomApp {
             (format!("What's New in v{}", updater::CURRENT_VERSION), embedded_notes.to_string(), format!("https://github.com/philliphenry215-eng/TheSearchForSpeedAnalyzer/releases/tag/v{}", updater::CURRENT_VERSION))
         };
 
+        let col_scale = self.settings.ui_col_scale();
+        let modal_w = (580.0 * col_scale).min(ctx.screen_rect().width() - 40.0);
+
         egui::Window::new("📖 Release Notes & What's New")
-            .fixed_size([580.0, 620.0])
+            .fixed_size([modal_w, 620.0])
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
             .resizable(false)
@@ -197,7 +201,7 @@ impl WarRoomApp {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(display_title).font(display_font(18.0)).color(primary));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Open on GitHub ↗").color(white).size(12.0)).fill(elevated)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Open on GitHub ↗").color(white).size(ui_size(12.0))).fill(elevated)).clicked() {
                             updater::open_browser(&html_url);
                         }
                     });
@@ -211,7 +215,7 @@ impl WarRoomApp {
                     .max_height(480.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_max_width(540.0);
+                        ui.set_max_width(modal_w - 40.0);
                         for line in display_body.lines() {
                             let trimmed = line.trim();
                             if trimmed.starts_with("# ") {
@@ -222,21 +226,21 @@ impl WarRoomApp {
                                 ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("## ").trim()).font(display_font(15.0)).color(primary)).wrap(true));
                             } else if trimmed.starts_with("### ") {
                                 ui.add_space(5.0);
-                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("### ").trim()).color(white).strong().size(13.5)).wrap(true));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("### ").trim()).color(white).strong().size(ui_size(13.5))).wrap(true));
                             } else if trimmed.starts_with("#### ") {
                                 ui.add_space(4.0);
-                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("#### ").trim()).color(primary).strong().size(12.5)).wrap(true));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed.trim_start_matches("#### ").trim()).color(primary).strong().size(ui_size(12.5))).wrap(true));
                             } else if trimmed.starts_with("* ") || trimmed.starts_with("- ") {
                                 let bullet = trimmed[2..].trim();
                                 ui.add(egui::Label::new(
-                                    egui::RichText::new(format!("  •  {}", bullet)).color(white).size(12.0)
+                                    egui::RichText::new(format!("  •  {}", bullet)).color(white).size(ui_size(12.0))
                                 ).wrap(true));
                             } else if trimmed.is_empty() {
                                 ui.add_space(4.0);
                             } else if trimmed == "---" {
                                 ui.separator();
                             } else {
-                                ui.add(egui::Label::new(egui::RichText::new(trimmed).color(muted).size(12.0)).wrap(true));
+                                ui.add(egui::Label::new(egui::RichText::new(trimmed).color(muted).size(ui_size(12.0))).wrap(true));
                             }
                         }
                     });
@@ -246,9 +250,9 @@ impl WarRoomApp {
                 ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Installed Version: v{}", updater::CURRENT_VERSION)).color(muted).size(11.5));
+                    ui.label(egui::RichText::new(format!("Installed Version: v{}", updater::CURRENT_VERSION)).color(muted).size(ui_size(11.5)));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized(egui::vec2(90.0, 28.0), egui::Button::new(egui::RichText::new("Done").color(egui::Color32::BLACK).strong()).fill(primary)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Done").color(egui::Color32::BLACK).strong()).fill(primary).min_size(egui::vec2(84.0, btn_h))).clicked() {
                             self.show_release_notes_modal = false;
                             self.release_notes_custom_content = None;
                         }
@@ -258,7 +262,7 @@ impl WarRoomApp {
                             updater::UpdateStatus::UpdateAvailable(info) => {
                                 let info_clone = info.clone();
                                 let update_btn = egui::Button::new(
-                                    egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(12.0)
+                                    egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(ui_size(12.0))
                                 ).fill(primary);
                                 if ui.add(update_btn).clicked() {
                                     self.updater.trigger_download_and_install(&info_clone);
@@ -267,11 +271,11 @@ impl WarRoomApp {
                             updater::UpdateStatus::Downloading { percent, downloaded_bytes, total_bytes, .. } => {
                                 let mb_down = *downloaded_bytes as f32 / (1024.0 * 1024.0);
                                 let mb_tot = *total_bytes as f32 / (1024.0 * 1024.0);
-                                ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(12.0));
+                                ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(ui_size(12.0)));
                             }
                             updater::UpdateStatus::ReadyToRestart { .. } => {
                                 let restart_btn = egui::Button::new(
-                                    egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(12.0)
+                                    egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(ui_size(12.0))
                                 ).fill(self.settings.status_green());
                                 if ui.add(restart_btn).clicked() {
                                     if let Err(e) = updater::apply_update_and_restart() { self.updater.status = updater::UpdateStatus::Error(e); }
@@ -292,10 +296,11 @@ impl WarRoomApp {
         let white = self.settings.text_color();
         let muted = self.settings.text_muted();
         let elevated = self.settings.card_elevated_color();
+        let btn_h = self.settings.ui_btn_height(26.0);
 
         let screen_rect = ctx.screen_rect();
-        let win_w = 700.0f32.min(screen_rect.width() - 40.0);
-        let win_h = 580.0f32.min(screen_rect.height() - 40.0);
+        let win_w = (720.0 * self.settings.ui_col_scale()).min(screen_rect.width() - 40.0);
+        let win_h = (600.0 + self.settings.font_size_offset * 18.0).min(screen_rect.height() - 40.0);
         let mut is_open = self.show_settings_modal;
         let mut close_modal = false;
 
@@ -305,7 +310,7 @@ impl WarRoomApp {
             .fixed_size([win_w, win_h])
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .show(ctx, |ui| {
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     close_modal = true;
@@ -316,18 +321,20 @@ impl WarRoomApp {
                     ui.label(
                         egui::RichText::new("CONFIGURATION & PREFERENCES")
                             .color(muted)
-                            .size(11.0)
+                            .size(ui_size(11.0))
                             .extra_letter_spacing(0.8),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized(
-                            egui::vec2(76.0, 24.0),
+                        if ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Done ✓")
                                     .color(egui::Color32::BLACK)
                                     .strong()
-                                    .size(11.5),
-                            ).fill(primary).rounding(egui::Rounding::same(5.0)),
+                                    .size(ui_size(11.5)),
+                            )
+                            .fill(primary)
+                            .rounding(egui::Rounding::same(5.0))
+                            .min_size(egui::vec2(76.0, btn_h)),
                         ).clicked() {
                             close_modal = true;
                         }
@@ -353,7 +360,7 @@ impl WarRoomApp {
                         let btn = egui::Button::new(
                             egui::RichText::new(label)
                                 .color(if is_active { primary } else { white })
-                                .size(11.5)
+                                .size(ui_size(11.5))
                                 .strong(),
                         )
                         .fill(if is_active { with_alpha(primary, 40) } else { elevated })
@@ -373,12 +380,12 @@ impl WarRoomApp {
                 // MAIN CONTENT AREA: Vertical ScrollArea with explicit top_down layout
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .max_height(win_h - 130.0)
+                    .max_height((win_h - 135.0 - self.settings.font_size_offset * 4.0).max(260.0))
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             match self.settings_active_tab {
                                 SettingsTab::General => {
-                                    self.render_settings_general_tab(ui, primary, white, muted, elevated);
+                                    self.render_settings_general_tab(ui, ctx, primary, white, muted, elevated);
                                 }
                                 SettingsTab::Telemetry => {
                                     self.render_settings_telemetry_tab(ui, primary, secondary, white, muted, elevated);
@@ -410,17 +417,19 @@ impl WarRoomApp {
                     ui.label(
                         egui::RichText::new(format!("S4S Analyzer v{}", updater::CURRENT_VERSION))
                             .color(muted)
-                            .size(10.5),
+                            .size(ui_size(10.5)),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add_sized(
-                            egui::vec2(90.0, 26.0),
+                        if ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Save & Close")
                                     .color(egui::Color32::BLACK)
                                     .strong()
-                                    .size(11.5),
-                            ).fill(primary).rounding(egui::Rounding::same(5.0)),
+                                    .size(ui_size(11.5)),
+                            )
+                            .fill(primary)
+                            .rounding(egui::Rounding::same(5.0))
+                            .min_size(egui::vec2(96.0, btn_h)),
                         ).clicked() {
                             close_modal = true;
                         }
@@ -441,13 +450,48 @@ impl WarRoomApp {
     fn render_settings_general_tab(
         &mut self,
         ui: &mut egui::Ui,
+        ctx: &egui::Context,
         primary: egui::Color32,
         white: egui::Color32,
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
-        ui.label(egui::RichText::new("GENERAL & STARTUP CONFIGURATION").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.label(egui::RichText::new("GENERAL & STARTUP CONFIGURATION").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
+
+        // Section 0: Application Text Size (Small / Medium +3pt / Large +6pt)
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Application Text Size").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Scale all desktop workspace text, tables, and modals (In-Car HUD overlays keep their own independent HUD Scale):").color(muted).size(ui_size(11.0)));
+                ui.add_space(8.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    for preset in [TextSizePreset::Small, TextSizePreset::Medium, TextSizePreset::Large] {
+                        let is_sel = self.settings.text_size == preset;
+                        let btn = egui::Button::new(
+                            egui::RichText::new(preset.label())
+                                .color(if is_sel { egui::Color32::BLACK } else { white })
+                                .strong()
+                                .size(ui_size(12.0)),
+                        )
+                        .fill(if is_sel { primary } else { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10) })
+                        .stroke(if is_sel { egui::Stroke::new(1.0, primary) } else { egui::Stroke::NONE })
+                        .rounding(egui::Rounding::same(5.0))
+                        .min_size(egui::vec2(140.0, self.settings.ui_btn_height(28.0)));
+
+                        if ui.add(btn).clicked() {
+                            self.settings.set_text_size(preset);
+                            setup_custom_style(ctx, &self.settings);
+                        }
+                    }
+                });
+            });
+
+        ui.add_space(8.0);
 
         // Section 1: Default Startup View
         egui::Frame::none()
@@ -455,8 +499,8 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Default Startup Workspace").color(white).size(13.0).strong());
-                ui.label(egui::RichText::new("Choose which screen opens automatically when the application launches:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Default Startup Workspace").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Choose which screen opens automatically when the application launches:").color(muted).size(ui_size(11.0)));
                 ui.add_space(8.0);
 
                 let views = [
@@ -471,18 +515,18 @@ impl WarRoomApp {
                         egui::RichText::new(label)
                             .color(if is_sel { primary } else { white })
                             .strong()
-                            .size(12.0),
+                            .size(ui_size(12.0)),
                     )
                     .fill(if is_sel { with_alpha(primary, 35) } else { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 6) })
                     .stroke(if is_sel { egui::Stroke::new(1.0, primary) } else { egui::Stroke::NONE })
                     .rounding(egui::Rounding::same(5.0));
 
-                    if ui.add_sized(egui::vec2(ui.available_width(), 28.0), btn).clicked() {
+                    if ui.add_sized(egui::vec2(ui.available_width(), self.settings.ui_btn_height(28.0)), btn).clicked() {
                         self.settings.default_startup_view = mode;
                         self.settings.view_mode = mode;
                         self.settings.save();
                     }
-                    ui.label(egui::RichText::new(desc).color(muted).size(10.5));
+                    ui.label(egui::RichText::new(desc).color(muted).size(ui_size(10.5)));
                     ui.add_space(6.0);
                 }
             });
@@ -495,11 +539,11 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Measurement Units").color(white).size(13.0).strong());
-                ui.label(egui::RichText::new("Select imperial or metric units across HUD, telemetry, and tables:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Measurement Units").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Select imperial or metric units across HUD, telemetry, and tables:").color(muted).size(ui_size(11.0)));
                 ui.add_space(8.0);
 
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.selectable_label(!self.settings.use_metric, "🇺🇸 Imperial (mph, °F, gal, psi)").clicked() {
                         self.settings.use_metric = false;
                         self.settings.save();
@@ -520,8 +564,8 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Grid & Screen Layout Presets").color(white).size(13.0).strong());
-                ui.label(egui::RichText::new("Quickly configure column sets and card layouts for your current racing discipline:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Grid & Screen Layout Presets").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Quickly configure column sets and card layouts for your current racing discipline:").color(muted).size(ui_size(11.0)));
                 ui.add_space(8.0);
 
                 ui.horizontal_wrapped(|ui| {
@@ -550,7 +594,7 @@ impl WarRoomApp {
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
-        ui.label(egui::RichText::new("OFFLINE .IBT TELEMETRY CUSTOMIZATION").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.label(egui::RichText::new("OFFLINE .IBT TELEMETRY CUSTOMIZATION").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
 
         // Card 1: Comparison Line Rendering (User Request: "opposing or compare lines different colors rather than a shaded version")
@@ -559,8 +603,8 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Comparison & Opposing Lap Style (Lap B)").color(white).size(13.0).strong());
-                ui.label(egui::RichText::new("Choose how reference / comparison laps are rendered alongside primary Lap A traces:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Comparison & Opposing Lap Style (Lap B)").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Choose how reference / comparison laps are rendered alongside primary Lap A traces:").color(muted).size(ui_size(11.0)));
                 ui.add_space(8.0);
 
                 let mut style_changed = false;
@@ -569,19 +613,19 @@ impl WarRoomApp {
                     if ui.radio_value(&mut self.settings.telemetry.compare_style, CompareLineStyle::DistinctColor, "🎨 Distinct High-Contrast Colors (Recommended)").changed() {
                         style_changed = true;
                     }
-                    ui.label(egui::RichText::new("    Uses distinct vibrant colors for Lap B channels (e.g. Cyan/Amber vs Primary) for maximum visibility.").color(muted).size(10.5));
+                    ui.label(egui::RichText::new("    Uses distinct vibrant colors for Lap B channels (e.g. Cyan/Amber vs Primary) for maximum visibility.").color(muted).size(ui_size(10.5)));
                     ui.add_space(4.0);
 
                     if ui.radio_value(&mut self.settings.telemetry.compare_style, CompareLineStyle::DashedLine, "--- Dashed Reference Line").changed() {
                         style_changed = true;
                     }
-                    ui.label(egui::RichText::new("    Renders Lap B with a high-contrast dashed line stroke, making trace shapes instantly distinguishable even on overlapping lines.").color(muted).size(10.5));
+                    ui.label(egui::RichText::new("    Renders Lap B with a high-contrast dashed line stroke, making trace shapes instantly distinguishable even on overlapping lines.").color(muted).size(ui_size(10.5)));
                     ui.add_space(4.0);
 
                     if ui.radio_value(&mut self.settings.telemetry.compare_style, CompareLineStyle::ShadedAlpha, "~ Shaded Semi-Transparent (Legacy)").changed() {
                         style_changed = true;
                     }
-                    ui.label(egui::RichText::new("    Renders Lap B with semi-transparent alpha shading of Lap A's color.").color(muted).size(10.5));
+                    ui.label(egui::RichText::new("    Renders Lap B with semi-transparent alpha shading of Lap A's color.").color(muted).size(ui_size(10.5)));
                 });
 
                 if style_changed {
@@ -598,15 +642,15 @@ impl WarRoomApp {
             .inner_margin(12.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Telemetry Trace Channel Colors").color(white).size(13.0).strong());
+                    ui.label(egui::RichText::new("Telemetry Trace Channel Colors").color(white).size(ui_size(13.0)).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Reset to Defaults").color(muted).size(11.0)).fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10))).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Reset to Defaults").color(muted).size(ui_size(11.0))).fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10))).clicked() {
                             self.settings.telemetry.trace_colors = TelemetryTraceColors::default();
                             self.settings.save();
                         }
                     });
                 });
-                ui.label(egui::RichText::new("Click any color swatch to open the interactive color picker wheel:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Click any color swatch to open the interactive color picker wheel:").color(muted).size(ui_size(11.0)));
                 ui.add_space(8.0);
 
                 let mut color_changed = false;
@@ -614,7 +658,7 @@ impl WarRoomApp {
                 ui.columns(2, |cols| {
                     // Column 1: Lap A (Primary)
                     cols[0].vertical(|ui| {
-                        ui.label(egui::RichText::new("PRIMARY SESSION (LAP A)").color(primary).size(11.0).strong());
+                        ui.label(egui::RichText::new("PRIMARY SESSION (LAP A)").color(primary).size(ui_size(11.0)).strong());
                         ui.add_space(4.0);
 
                         color_changed |= render_color_picker_row(ui, "Speed / Base", &mut self.settings.telemetry.trace_colors.lap_a_primary, "Vehicle speed & base accent", white);
@@ -625,7 +669,7 @@ impl WarRoomApp {
 
                     // Column 2: Lap B (Comparison / Opposing Lap)
                     cols[1].vertical(|ui| {
-                        ui.label(egui::RichText::new("REFERENCE SESSION (LAP B)").color(secondary).size(11.0).strong());
+                        ui.label(egui::RichText::new("REFERENCE SESSION (LAP B)").color(secondary).size(ui_size(11.0)).strong());
                         ui.add_space(4.0);
 
                         color_changed |= render_color_picker_row(ui, "Speed (Ref)", &mut self.settings.telemetry.trace_colors.lap_b_reference, "Reference comparison speed", white);
@@ -651,12 +695,12 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Display Tuning & Performance").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Display Tuning & Performance").color(white).size(ui_size(13.0)).strong());
                 ui.add_space(6.0);
 
                 let mut tuning_changed = false;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Trace Line Thickness:").color(muted).size(11.5));
+                    ui.label(egui::RichText::new("Trace Line Thickness:").color(muted).size(ui_size(11.5)));
                     if ui.add(egui::Slider::new(&mut self.settings.telemetry.trace_stroke_width, 1.0..=4.0).suffix(" px")).changed() {
                         tuning_changed = true;
                     }
@@ -679,14 +723,14 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Telemetry Storage & Folders").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Telemetry Storage & Folders").color(white).size(ui_size(13.0)).strong());
                 ui.add_space(6.0);
 
                 if ui.checkbox(&mut self.settings.telemetry.include_subfolders, "Scan subfolders recursively in telemetry directory").changed() {
                     self.ibt_lab.include_subfolders = self.settings.telemetry.include_subfolders;
                     self.settings.save();
                 }
-                ui.label(egui::RichText::new("Sessions in subfolders (e.g. Telemetry/Sebring/session.ibt) automatically appear with folder tags.").color(muted).size(10.5));
+                ui.label(egui::RichText::new("Sessions in subfolders (e.g. Telemetry/Sebring/session.ibt) automatically appear with folder tags.").color(muted).size(ui_size(10.5)));
             });
     }
 
@@ -697,7 +741,7 @@ impl WarRoomApp {
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
-        ui.label(egui::RichText::new("IN-CAR OVERLAY & HUD MODULES").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.label(egui::RichText::new("IN-CAR OVERLAY & HUD MODULES").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
 
         egui::Frame::none()
@@ -705,10 +749,10 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("HUD Behavior & Visibility").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("HUD Behavior & Visibility").color(white).size(ui_size(13.0)).strong());
                 ui.add_space(6.0);
 
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.checkbox(&mut self.settings.overlay.enabled, "Auto-show overlay in car").changed() {
                         self.settings.save();
                     }
@@ -722,7 +766,7 @@ impl WarRoomApp {
                 });
 
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("Visible HUD Sections:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Visible HUD Sections:").color(muted).size(ui_size(11.0)));
                 ui.horizontal_wrapped(|ui| {
                     if ui.checkbox(&mut self.settings.overlay.show_pace_card, "Pace & Stint").changed() {
                         self.settings.save();
@@ -739,7 +783,7 @@ impl WarRoomApp {
                 });
 
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new("Primary Fuel Stat:").color(muted));
                     let is_fuel_amount = self.settings.overlay.fuel_hero_metric == FuelHeroMetric::FuelAmount;
                     if ui.selectable_label(is_fuel_amount, "Fuel in Tank (Gallons / L)").clicked() {
@@ -760,7 +804,7 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Scale & Visual Opacity").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Scale & Visual Opacity").color(white).size(ui_size(13.0)).strong());
                 ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
@@ -799,7 +843,7 @@ impl WarRoomApp {
                     };
                     ui.label(egui::RichText::new(pos_str).color(white));
                     if self.settings.overlay.position.is_some() {
-                        if ui.add(egui::Button::new(egui::RichText::new("Reset Position").color(muted).size(11.5)).fill(elevated)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Reset Position").color(muted).size(ui_size(11.5))).fill(elevated)).clicked() {
                             self.settings.overlay.position = None;
                             self.settings.save();
                         }
@@ -815,7 +859,7 @@ impl WarRoomApp {
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
-        ui.label(egui::RichText::new("POST-PIT 4-CORNER TIRE POPUP OVERLAY").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.label(egui::RichText::new("POST-PIT 4-CORNER TIRE POPUP OVERLAY").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
 
         egui::Frame::none()
@@ -823,7 +867,7 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Tire Card Triggers & Timings").color(white).size(13.0).strong());
+                ui.label(egui::RichText::new("Tire Card Triggers & Timings").color(white).size(ui_size(13.0)).strong());
                 ui.add_space(6.0);
 
                 ui.horizontal_wrapped(|ui| {
@@ -876,7 +920,7 @@ impl WarRoomApp {
                     };
                     ui.label(egui::RichText::new(tire_pos_str).color(white));
                     if self.settings.tire_popup_overlay.position.is_some() {
-                        if ui.add(egui::Button::new(egui::RichText::new("Reset Position").color(muted).size(11.5)).fill(elevated)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Reset Position").color(muted).size(ui_size(11.5))).fill(elevated)).clicked() {
                             self.settings.tire_popup_overlay.position = None;
                             self.settings.save();
                         }
@@ -893,7 +937,7 @@ impl WarRoomApp {
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
-        ui.label(egui::RichText::new("GRID COLUMNS & ROLLING AVERAGES").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.label(egui::RichText::new("GRID COLUMNS & ROLLING AVERAGES").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
 
         egui::Frame::none()
@@ -901,8 +945,8 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Visible Table Columns").color(white).size(13.0).strong());
-                ui.label(egui::RichText::new("Toggle which metrics appear in the standings and stint tables:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Visible Table Columns").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Toggle which metrics appear in the standings and stint tables:").color(muted).size(ui_size(11.0)));
                 ui.add_space(8.0);
 
                 egui::Grid::new("column_grid").num_columns(3).spacing([24.0, 8.0]).show(ui, |ui| {
@@ -933,8 +977,8 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.label(egui::RichText::new("Rolling Lap Average Buckets").color(white).size(13.0).strong());
-                ui.label(egui::RichText::new("Select which lap intervals to compute rolling averages for:").color(muted).size(11.0));
+                ui.label(egui::RichText::new("Rolling Lap Average Buckets").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Select which lap intervals to compute rolling averages for:").color(muted).size(ui_size(11.0)));
                 ui.add_space(8.0);
 
                 let mut to_toggle: Option<usize> = None;
@@ -950,7 +994,7 @@ impl WarRoomApp {
                         let chip_btn = egui::Button::new(
                             egui::RichText::new(chip_text)
                                 .color(if is_active { egui::Color32::WHITE } else { muted })
-                                .size(11.5)
+                                .size(ui_size(11.5))
                         )
                         .fill(if is_active { with_alpha(secondary, 180) } else { elevated })
                         .rounding(egui::Rounding::same(5.0));
@@ -973,11 +1017,11 @@ impl WarRoomApp {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Custom bucket:").size(11.5).color(muted));
-                    let edit = ui.add(egui::TextEdit::singleline(&mut self.custom_bucket_input).desired_width(50.0).hint_text("e.g. 12"));
+                    ui.label(egui::RichText::new("Custom bucket:").size(ui_size(11.5)).color(muted));
+                    let edit = ui.add(egui::TextEdit::singleline(&mut self.custom_bucket_input).desired_width(58.0).hint_text("e.g. 12"));
                     let enter_pressed = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
-                    if ui.add(egui::Button::new(egui::RichText::new("+ Add").color(white).size(11.5)).fill(elevated)).clicked() || enter_pressed {
+                    if ui.add(egui::Button::new(egui::RichText::new("+ Add").color(white).size(ui_size(11.5))).fill(elevated)).clicked() || enter_pressed {
                         if let Ok(num) = self.custom_bucket_input.trim().parse::<usize>() {
                             if num > 0 && num <= 500 {
                                 if !self.settings.custom_avg_buckets.contains(&num) {
@@ -996,7 +1040,7 @@ impl WarRoomApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.add(
-                            egui::Button::new(egui::RichText::new("Reset defaults").color(muted).size(11.0))
+                            egui::Button::new(egui::RichText::new("Reset defaults").color(muted).size(ui_size(11.0)))
                                 .fill(elevated)
                         ).clicked() {
                             self.settings.custom_avg_buckets = vec![5, 10, 15, 20, 25, 30, 35, 40, 50, 60];
@@ -1018,8 +1062,42 @@ impl WarRoomApp {
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
-        ui.label(egui::RichText::new("APPEARANCE & COLOR THEMES").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.label(egui::RichText::new("APPEARANCE, TEXT SIZE & COLOR THEMES").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
+
+        // Quick Text Size card inside Appearance / Themes tab as well
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Application Text Size").color(white).size(ui_size(13.0)).strong());
+                ui.label(egui::RichText::new("Scale all desktop text and table rows (Small = Default, Medium = +3 pt, Large = +6 pt):").color(muted).size(ui_size(11.0)));
+                ui.add_space(8.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    for preset in [TextSizePreset::Small, TextSizePreset::Medium, TextSizePreset::Large] {
+                        let is_sel = self.settings.text_size == preset;
+                        let btn = egui::Button::new(
+                            egui::RichText::new(preset.label())
+                                .color(if is_sel { egui::Color32::BLACK } else { white })
+                                .strong()
+                                .size(ui_size(12.0)),
+                        )
+                        .fill(if is_sel { primary } else { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10) })
+                        .stroke(if is_sel { egui::Stroke::new(1.0, primary) } else { egui::Stroke::NONE })
+                        .rounding(egui::Rounding::same(5.0))
+                        .min_size(egui::vec2(140.0, self.settings.ui_btn_height(28.0)));
+
+                        if ui.add(btn).clicked() {
+                            self.settings.set_text_size(preset);
+                            setup_custom_style(ctx, &self.settings);
+                        }
+                    }
+                });
+            });
+
+        ui.add_space(8.0);
 
         let themes = [
             (
@@ -1064,12 +1142,12 @@ impl WarRoomApp {
                         painter.circle_filled(egui::pos2(r.min.x + 12.0, r.center().y), 5.0, col1);
                         painter.circle_filled(egui::pos2(r.min.x + 28.0, r.center().y), 5.0, col2);
 
-                        ui.label(egui::RichText::new(title).color(if is_sel { primary } else { white }).size(12.5).strong());
+                        ui.label(egui::RichText::new(title).color(if is_sel { primary } else { white }).size(ui_size(12.5)).strong());
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if is_sel {
-                                ui.label(egui::RichText::new("Active ✓").color(primary).strong().size(11.5));
-                            } else if ui.add(egui::Button::new(egui::RichText::new("Select").color(white).size(11.0)).fill(elevated)).clicked() {
+                                ui.label(egui::RichText::new("Active ✓").color(primary).strong().size(ui_size(11.5)));
+                            } else if ui.add(egui::Button::new(egui::RichText::new("Select").color(white).size(ui_size(11.0))).fill(elevated)).clicked() {
                                 self.settings.theme = preset;
                                 self.settings.save();
                                 setup_custom_style(ctx, &self.settings);
@@ -1078,7 +1156,7 @@ impl WarRoomApp {
                         });
                     });
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new(desc).color(muted).size(10.5));
+                    ui.label(egui::RichText::new(desc).color(muted).size(ui_size(10.5)));
                 });
             ui.add_space(6.0);
         }
@@ -1092,7 +1170,7 @@ impl WarRoomApp {
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
-        ui.label(egui::RichText::new("UPDATES & RELEASE CHANNEL").color(muted).size(11.0).extra_letter_spacing(0.8));
+        ui.label(egui::RichText::new("UPDATES & RELEASE CHANNEL").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
 
         egui::Frame::none()
@@ -1102,14 +1180,14 @@ impl WarRoomApp {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let version_label = format!("Installed Version: v{}", updater::CURRENT_VERSION);
-                    ui.label(egui::RichText::new(version_label).color(white).size(13.0).strong());
+                    ui.label(egui::RichText::new(version_label).color(white).size(ui_size(13.0)).strong());
                     if settings::is_beta_mode() {
                         egui::Frame::none()
                             .fill(egui::Color32::from_rgb(110, 45, 160))
                             .rounding(egui::Rounding::same(4.0))
                             .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                             .show(ui, |ui| {
-                                ui.label(egui::RichText::new("BETA / STAGING").size(10.5).color(egui::Color32::WHITE).strong());
+                                ui.label(egui::RichText::new("BETA / STAGING").size(ui_size(10.5)).color(egui::Color32::WHITE).strong());
                             });
                     }
                 });
@@ -1123,14 +1201,14 @@ impl WarRoomApp {
                 }
 
                 ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    let check_btn = egui::Button::new(egui::RichText::new("Check for Updates Now").color(white).size(11.5))
+                ui.horizontal_wrapped(|ui| {
+                    let check_btn = egui::Button::new(egui::RichText::new("Check for Updates Now").color(white).size(ui_size(11.5)))
                         .fill(elevated);
                     if ui.add(check_btn).clicked() {
                         self.updater.trigger_check(self.settings.updates.include_prereleases);
                     }
 
-                    if ui.add(egui::Button::new(egui::RichText::new("📖 What's New / Notes").color(white).size(11.5)).fill(elevated)).clicked() {
+                    if ui.add(egui::Button::new(egui::RichText::new("📖 What's New / Notes").color(white).size(ui_size(11.5))).fill(elevated)).clicked() {
                         self.show_release_notes_modal = true;
                     }
 
@@ -1139,34 +1217,34 @@ impl WarRoomApp {
                         updater::UpdateStatus::Idle => {},
                         updater::UpdateStatus::Checking => {
                             ui.spinner();
-                            ui.label(egui::RichText::new("Checking GitHub Releases...").color(muted).size(11.5));
+                            ui.label(egui::RichText::new("Checking GitHub Releases...").color(muted).size(ui_size(11.5)));
                         },
                         updater::UpdateStatus::UpToDate => {
-                            ui.label(egui::RichText::new("✓ Up to date").color(egui::Color32::from_rgb(75, 225, 110)).size(11.5));
+                            ui.label(egui::RichText::new("✓ Up to date").color(egui::Color32::from_rgb(75, 225, 110)).size(ui_size(11.5)));
                         },
                         updater::UpdateStatus::UpdateAvailable(info) => {
                             let text = format!("Update {} available!", info.tag_name);
-                            ui.label(egui::RichText::new(text).color(primary).strong().size(11.5));
+                            ui.label(egui::RichText::new(text).color(primary).strong().size(ui_size(11.5)));
                             let info_clone = info.clone();
-                            if ui.add(egui::Button::new(egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(11.5)).fill(primary)).clicked() {
+                            if ui.add(egui::Button::new(egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(ui_size(11.5))).fill(primary)).clicked() {
                                 self.updater.trigger_download_and_install(&info_clone);
                             }
-                            if ui.add(egui::Button::new(egui::RichText::new("View Release ↗").color(white).size(11.5)).fill(elevated)).clicked() {
+                            if ui.add(egui::Button::new(egui::RichText::new("View Release ↗").color(white).size(ui_size(11.5))).fill(elevated)).clicked() {
                                 updater::open_browser(&info.html_url);
                             }
                         },
                         updater::UpdateStatus::Downloading { percent, downloaded_bytes, total_bytes, .. } => {
                             let mb_down = *downloaded_bytes as f32 / (1024.0 * 1024.0);
                             let mb_tot = *total_bytes as f32 / (1024.0 * 1024.0);
-                            ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(11.5));
+                            ui.label(egui::RichText::new(format!("Downloading: {:.0}% ({:.1}/{:.1} MB)", percent, mb_down, mb_tot)).color(primary).size(ui_size(11.5)));
                         },
                         updater::UpdateStatus::ReadyToRestart { .. } => {
-                            if ui.add(egui::Button::new(egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(11.5)).fill(self.settings.status_green())).clicked() {
+                            if ui.add(egui::Button::new(egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(ui_size(11.5))).fill(self.settings.status_green())).clicked() {
                                 if let Err(e) = updater::apply_update_and_restart() { self.updater.status = updater::UpdateStatus::Error(e); }
                             }
                         },
                         updater::UpdateStatus::Error(err) => {
-                            ui.label(egui::RichText::new(format!("⚠ {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(11.0));
+                            ui.label(egui::RichText::new(format!("⚠ {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(ui_size(11.0)));
                         }
                     }
                 });
@@ -1188,6 +1266,10 @@ impl WarRoomApp {
         let is_metric = self.settings.use_metric;
         let fuel_conv = if is_metric { 1.0 } else { 0.264172 };
         let fuel_unit_str = if is_metric { "L" } else { "gal" };
+        let col_scale = self.settings.ui_col_scale();
+        let btn_h = self.settings.ui_btn_height(26.0);
+        let tbl_hdr_h = self.settings.ui_row_height(28.0);
+        let tbl_row_h = self.settings.ui_row_height(34.0);
 
         let has_real_track = is_real_track_name(&s.track_name);
         let filter_current_track = self.stint_db_filter_current_track && has_real_track;
@@ -1200,8 +1282,8 @@ impl WarRoomApp {
         };
 
         let screen_rect = ctx.screen_rect();
-        let win_w = (screen_rect.width() * 0.92).clamp(1240.0, 1600.0);
-        let win_h = (screen_rect.height() * 0.85).clamp(560.0, 920.0);
+        let win_w = (screen_rect.width() * 0.92).clamp(1100.0, 1680.0);
+        let win_h = (screen_rect.height() * 0.85).clamp(560.0, 960.0);
 
         let mut is_open = self.show_stint_db_modal;
         let mut close_modal = false;
@@ -1217,7 +1299,7 @@ impl WarRoomApp {
             .id(egui::Id::new("stint_database_modal_window_v4"))
             .open(&mut is_open)
             .default_size([win_w, win_h])
-            .min_width(1200.0)
+            .min_width(980.0)
             .min_height(520.0)
             .default_pos([screen_rect.min.x + 30.0, screen_rect.min.y + 40.0])
             .collapsible(false)
@@ -1227,17 +1309,24 @@ impl WarRoomApp {
                     close_modal = true;
                 }
 
-                // Top Filter & Action Bar
+                // Top Filter & Action Bar — responsive so buttons wrap cleanly onto Row 2 when font size is Medium/Large or window is narrower
+                let single_row_fits = ui.available_width() >= 1320.0 * col_scale;
+                let mut click_open_folder = false;
+                let mut click_sync_folder = false;
+                let mut click_import_file = false;
+                let mut click_paste_clipboard = false;
+
                 ui.horizontal(|ui| {
                     if has_real_track {
                         let cur_btn = egui::Button::new(
                             egui::RichText::new(format!("🏁 Current Track ({})", current_track_count))
                                 .color(if filter_current_track { egui::Color32::WHITE } else { muted })
-                                .size(12.0)
+                                .size(ui_size(12.0))
                                 .strong(),
                         )
                         .fill(if filter_current_track { with_alpha(primary, 190) } else { elevated })
-                        .rounding(egui::Rounding::same(6.0));
+                        .rounding(egui::Rounding::same(6.0))
+                        .min_size(egui::vec2(0.0, btn_h));
                         if ui
                             .add(cur_btn)
                             .on_hover_text(format!("Show saved stints matching {}", s.track_name))
@@ -1250,11 +1339,12 @@ impl WarRoomApp {
                     let all_btn = egui::Button::new(
                         egui::RichText::new(format!("🌎 All Saved Stints ({})", total_saved))
                             .color(if !filter_current_track { egui::Color32::WHITE } else { muted })
-                            .size(12.0)
+                            .size(ui_size(12.0))
                             .strong(),
                     )
                     .fill(if !filter_current_track { with_alpha(secondary, 190) } else { elevated })
-                    .rounding(egui::Rounding::same(6.0));
+                    .rounding(egui::Rounding::same(6.0))
+                    .min_size(egui::vec2(0.0, btn_h));
                     if ui.add(all_btn).clicked() {
                         self.stint_db_filter_current_track = false;
                     }
@@ -1263,15 +1353,15 @@ impl WarRoomApp {
                     ui.separator();
                     ui.add_space(6.0);
 
-                    ui.label(egui::RichText::new("SEARCH").color(muted).size(11.0).extra_letter_spacing(0.8));
+                    ui.label(egui::RichText::new("SEARCH").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.stint_db_search_query)
                             .hint_text("Track, Car, Setup, Driver, Notes...")
-                            .desired_width(210.0),
+                            .desired_width(200.0 * col_scale),
                     );
                     if !self.stint_db_search_query.is_empty() {
                         if ui
-                            .add(egui::Button::new(egui::RichText::new("Clear").color(muted).size(11.0)).frame(false))
+                            .add(egui::Button::new(egui::RichText::new("Clear").color(muted).size(ui_size(11.0))).frame(false))
                             .clicked()
                         {
                             self.stint_db_search_query.clear();
@@ -1280,69 +1370,101 @@ impl WarRoomApp {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .add_sized(
-                                egui::vec2(72.0, 26.0),
-                                egui::Button::new(egui::RichText::new("× Close").color(white).size(12.0)).fill(elevated),
+                            .add(
+                                egui::Button::new(egui::RichText::new("× Close").color(white).size(ui_size(12.0)))
+                                    .fill(elevated)
+                                    .min_size(egui::vec2(0.0, btn_h)),
                             )
                             .clicked()
                         {
                             close_modal = true;
                         }
 
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("📂 Open Stints Folder").color(white).size(11.5))
-                                    .fill(elevated)
-                                    .rounding(egui::Rounding::same(6.0)),
-                            )
-                            .on_hover_text("Open the local .s4s.json stints folder in Windows Explorer to share or drop stint files")
-                            .clicked()
-                        {
-                            let folder = self.stint_db.stints_folder_path();
-                            let _ = std::fs::create_dir_all(&folder);
-                            stint_db::open_folder_in_explorer(&folder);
-                        }
+                        if single_row_fits {
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new("📂 Open Stints Folder").color(white).size(ui_size(11.5)))
+                                        .fill(elevated)
+                                        .rounding(egui::Rounding::same(6.0))
+                                        .min_size(egui::vec2(0.0, btn_h)),
+                                )
+                                .on_hover_text("Open the local .s4s.json stints folder in Windows Explorer to share or drop stint files")
+                                .clicked()
+                            {
+                                click_open_folder = true;
+                            }
 
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("🔄 Sync Folder").color(white).size(11.5))
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new("🔄 Sync Folder").color(white).size(ui_size(11.5)))
+                                        .fill(elevated)
+                                        .rounding(egui::Rounding::same(6.0))
+                                        .min_size(egui::vec2(0.0, btn_h)),
+                                )
+                                .on_hover_text("Scan the stints folder for any new .s4s.json stint files dropped from teammates")
+                                .clicked()
+                            {
+                                click_sync_folder = true;
+                            }
+
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("📥 Import Stint File...")
+                                            .color(egui::Color32::BLACK)
+                                            .size(ui_size(11.5))
+                                            .strong(),
+                                    )
+                                    .fill(primary)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h)),
+                                )
+                                .on_hover_text("Open file picker to import a teammate's .s4s.json stint file and load it into your session")
+                                .clicked()
+                            {
+                                click_import_file = true;
+                            }
+
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("📋 Paste from Clipboard")
+                                            .color(white)
+                                            .size(ui_size(11.5)),
+                                    )
                                     .fill(elevated)
-                                    .rounding(egui::Rounding::same(6.0)),
-                            )
-                            .on_hover_text("Scan the stints folder for any new .s4s.json stint files dropped from teammates")
-                            .clicked()
-                        {
-                            let added = self.stint_db.scan_stints_folder();
-                            if added > 0 {
-                                self.toast_message = Some((
-                                    format!("📂 Imported {} new stint file(s) from folder!", added),
-                                    std::time::Instant::now(),
-                                ));
-                            } else {
-                                self.toast_message = Some((
-                                    "📂 Stints folder is up to date.".to_string(),
-                                    std::time::Instant::now(),
-                                ));
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h)),
+                                )
+                                .on_hover_text("Import a stint from clipboard: supports files copied in Windows Explorer (.s4s.json) or text share codes")
+                                .clicked()
+                            {
+                                click_paste_clipboard = true;
                             }
                         }
+                    });
+                });
 
+                if !single_row_fits {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
                         if ui
                             .add(
                                 egui::Button::new(
                                     egui::RichText::new("📥 Import Stint File...")
                                         .color(egui::Color32::BLACK)
-                                        .size(11.5)
+                                        .size(ui_size(11.5))
                                         .strong(),
                                 )
                                 .fill(primary)
-                                .rounding(egui::Rounding::same(6.0)),
+                                .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h)),
                             )
                             .on_hover_text("Open file picker to import a teammate's .s4s.json stint file and load it into your session")
                             .clicked()
                         {
-                            if let Some(path) = stint_db::pick_open_stint_file_dialog() {
-                                action_import_file = Some(path);
-                            }
+                            click_import_file = true;
                         }
 
                         if ui
@@ -1350,34 +1472,89 @@ impl WarRoomApp {
                                 egui::Button::new(
                                     egui::RichText::new("📋 Paste from Clipboard")
                                         .color(white)
-                                        .size(11.5),
+                                        .size(ui_size(11.5)),
                                 )
                                 .fill(elevated)
-                                .rounding(egui::Rounding::same(6.0)),
+                                .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h)),
                             )
                             .on_hover_text("Import a stint from clipboard: supports files copied in Windows Explorer (.s4s.json) or text share codes")
                             .clicked()
                         {
-                            let clip_files = stint_db::read_clipboard_file_paths();
-                            if let Some(first_file) = clip_files.first() {
-                                action_import_file = Some(first_file.clone());
-                            } else {
-                                match stint_db::read_clipboard_text().and_then(|raw| stint_db::import_from_str(&raw)) {
-                                    Ok(rec) => {
-                                        self.stint_db.upsert_stint(rec.clone());
-                                        action_reimport = Some(rec);
-                                    }
-                                    Err(err) => {
-                                        self.toast_message = Some((
-                                            format!("⚠ Clipboard import failed: {}", err),
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                }
-                            }
+                            click_paste_clipboard = true;
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("🔄 Sync Folder").color(white).size(ui_size(11.5)))
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h)),
+                            )
+                            .on_hover_text("Scan the stints folder for any new .s4s.json stint files dropped from teammates")
+                            .clicked()
+                        {
+                            click_sync_folder = true;
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("📂 Open Stints Folder").color(white).size(ui_size(11.5)))
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h)),
+                            )
+                            .on_hover_text("Open the local .s4s.json stints folder in Windows Explorer to share or drop stint files")
+                            .clicked()
+                        {
+                            click_open_folder = true;
                         }
                     });
-                });
+                }
+
+                if click_open_folder {
+                    let folder = self.stint_db.stints_folder_path();
+                    let _ = std::fs::create_dir_all(&folder);
+                    stint_db::open_folder_in_explorer(&folder);
+                }
+                if click_sync_folder {
+                    let added = self.stint_db.scan_stints_folder();
+                    if added > 0 {
+                        self.toast_message = Some((
+                            format!("📂 Imported {} new stint file(s) from folder!", added),
+                            std::time::Instant::now(),
+                        ));
+                    } else {
+                        self.toast_message = Some((
+                            "📂 Stints folder is up to date.".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
+                if click_import_file {
+                    if let Some(path) = stint_db::pick_open_stint_file_dialog() {
+                        action_import_file = Some(path);
+                    }
+                }
+                if click_paste_clipboard {
+                    let clip_files = stint_db::read_clipboard_file_paths();
+                    if let Some(first_file) = clip_files.first() {
+                        action_import_file = Some(first_file.clone());
+                    } else {
+                        match stint_db::read_clipboard_text().and_then(|raw| stint_db::import_from_str(&raw)) {
+                            Ok(rec) => {
+                                self.stint_db.upsert_stint(rec.clone());
+                                action_reimport = Some(rec);
+                            }
+                            Err(err) => {
+                                self.toast_message = Some((
+                                    format!("⚠ Clipboard import failed: {}", err),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
+                    }
+                }
 
                 ui.add_space(6.0);
 
@@ -1394,14 +1571,14 @@ impl WarRoomApp {
                                 egui::RichText::new("💾 Auto-Save Active:")
                                     .color(green)
                                     .strong()
-                                    .size(11.5),
+                                    .size(ui_size(11.5)),
                             );
                             ui.label(
                                 egui::RichText::new(
                                     "Completed stints (1+ laps) are automatically saved locally with lap times, fuel burn, pit tire wear/temps, and setup. Click '📎 Share File' on any stint to copy the .s4s.json file to your clipboard (press Ctrl+V in Discord to attach), or click '📥 Import Stint File...' to load a teammate's stint directly.",
                                 )
                                 .color(muted)
-                                .size(11.5),
+                                .size(ui_size(11.5)),
                             );
                         });
                     });
@@ -1447,7 +1624,7 @@ impl WarRoomApp {
                                         ))
                                         .color(white)
                                         .strong()
-                                        .size(14.0),
+                                        .size(ui_size(14.0)),
                                     );
                                     ui.add_space(6.0);
                                     ui.label(
@@ -1455,7 +1632,7 @@ impl WarRoomApp {
                                             "Complete at least 1 green-flag lap on track to auto-save your first stint here, or switch to 'All Saved Stints'.",
                                         )
                                         .color(muted)
-                                        .size(12.0),
+                                        .size(ui_size(12.0)),
                                     );
                                     if total_saved > 0 {
                                         ui.add_space(10.0);
@@ -1467,7 +1644,7 @@ impl WarRoomApp {
                                                         total_saved
                                                     ))
                                                     .color(white)
-                                                    .size(12.0),
+                                                    .size(ui_size(12.0)),
                                                 )
                                                 .fill(with_alpha(secondary, 160)),
                                             )
@@ -1481,7 +1658,7 @@ impl WarRoomApp {
                                         egui::RichText::new("No saved stints match your filter yet.")
                                             .color(white)
                                             .strong()
-                                            .size(14.0),
+                                            .size(ui_size(14.0)),
                                     );
                                     ui.add_space(6.0);
                                     ui.label(
@@ -1489,7 +1666,7 @@ impl WarRoomApp {
                                             "Complete laps in iRacing (auto-saved automatically), click '📎 Share Stint File' on any stint in Stint Analyzer, or click '📥 Import Stint File...' above.",
                                         )
                                         .color(muted)
-                                        .size(12.0),
+                                        .size(ui_size(12.0)),
                                     );
                                 }
                             });
@@ -1517,26 +1694,27 @@ impl WarRoomApp {
                                     TableBuilder::new(ui)
                                         .striped(true)
                                         .resizable(true)
+                                        .vscroll(false)
                                         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                                        .column(Column::initial(115.0).at_least(95.0))  // Saved Date
-                                        .column(Column::initial(180.0).at_least(130.0)) // Track & Car
-                                        .column(Column::initial(160.0).at_least(120.0)) // Setup & Driver
-                                        .column(Column::initial(46.0).at_least(38.0))   // Laps
-                                        .column(Column::initial(72.0).at_least(60.0))   // Fastest
-                                        .column(Column::initial(72.0).at_least(60.0))   // Full Avg
-                                        .column(Column::initial(68.0).at_least(56.0))   // Fuel/Lap
-                                        .column(Column::initial(74.0).at_least(60.0))   // Pit Tires
-                                        .column(Column::remainder().at_least(380.0))    // Actions
-                                        .header(28.0, |mut header| {
-                                            header.col(|ui| { ui.label(egui::RichText::new("Saved").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Track & Car").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Setup & Driver").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Laps").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Fastest").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Full Avg").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Fuel/Lap").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Pit Tires").color(muted).size(11.5)); });
-                                            header.col(|ui| { ui.label(egui::RichText::new("Actions (Re-Import / Compare / Share File / Show / Export)").color(muted).size(11.5)); });
+                                        .column(Column::initial(115.0 * col_scale).at_least(95.0))  // Saved Date
+                                        .column(Column::initial(180.0 * col_scale).at_least(130.0)) // Track & Car
+                                        .column(Column::initial(160.0 * col_scale).at_least(120.0)) // Setup & Driver
+                                        .column(Column::initial(46.0 * col_scale).at_least(38.0))   // Laps
+                                        .column(Column::initial(72.0 * col_scale).at_least(60.0))   // Fastest
+                                        .column(Column::initial(72.0 * col_scale).at_least(60.0))   // Full Avg
+                                        .column(Column::initial(68.0 * col_scale).at_least(56.0))   // Fuel/Lap
+                                        .column(Column::initial(74.0 * col_scale).at_least(60.0))   // Pit Tires
+                                        .column(Column::remainder().at_least(380.0 * col_scale))    // Actions
+                                        .header(tbl_hdr_h, |mut header| {
+                                            header.col(|ui| { ui.label(egui::RichText::new("Saved").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Track & Car").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Setup & Driver").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Laps").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Fastest").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Full Avg").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Fuel/Lap").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Pit Tires").color(muted).size(ui_size(11.5))); });
+                                            header.col(|ui| { ui.label(egui::RichText::new("Actions (Re-Import / Compare / Share File / Show / Export)").color(muted).size(ui_size(11.5))); });
                                         })
                                         .body(|mut body| {
                                             for (row_idx, rec) in filtered_records.iter().enumerate() {
@@ -1548,10 +1726,10 @@ impl WarRoomApp {
                                                         .map(|st| st.stint_number)
                                                 });
 
-                                                body.row(34.0, |mut row| {
+                                                body.row(tbl_row_h, |mut row| {
                                                     // 1. Saved Date
                                                     row.col(|ui| {
-                                                        ui.label(egui::RichText::new(&rec.saved_at_display).color(muted).size(11.5));
+                                                        ui.label(egui::RichText::new(&rec.saved_at_display).color(muted).size(ui_size(11.5)));
                                                     });
 
                                                     // 2. Track & Car
@@ -1559,18 +1737,18 @@ impl WarRoomApp {
                                                         ui.vertical(|ui| {
                                                             ui.spacing_mut().item_spacing.y = 1.0;
                                                             ui.horizontal(|ui| {
-                                                                ui.label(egui::RichText::new(&rec.track_name).color(white).strong().size(12.0));
+                                                                ui.label(egui::RichText::new(&rec.track_name).color(white).strong().size(ui_size(12.0)));
                                                                 if is_track_match {
                                                                     egui::Frame::none()
                                                                         .fill(with_alpha(green, 34))
                                                                         .rounding(egui::Rounding::same(4.0))
                                                                         .inner_margin(egui::Margin::symmetric(4.0, 1.0))
                                                                         .show(ui, |ui| {
-                                                                            ui.label(egui::RichText::new("MATCH").color(green).strong().size(9.5));
+                                                                            ui.label(egui::RichText::new("MATCH").color(green).strong().size(ui_size(9.5)));
                                                                         });
                                                                 }
                                                             });
-                                                            ui.label(egui::RichText::new(&rec.car_name).color(muted).size(10.5));
+                                                            ui.label(egui::RichText::new(&rec.car_name).color(muted).size(ui_size(10.5)));
                                                         });
                                                     });
 
@@ -1578,9 +1756,9 @@ impl WarRoomApp {
                                                     row.col(|ui| {
                                                         ui.vertical(|ui| {
                                                             ui.spacing_mut().item_spacing.y = 1.0;
-                                                            ui.label(egui::RichText::new(&rec.setup_name).color(primary).strong().size(11.5));
+                                                            ui.label(egui::RichText::new(&rec.setup_name).color(primary).strong().size(ui_size(11.5)));
                                                             let drv_txt = format!("#{} {} · {}", rec.car_num, rec.driver_name, rec.session_type);
-                                                            let resp = ui.label(egui::RichText::new(drv_txt).color(muted).size(10.5));
+                                                            let resp = ui.label(egui::RichText::new(drv_txt).color(muted).size(ui_size(10.5)));
                                                             if !rec.stint.notes.is_empty() {
                                                                 resp.on_hover_text(format!("Notes: {}", rec.stint.notes));
                                                             }
@@ -1589,17 +1767,17 @@ impl WarRoomApp {
 
                                                     // 4. Laps
                                                     row.col(|ui| {
-                                                        ui.label(egui::RichText::new(format!("{}", rec.stint.laps_completed)).color(white).strong().size(12.5));
+                                                        ui.label(egui::RichText::new(format!("{}", rec.stint.laps_completed)).color(white).strong().size(ui_size(12.5)));
                                                     });
 
                                                     // 5. Fastest
                                                     row.col(|ui| {
-                                                        ui.label(egui::RichText::new(format_time(rec.stint.fast_lap)).color(green).strong().size(12.5));
+                                                        ui.label(egui::RichText::new(format_time(rec.stint.fast_lap)).color(green).strong().size(ui_size(12.5)));
                                                     });
 
                                                     // 6. Full Avg
                                                     row.col(|ui| {
-                                                        ui.label(egui::RichText::new(format_time(rec.stint.full_average())).color(white).size(12.5));
+                                                        ui.label(egui::RichText::new(format_time(rec.stint.full_average())).color(white).size(ui_size(12.5)));
                                                     });
 
                                                     // 7. Fuel/Lap
@@ -1610,7 +1788,7 @@ impl WarRoomApp {
                                                         } else {
                                                             "—".to_string()
                                                         };
-                                                        ui.label(egui::RichText::new(f_str).color(white).size(11.5));
+                                                        ui.label(egui::RichText::new(f_str).color(white).size(ui_size(11.5)));
                                                     });
 
                                                     // 8. Pit Tires
@@ -1623,10 +1801,10 @@ impl WarRoomApp {
                                                                 .rounding(egui::Rounding::same(4.0))
                                                                 .inner_margin(egui::Margin::symmetric(5.0, 1.5))
                                                                 .show(ui, |ui| {
-                                                                    ui.label(egui::RichText::new(format!("✓ {:.0}/{:.0}%", lf_w, rf_w)).color(secondary).strong().size(10.5));
+                                                                    ui.label(egui::RichText::new(format!("✓ {:.0}/{:.0}%", lf_w, rf_w)).color(secondary).strong().size(ui_size(10.5)));
                                                                 });
                                                         } else {
-                                                            ui.label(egui::RichText::new("—").color(muted).size(11.5));
+                                                            ui.label(egui::RichText::new("—").color(muted).size(ui_size(11.5)));
                                                         }
                                                     });
 
@@ -1643,7 +1821,7 @@ impl WarRoomApp {
                                                                 let reimp_btn = egui::Button::new(
                                                                     egui::RichText::new(reimp_label)
                                                                         .color(if already_imported_num.is_some() { white } else { egui::Color32::BLACK })
-                                                                        .size(11.5)
+                                                                        .size(ui_size(11.5))
                                                                         .strong(),
                                                                 )
                                                                 .fill(if already_imported_num.is_some() { with_alpha(green, 150) } else { primary })
@@ -1659,7 +1837,7 @@ impl WarRoomApp {
 
                                                                 if ui
                                                                     .add(
-                                                                        egui::Button::new(egui::RichText::new("⚖ Compare").color(white).size(11.5))
+                                                                        egui::Button::new(egui::RichText::new("⚖ Compare").color(white).size(ui_size(11.5)))
                                                                             .fill(elevated)
                                                                             .rounding(egui::Rounding::same(5.0)),
                                                                     )
@@ -1671,7 +1849,7 @@ impl WarRoomApp {
 
                                                                 if ui
                                                                     .add(
-                                                                        egui::Button::new(egui::RichText::new("📎 Share File").color(white).size(11.5))
+                                                                        egui::Button::new(egui::RichText::new("📎 Share File").color(white).size(ui_size(11.5)))
                                                                             .fill(elevated)
                                                                             .rounding(egui::Rounding::same(5.0)),
                                                                     )
@@ -1684,7 +1862,7 @@ impl WarRoomApp {
                                                                 let file_path = self.stint_db.record_file_path(&rec);
                                                                 if ui
                                                                     .add(
-                                                                        egui::Button::new(egui::RichText::new("📂 Show").color(white).size(11.5))
+                                                                        egui::Button::new(egui::RichText::new("📂 Show").color(white).size(ui_size(11.5)))
                                                                             .fill(elevated)
                                                                             .rounding(egui::Rounding::same(5.0)),
                                                                     )
@@ -1696,7 +1874,7 @@ impl WarRoomApp {
 
                                                                 if ui
                                                                     .add(
-                                                                        egui::Button::new(egui::RichText::new("💾").color(muted).size(11.5))
+                                                                        egui::Button::new(egui::RichText::new("💾").color(muted).size(ui_size(11.5)))
                                                                             .fill(elevated)
                                                                             .rounding(egui::Rounding::same(5.0)),
                                                                     )
@@ -1708,7 +1886,7 @@ impl WarRoomApp {
 
                                                                 if ui
                                                                     .add(
-                                                                        egui::Button::new(egui::RichText::new("🗑").color(muted).size(11.5))
+                                                                        egui::Button::new(egui::RichText::new("🗑").color(muted).size(ui_size(11.5)))
                                                                             .fill(egui::Color32::TRANSPARENT),
                                                                     )
                                                                     .on_hover_text("Delete this stint from local database")

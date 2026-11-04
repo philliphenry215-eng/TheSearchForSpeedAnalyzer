@@ -1,6 +1,6 @@
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
-use crate::{with_alpha, WarRoomApp};
+use crate::{ui_size, with_alpha, WarRoomApp};
 use crate::formatters::*;
 use crate::models::*;
 use crate::views::*;
@@ -13,6 +13,10 @@ impl WarRoomApp {
         let panel_bg = self.settings.panel_color();
         let cols = self.settings.columns.clone();
         let active_buckets = self.settings.active_avg_buckets.clone();
+        let col_scale = self.settings.ui_col_scale();
+        let tbl_hdr_h = self.settings.ui_row_height(28.0);
+        let tbl_row_h = self.settings.ui_row_height(30.0);
+        let btn_h = self.settings.ui_btn_height(26.0);
 
         // 1. Gather all driver stint entries
         struct StintGridEntry<'a> {
@@ -196,16 +200,20 @@ impl WarRoomApp {
             .rounding(egui::Rounding::same(12.0))
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
+                let single_row_fits = ui.available_width() >= 1280.0 * col_scale;
+                let on_track_count = s.drivers.values().filter(|d| !d.is_on_pit_road && d.is_in_world).count();
+                let in_pit_count = s.drivers.values().filter(|d| d.is_on_pit_road && d.is_in_world).count();
+
                 ui.horizontal(|ui| {
                     // Search Driver
-                    ui.label(egui::RichText::new("SEARCH").color(muted).size(11.0).extra_letter_spacing(0.8));
+                    ui.label(egui::RichText::new("SEARCH").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.driver_search_query)
                             .hint_text("Driver or Car #...")
-                            .desired_width(160.0)
+                            .desired_width(155.0 * col_scale)
                     );
                     if !self.driver_search_query.is_empty() {
-                        if ui.add(egui::Button::new(egui::RichText::new("Clear").color(muted).size(11.5)).frame(false)).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Clear").color(muted).size(ui_size(11.5))).frame(false)).clicked() {
                             self.driver_search_query.clear();
                         }
                     }
@@ -229,11 +237,11 @@ impl WarRoomApp {
                     let sort_dir_icon = if current_sort_dir == SortDirection::Ascending { "▲" } else { "▼" };
 
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("SORT").color(muted).size(11.0).extra_letter_spacing(0.8));
-                        ui.label(egui::RichText::new(format!("{} {}", sort_label, sort_dir_icon)).color(white).strong().size(12.5));
+                        ui.label(egui::RichText::new("SORT").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
+                        ui.label(egui::RichText::new(format!("{} {}", sort_label, sort_dir_icon)).color(white).strong().size(ui_size(12.5)));
                         if current_sort_key != GridSortKey::Position {
                             if ui.add(
-                                egui::Button::new(egui::RichText::new("Reset").color(muted).size(11.0))
+                                egui::Button::new(egui::RichText::new("Reset").color(muted).size(ui_size(11.0)))
                                     .fill(elevated)
                                     .rounding(egui::Rounding::same(6.0))
                             ).clicked() {
@@ -247,31 +255,90 @@ impl WarRoomApp {
                         ui.add_space(8.0);
                         ui.separator();
                         ui.add_space(8.0);
-                        ui.label(egui::RichText::new("SESSION BEST").color(muted).size(11.0).extra_letter_spacing(0.8));
+                        ui.label(egui::RichText::new("SESSION BEST").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
                         egui::Frame::none()
                             .fill(with_alpha(purple, 38))
                             .rounding(egui::Rounding::same(6.0))
                             .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                             .show(ui, |ui| {
-                                ui.label(egui::RichText::new(format_time(session_fastest_lap)).color(purple).strong().size(12.5));
+                                ui.label(egui::RichText::new(format_time(session_fastest_lap)).color(purple).strong().size(ui_size(12.5)));
                             });
-                        ui.label(egui::RichText::new(format!("({})", session_fastest_holder)).color(muted).size(11.5));
+                        ui.label(egui::RichText::new(format!("({})", session_fastest_holder)).color(muted).size(ui_size(11.5)));
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if single_row_fits {
+                            if ui.add(
+                                egui::Button::new(egui::RichText::new("Analyze stint →").color(egui::Color32::from_rgb(20, 18, 10)).size(ui_size(11.5)).strong())
+                                    .fill(primary)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h))
+                            ).clicked() {
+                                self.stint_analyzer_tab = StintAnalyzerTab::SingleStint;
+                                self.show_stint_analyzer_modal = true;
+                            }
+
+                            if ui.add(
+                                egui::Button::new(egui::RichText::new("⚖ Compare stints").color(white).size(ui_size(11.5)))
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h))
+                            ).on_hover_text("Compare up to 3 stints side by side").clicked() {
+                                self.ensure_compare_slots_populated(s);
+                                self.stint_analyzer_tab = StintAnalyzerTab::Compare;
+                                self.show_stint_analyzer_modal = true;
+                            }
+
+                            if ui.add(
+                                egui::Button::new(egui::RichText::new("📂 Saved Stints").color(white).size(ui_size(11.5)))
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h))
+                            ).on_hover_text("Open Saved Stints Database to re-import previous track stints or paste a shared stint").clicked() {
+                                self.show_stint_db_modal = true;
+                            }
+
+                            if ui.add(
+                                egui::Button::new(egui::RichText::new("Buckets ▼").color(white).size(ui_size(11.5)))
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h))
+                            ).clicked() {
+                                self.show_settings_modal = true;
+                            }
+                        }
+
+                        ui.label(egui::RichText::new(format!("Track {} · Pit {}", on_track_count, in_pit_count)).color(muted).size(ui_size(12.0)));
+                    });
+                });
+
+                if !single_row_fits {
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
                         if ui.add(
-                            egui::Button::new(egui::RichText::new("Analyze stint →").color(egui::Color32::from_rgb(20, 18, 10)).size(11.5).strong())
-                                .fill(primary)
+                            egui::Button::new(egui::RichText::new("Buckets ▼").color(white).size(ui_size(11.5)))
+                                .fill(elevated)
                                 .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h))
                         ).clicked() {
-                            self.stint_analyzer_tab = StintAnalyzerTab::SingleStint;
-                            self.show_stint_analyzer_modal = true;
+                            self.show_settings_modal = true;
                         }
 
                         if ui.add(
-                            egui::Button::new(egui::RichText::new("⚖ Compare stints").color(white).size(11.5))
+                            egui::Button::new(egui::RichText::new("📂 Saved Stints").color(white).size(ui_size(11.5)))
                                 .fill(elevated)
                                 .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h))
+                        ).on_hover_text("Open Saved Stints Database to re-import previous track stints or paste a shared stint").clicked() {
+                            self.show_stint_db_modal = true;
+                        }
+
+                        if ui.add(
+                            egui::Button::new(egui::RichText::new("⚖ Compare stints").color(white).size(ui_size(11.5)))
+                                .fill(elevated)
+                                .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h))
                         ).on_hover_text("Compare up to 3 stints side by side").clicked() {
                             self.ensure_compare_slots_populated(s);
                             self.stint_analyzer_tab = StintAnalyzerTab::Compare;
@@ -279,26 +346,16 @@ impl WarRoomApp {
                         }
 
                         if ui.add(
-                            egui::Button::new(egui::RichText::new("📂 Saved Stints").color(white).size(11.5))
-                                .fill(elevated)
+                            egui::Button::new(egui::RichText::new("Analyze stint →").color(egui::Color32::from_rgb(20, 18, 10)).size(ui_size(11.5)).strong())
+                                .fill(primary)
                                 .rounding(egui::Rounding::same(6.0))
-                        ).on_hover_text("Open Saved Stints Database to re-import previous track stints or paste a shared stint").clicked() {
-                            self.show_stint_db_modal = true;
-                        }
-
-                        if ui.add(
-                            egui::Button::new(egui::RichText::new("Buckets ▼").color(white).size(11.5))
-                                .fill(elevated)
-                                .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h))
                         ).clicked() {
-                            self.show_settings_modal = true;
+                            self.stint_analyzer_tab = StintAnalyzerTab::SingleStint;
+                            self.show_stint_analyzer_modal = true;
                         }
-
-                        let on_track_count = s.drivers.values().filter(|d| !d.is_on_pit_road && d.is_in_world).count();
-                        let in_pit_count = s.drivers.values().filter(|d| d.is_on_pit_road && d.is_in_world).count();
-                        ui.label(egui::RichText::new(format!("Track {} · Pit {}", on_track_count, in_pit_count)).color(muted).size(12.0));
                     });
-                });
+                }
             });
 
         ui.add_space(8.0);
@@ -316,7 +373,7 @@ impl WarRoomApp {
             let text = format!("{}{}", title, arrow);
             let color = if is_active { primary_col } else { egui::Color32::from_rgb(139, 147, 163) };
 
-            let resp = ui.add(egui::Button::new(egui::RichText::new(text).color(color).size(11.5)).frame(false));
+            let resp = ui.add(egui::Button::new(egui::RichText::new(text).color(color).size(ui_size(11.5))).frame(false));
             if resp.clicked() {
                 if is_active {
                     let next_dir = if cur_d == SortDirection::Ascending { SortDirection::Descending } else { SortDirection::Ascending };
@@ -346,28 +403,29 @@ impl WarRoomApp {
                     let mut table = TableBuilder::new(ui)
                         .striped(true)
                         .resizable(true)
+                        .vscroll(false)
                         .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
 
-                    if cols.pos { table = table.column(Column::initial(52.0)); }
-                    if cols.car_num { table = table.column(Column::initial(62.0)); }
-                    if cols.driver { table = table.column(Column::initial(180.0)); }
-                    if cols.irating { table = table.column(Column::initial(65.0)); }
-                    if cols.stint { table = table.column(Column::initial(75.0)); }
-                    if cols.laps { table = table.column(Column::initial(60.0)); }
-                    if cols.last_lap { table = table.column(Column::initial(85.0)); }
-                    if cols.fastest { table = table.column(Column::initial(85.0)); }
-                    if cols.cur_avg { table = table.column(Column::initial(85.0)); }
+                    if cols.pos { table = table.column(Column::initial(52.0 * col_scale)); }
+                    if cols.car_num { table = table.column(Column::initial(62.0 * col_scale)); }
+                    if cols.driver { table = table.column(Column::initial(180.0 * col_scale)); }
+                    if cols.irating { table = table.column(Column::initial(65.0 * col_scale)); }
+                    if cols.stint { table = table.column(Column::initial(78.0 * col_scale)); }
+                    if cols.laps { table = table.column(Column::initial(60.0 * col_scale)); }
+                    if cols.last_lap { table = table.column(Column::initial(85.0 * col_scale)); }
+                    if cols.fastest { table = table.column(Column::initial(85.0 * col_scale)); }
+                    if cols.cur_avg { table = table.column(Column::initial(85.0 * col_scale)); }
 
                     for _ in &active_buckets {
-                        table = table.column(Column::initial(80.0));
+                        table = table.column(Column::initial(82.0 * col_scale));
                     }
 
                     if cols.setup_name {
-                        table = table.column(Column::initial(130.0).at_least(100.0));
+                        table = table.column(Column::initial(130.0 * col_scale).at_least(100.0));
                     }
-                    table = table.column(Column::remainder().at_least(85.0));
+                    table = table.column(Column::remainder().at_least(88.0 * col_scale));
 
-                    table.header(28.0, |mut header| {
+                    table.header(tbl_hdr_h, |mut header| {
                         if cols.pos {
                             header.col(|ui| {
                                 if let Some(act) = render_header_btn(ui, "Pos", GridSortKey::Position, current_sort_key, current_sort_dir, primary) {
@@ -391,7 +449,7 @@ impl WarRoomApp {
                         }
                         if cols.irating {
                             header.col(|ui| {
-                                ui.label(egui::RichText::new("iRating").color(muted).size(11.5));
+                                ui.label(egui::RichText::new("iRating").color(muted).size(ui_size(11.5)));
                             });
                         }
                         if cols.stint {
@@ -438,11 +496,11 @@ impl WarRoomApp {
                         }
                         if cols.setup_name {
                             header.col(|ui| {
-                                ui.label(egui::RichText::new("Setup").color(muted).size(11.5));
+                                ui.label(egui::RichText::new("Setup").color(muted).size(ui_size(11.5)));
                             });
                         }
                         header.col(|ui| {
-                            ui.label(egui::RichText::new("Action").color(muted).size(11.5));
+                            ui.label(egui::RichText::new("Action").color(muted).size(ui_size(11.5)));
                         });
                     })
                     .body(|mut body| {
@@ -456,7 +514,7 @@ impl WarRoomApp {
                                 muted
                             };
 
-                            body.row(30.0, |mut row| {
+                            body.row(tbl_row_h, |mut row| {
                                 // POS Badge
                                 if cols.pos {
                                     row.col(|ui| {
@@ -481,7 +539,7 @@ impl WarRoomApp {
                                             .rounding(egui::Rounding::same(5.0))
                                             .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                                             .show(ui, |ui| {
-                                                ui.label(egui::RichText::new(pos_str).color(badge_fg).strong().size(11.5));
+                                                ui.label(egui::RichText::new(pos_str).color(badge_fg).strong().size(ui_size(11.5)));
                                             });
                                     });
                                 }
@@ -489,7 +547,7 @@ impl WarRoomApp {
                                 // CAR #
                                 if cols.car_num {
                                     row.col(|ui| {
-                                        ui.label(egui::RichText::new(format!("#{}", e.car_num)).color(muted).size(12.0));
+                                        ui.label(egui::RichText::new(format!("#{}", e.car_num)).color(muted).size(ui_size(12.0)));
                                     });
                                 }
 
@@ -499,9 +557,9 @@ impl WarRoomApp {
                                         ui.push_id(("grid_drv_col", row_idx, e.car_idx, e.stint_num), |ui| {
                                             ui.horizontal(|ui| {
                                                 let drv_resp = if is_player {
-                                                    ui.selectable_label(false, egui::RichText::new(e.driver_name).color(primary).strong().size(13.0))
+                                                    ui.selectable_label(false, egui::RichText::new(e.driver_name).color(primary).strong().size(ui_size(13.0)))
                                                 } else {
-                                                    ui.selectable_label(false, egui::RichText::new(e.driver_name).color(text_col).size(13.0))
+                                                    ui.selectable_label(false, egui::RichText::new(e.driver_name).color(text_col).size(ui_size(13.0)))
                                                 };
                                                 if drv_resp.double_clicked() {
                                                     self.selected_driver_car_idx = Some(e.car_idx);
@@ -516,7 +574,7 @@ impl WarRoomApp {
                                                         .rounding(egui::Rounding::same(4.0))
                                                         .inner_margin(egui::Margin::symmetric(5.0, 1.0))
                                                         .show(ui, |ui| {
-                                                            ui.label(egui::RichText::new("You").color(primary).strong().size(10.0));
+                                                            ui.label(egui::RichText::new("You").color(primary).strong().size(ui_size(10.0)));
                                                         });
                                                 }
                                             });
@@ -533,7 +591,7 @@ impl WarRoomApp {
                                         } else {
                                             "—".to_string()
                                         };
-                                        ui.label(egui::RichText::new(ir_str).color(muted).size(12.0));
+                                        ui.label(egui::RichText::new(ir_str).color(muted).size(ui_size(12.0)));
                                     });
                                 }
 
@@ -554,7 +612,7 @@ impl WarRoomApp {
 
                                             let is_sel = self.selected_driver_car_idx == Some(e.car_idx) && self.selected_stint_num == Some(e.stint_num);
                                             let resp = ui.add(
-                                                egui::Button::new(egui::RichText::new(stint_btn_text).color(if is_sel || is_player { primary } else { white }).size(11.5))
+                                                egui::Button::new(egui::RichText::new(stint_btn_text).color(if is_sel || is_player { primary } else { white }).size(ui_size(11.5)))
                                                     .fill(if is_sel { with_alpha(secondary, 150) } else { elevated })
                                                     .rounding(egui::Rounding::same(6.0))
                                             );
@@ -572,7 +630,7 @@ impl WarRoomApp {
                                 if cols.laps {
                                     row.col(|ui| {
                                         ui.push_id(("grid_laps_col", row_idx, e.car_idx, e.stint_num), |ui| {
-                                            let resp = ui.selectable_label(false, egui::RichText::new(e.laps_completed.to_string()).color(text_col).size(12.5));
+                                            let resp = ui.selectable_label(false, egui::RichText::new(e.laps_completed.to_string()).color(text_col).size(ui_size(12.5)));
                                             if resp.double_clicked() {
                                                 self.selected_driver_car_idx = Some(e.car_idx);
                                                 self.selected_stint_num = Some(e.stint_num);
@@ -587,7 +645,7 @@ impl WarRoomApp {
                                     row.col(|ui| {
                                         ui.push_id(("grid_last_col", row_idx, e.car_idx, e.stint_num), |ui| {
                                             let last_str = if e.last_lap > 0.0 { format_time(e.last_lap) } else { "—".to_string() };
-                                            let resp = ui.selectable_label(false, egui::RichText::new(last_str).color(text_col).size(12.5));
+                                            let resp = ui.selectable_label(false, egui::RichText::new(last_str).color(text_col).size(ui_size(12.5)));
                                             if resp.double_clicked() {
                                                 self.selected_driver_car_idx = Some(e.car_idx);
                                                 self.selected_stint_num = Some(e.stint_num);
@@ -610,10 +668,10 @@ impl WarRoomApp {
                                                     .rounding(egui::Rounding::same(5.0))
                                                     .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                                                     .show(ui, |ui| {
-                                                        ui.label(egui::RichText::new(fast_str).color(purple).strong().size(12.0));
+                                                        ui.label(egui::RichText::new(fast_str).color(purple).strong().size(ui_size(12.0)));
                                                     });
                                             } else {
-                                                ui.label(egui::RichText::new(fast_str).color(white).strong().size(12.5));
+                                                ui.label(egui::RichText::new(fast_str).color(white).strong().size(ui_size(12.5)));
                                             }
                                         } else {
                                             ui.label(egui::RichText::new("—").color(muted));
@@ -626,7 +684,7 @@ impl WarRoomApp {
                                     row.col(|ui| {
                                         if e.full_avg > 0.0 {
                                             let avg_str = format_time(e.full_avg);
-                                            ui.label(egui::RichText::new(avg_str).color(text_col).strong().size(12.5));
+                                            ui.label(egui::RichText::new(avg_str).color(text_col).strong().size(ui_size(12.5)));
                                         } else {
                                             ui.label(egui::RichText::new("—").color(muted));
                                         }
@@ -647,12 +705,12 @@ impl WarRoomApp {
                                                         .rounding(egui::Rounding::same(5.0))
                                                         .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                                                         .show(ui, |ui| {
-                                                            ui.label(egui::RichText::new(val_str).color(purple).strong().size(12.0));
+                                                            ui.label(egui::RichText::new(val_str).color(purple).strong().size(ui_size(12.0)));
                                                         });
                                                 } else {
                                                     let is_sorted_col = current_sort_key == GridSortKey::AvgBucket(b);
                                                     let cell_color = if is_sorted_col { primary } else { text_col };
-                                                    ui.label(egui::RichText::new(val_str).color(cell_color).size(12.5));
+                                                    ui.label(egui::RichText::new(val_str).color(cell_color).size(ui_size(12.5)));
                                                 }
                                             } else {
                                                 ui.label(egui::RichText::new("—").color(muted));
@@ -665,7 +723,7 @@ impl WarRoomApp {
                                 if cols.setup_name {
                                     row.col(|ui| {
                                         let setup_str = if !e.setup_name.is_empty() && e.setup_name != "—" { e.setup_name } else { "Baseline" };
-                                        ui.label(egui::RichText::new(setup_str).color(muted).size(11.5));
+                                        ui.label(egui::RichText::new(setup_str).color(muted).size(ui_size(11.5)));
                                     });
                                 }
 
@@ -673,7 +731,7 @@ impl WarRoomApp {
                                 row.col(|ui| {
                                     ui.push_id(("grid_analyze_btn", row_idx, e.car_idx, e.stint_num), |ui| {
                                         if ui.add(
-                                            egui::Button::new(egui::RichText::new("Analyze →").color(if is_player { primary } else { white }).size(11.0))
+                                            egui::Button::new(egui::RichText::new("Analyze →").color(if is_player { primary } else { white }).size(ui_size(11.0)))
                                                 .fill(elevated)
                                                 .rounding(egui::Rounding::same(6.0))
                                         ).clicked() {

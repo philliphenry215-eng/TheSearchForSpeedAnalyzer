@@ -429,6 +429,55 @@ impl Default for LayoutPreset {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextSizePreset {
+    Small,
+    Medium,
+    Large,
+}
+
+impl Default for TextSizePreset {
+    fn default() -> Self {
+        Self::Small
+    }
+}
+
+impl TextSizePreset {
+    pub fn offset_pt(self) -> f32 {
+        match self {
+            TextSizePreset::Small => 0.0,
+            TextSizePreset::Medium => 3.0,
+            TextSizePreset::Large => 6.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TextSizePreset::Small => "Small (Default)",
+            TextSizePreset::Medium => "Medium (+3 pt)",
+            TextSizePreset::Large => "Large (+6 pt)",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            TextSizePreset::Small => "Small",
+            TextSizePreset::Medium => "Medium",
+            TextSizePreset::Large => "Large",
+        }
+    }
+
+    pub fn from_offset(offset: f32) -> Self {
+        if offset >= 4.5 {
+            Self::Large
+        } else if offset >= 1.5 {
+            Self::Medium
+        } else {
+            Self::Small
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -442,6 +491,9 @@ pub struct AppSettings {
     pub overlay: OverlaySettings,
     #[serde(default)]
     pub tire_popup_overlay: TirePopupOverlaySettings,
+    #[serde(default)]
+    pub text_size: TextSizePreset,
+    #[serde(default)]
     pub font_size_offset: f32,
     #[serde(default = "default_custom_avg_buckets")]
     pub custom_avg_buckets: Vec<usize>,
@@ -472,6 +524,7 @@ impl Default for AppSettings {
             columns: ColumnVisibility::default(),
             overlay: OverlaySettings::default(),
             tire_popup_overlay: TirePopupOverlaySettings::default(),
+            text_size: TextSizePreset::Small,
             font_size_offset: 0.0,
             custom_avg_buckets: default_custom_avg_buckets(),
             active_avg_buckets: default_active_avg_buckets(),
@@ -494,6 +547,10 @@ impl AppSettings {
                     if settings.active_avg_buckets.is_empty() {
                         settings.active_avg_buckets = default_active_avg_buckets();
                     }
+                    if settings.text_size == TextSizePreset::Small && settings.font_size_offset >= 1.5 {
+                        settings.text_size = TextSizePreset::from_offset(settings.font_size_offset);
+                    }
+                    settings.font_size_offset = settings.text_size.offset_pt();
                     // Always boot into the user's configured default startup view (defaults to Cockpit)
                     settings.view_mode = settings.default_startup_view;
                     return settings;
@@ -503,6 +560,24 @@ impl AppSettings {
         let default_settings = Self::default();
         default_settings.save();
         default_settings
+    }
+
+    pub fn set_text_size(&mut self, preset: TextSizePreset) {
+        self.text_size = preset;
+        self.font_size_offset = preset.offset_pt();
+        self.save();
+    }
+
+    pub fn ui_row_height(&self, base_h: f32) -> f32 {
+        base_h + self.font_size_offset * 1.5
+    }
+
+    pub fn ui_btn_height(&self, base_h: f32) -> f32 {
+        base_h + self.font_size_offset * 1.35
+    }
+
+    pub fn ui_col_scale(&self) -> f32 {
+        1.0 + self.font_size_offset * 0.055
     }
 
     pub fn save(&self) {
@@ -683,4 +758,40 @@ impl AppSettings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_text_size_presets_and_layout_scaling() {
+        let mut settings = AppSettings::default();
+        assert_eq!(settings.text_size, TextSizePreset::Small);
+        assert!((settings.font_size_offset - 0.0).abs() < 1e-5);
+        assert!((settings.ui_row_height(26.0) - 26.0).abs() < 1e-5);
+        assert!((settings.ui_btn_height(26.0) - 26.0).abs() < 1e-5);
+        assert!((settings.ui_col_scale() - 1.0).abs() < 1e-5);
+
+        settings.text_size = TextSizePreset::Medium;
+        settings.font_size_offset = settings.text_size.offset_pt();
+        assert!((settings.font_size_offset - 3.0).abs() < 1e-5);
+        assert!(settings.ui_row_height(26.0) > 30.0);
+        assert!(settings.ui_btn_height(26.0) > 29.0);
+        assert!(settings.ui_col_scale() > 1.10);
+
+        settings.text_size = TextSizePreset::Large;
+        settings.font_size_offset = settings.text_size.offset_pt();
+        assert!((settings.font_size_offset - 6.0).abs() < 1e-5);
+        assert!(settings.ui_row_height(26.0) >= 34.0);
+        assert!(settings.ui_btn_height(26.0) >= 32.0);
+        assert!(settings.ui_col_scale() >= 1.20);
+
+        crate::set_active_font_offset(6.0);
+        assert!((crate::ui_size(12.0) - 18.0).abs() < 1e-5);
+        // Hero font (>32pt) uses damped scaling so cards don't overflow
+        assert!((crate::ui_size(56.0) - (56.0 + 6.0 * 0.65)).abs() < 1e-4);
+        crate::set_active_font_offset(0.0);
+    }
+}
+
 

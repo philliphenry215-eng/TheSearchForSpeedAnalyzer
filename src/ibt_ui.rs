@@ -5,7 +5,7 @@ use crate::ibt::{
     TireCornerAnalysis, TireTempSource, KPA_TO_PSI, MM_TO_INCHES,
 };
 use crate::settings::{AppSettings, CompareLineStyle};
-use crate::{display_font, format_time, with_alpha};
+use crate::{display_font, format_time, ui_size, with_alpha};
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
@@ -269,6 +269,9 @@ impl IbtTelemetryLabState {
         let purple = settings.status_purple();
         let use_metric = settings.use_metric;
 
+        let col_scale = settings.ui_col_scale();
+        let btn_h = settings.ui_btn_height(26.0);
+
         // 1. TOP PROMINENT SECTION BANNER & SUB-NAVIGATION TABS
         egui::Frame::none()
             .fill(panel_bg)
@@ -276,6 +279,15 @@ impl IbtTelemetryLabState {
             .rounding(egui::Rounding::same(10.0))
             .inner_margin(egui::Margin::symmetric(14.0, 9.0))
             .show(ui, |ui| {
+                let single_row_fits = ui.available_width() >= 1500.0 * col_scale;
+                let tabs_ltr = [
+                    (IbtAnalysisTab::InputsAndSpeed, "📈 Inputs & Speed"),
+                    (IbtAnalysisTab::RideHeightAndRake, "📐 Ride Height & Rake"),
+                    (IbtAnalysisTab::ShockHistograms, "📊 Shock Histograms"),
+                    (IbtAnalysisTab::TiresAndPressures, "Tires & Pressures"),
+                    (IbtAnalysisTab::ChannelsAndExport, "📋 Channels & Export"),
+                ];
+
                 ui.horizontal(|ui| {
                     // Distinct Mode Badge
                     egui::Frame::none()
@@ -287,7 +299,7 @@ impl IbtTelemetryLabState {
                             ui.label(
                                 egui::RichText::new("OFFLINE .IBT LAB")
                                     .color(white)
-                                    .size(11.0)
+                                    .size(ui_size(11.0))
                                     .strong(),
                             );
                         });
@@ -298,46 +310,67 @@ impl IbtTelemetryLabState {
                             .font(display_font(16.5))
                             .color(white),
                     );
-                    ui.label(
-                        egui::RichText::new("· Standalone Post-Run Analysis (Separate from Live Stint Tracker)")
-                            .color(muted)
-                            .size(11.5),
-                    );
+                    if ui.available_width() > 380.0 * col_scale {
+                        ui.label(
+                            egui::RichText::new("· Standalone Post-Run Analysis")
+                                .color(muted)
+                                .size(ui_size(11.5)),
+                        );
+                    }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let tabs = [
-                            (IbtAnalysisTab::ChannelsAndExport, "📋 Channels & Export"),
-                            (IbtAnalysisTab::TiresAndPressures, "Tires & Pressures"),
-                            (IbtAnalysisTab::ShockHistograms, "📊 Shock Histograms"),
-                            (IbtAnalysisTab::RideHeightAndRake, "📐 Ride Height & Rake"),
-                            (IbtAnalysisTab::InputsAndSpeed, "📈 Inputs & Speed"),
-                        ];
-                        for (tab_id, label) in tabs {
+                    if single_row_fits {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            for &(tab_id, label) in tabs_ltr.iter().rev() {
+                                let active = self.active_tab == tab_id;
+                                let btn = egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .size(ui_size(12.0))
+                                        .color(if active { egui::Color32::BLACK } else { white })
+                                        .strong(),
+                                )
+                                .fill(if active { primary } else { elevated })
+                                .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h));
+                                if ui.add(btn).clicked() {
+                                    self.active_tab = tab_id;
+                                }
+                            }
+                        });
+                    }
+                });
+
+                if !single_row_fits {
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (tab_id, label) in tabs_ltr {
                             let active = self.active_tab == tab_id;
                             let btn = egui::Button::new(
                                 egui::RichText::new(label)
-                                    .size(12.0)
+                                    .size(ui_size(12.0))
                                     .color(if active { egui::Color32::BLACK } else { white })
                                     .strong(),
                             )
                             .fill(if active { primary } else { elevated })
-                            .rounding(egui::Rounding::same(6.0));
+                            .rounding(egui::Rounding::same(6.0))
+                            .min_size(egui::vec2(0.0, btn_h));
                             if ui.add(btn).clicked() {
                                 self.active_tab = tab_id;
                             }
                         }
                     });
-                });
+                }
             });
 
         ui.add_space(8.0);
 
         // 2. MAIN 2-COLUMN LAYOUT: LEFT FILE/LAP SIDEBAR + RIGHT TELEMETRY CANVAS
         let avail_h = ui.available_height().max(400.0);
+        let sidebar_w = (315.0 * col_scale.min(1.12)).min(360.0);
         ui.horizontal_top(|ui| {
             // --- LEFT SIDEBAR: FILE BROWSER, METADATA & LAP SLICING ---
             ui.allocate_ui_with_layout(
-                egui::vec2(315.0, avail_h),
+                egui::vec2(sidebar_w, avail_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     egui::ScrollArea::vertical()
@@ -351,11 +384,11 @@ impl IbtTelemetryLabState {
                                 .rounding(egui::Rounding::same(10.0))
                                 .inner_margin(10.0)
                                 .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
                                         ui.label(
                                             egui::RichText::new("📂 TELEMETRY (.IBT) FILES")
                                                 .color(primary)
-                                                .size(11.5)
+                                                .size(ui_size(11.5))
                                                 .strong(),
                                         );
                                         ui.with_layout(
@@ -363,7 +396,7 @@ impl IbtTelemetryLabState {
                                             |ui| {
                                                 let demo_btn = egui::Button::new(
                                                     egui::RichText::new("▶ Load Demo .IBT")
-                                                        .size(11.0)
+                                                        .size(ui_size(11.0))
                                                         .color(white)
                                                         .strong(),
                                                 )
@@ -2523,6 +2556,9 @@ impl IbtTelemetryLabState {
             .rounding(egui::Rounding::same(10.0))
             .inner_margin(12.0)
             .show(ui, |ui| {
+                let single_row_fits = ui.available_width() >= 900.0 * settings.ui_col_scale();
+                let mut click_copy_tsv = false;
+
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!(
@@ -2530,34 +2566,54 @@ impl IbtTelemetryLabState {
                             sess.channels.len()
                         ))
                         .color(primary)
-                        .size(12.0)
+                        .size(ui_size(12.0))
                         .strong(),
                     );
                     ui.add_space(12.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.channel_search_filter)
-                            .desired_width(260.0)
+                            .desired_width(240.0 * settings.ui_col_scale())
                             .hint_text("🔍 Search channel name or description..."),
                     );
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let copy_btn = egui::Button::new(
-                            egui::RichText::new("📋 Copy Lap Engineering Report (TSV)")
-                                .color(egui::Color32::BLACK)
-                                .size(12.0)
-                                .strong(),
-                        )
-                        .fill(primary);
-                        if ui.add(copy_btn).clicked() {
-                            let tsv = format_ibt_engineering_report_tsv(sess, lap_a, lap_b, settings.use_metric);
-                            ui.output_mut(|o| o.copied_text = tsv);
-                            *toast_out = Some((
-                                "Copied .IBT Lap Engineering Report to Clipboard!".to_string(),
-                                std::time::Instant::now(),
-                            ));
-                        }
-                    });
+                    if single_row_fits {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let copy_btn = egui::Button::new(
+                                egui::RichText::new("📋 Copy Lap Engineering Report (TSV)")
+                                    .color(egui::Color32::BLACK)
+                                    .size(ui_size(12.0))
+                                    .strong(),
+                            )
+                            .fill(primary);
+                            if ui.add(copy_btn).clicked() {
+                                click_copy_tsv = true;
+                            }
+                        });
+                    }
                 });
+
+                if !single_row_fits {
+                    ui.add_space(6.0);
+                    let copy_btn = egui::Button::new(
+                        egui::RichText::new("📋 Copy Lap Engineering Report (TSV)")
+                            .color(egui::Color32::BLACK)
+                            .size(ui_size(12.0))
+                            .strong(),
+                    )
+                    .fill(primary);
+                    if ui.add(copy_btn).clicked() {
+                        click_copy_tsv = true;
+                    }
+                }
+
+                if click_copy_tsv {
+                    let tsv = format_ibt_engineering_report_tsv(sess, lap_a, lap_b, settings.use_metric);
+                    ui.output_mut(|o| o.copied_text = tsv);
+                    *toast_out = Some((
+                        "Copied .IBT Lap Engineering Report to Clipboard!".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
 
                 ui.add_space(8.0);
                 let q = self.channel_search_filter.trim().to_lowercase();
@@ -2594,15 +2650,15 @@ impl IbtTelemetryLabState {
                                     ui.label(
                                         egui::RichText::new(format!("{:?}[{}]", ch.var_type, ch.count))
                                             .color(muted)
-                                            .size(11.5),
+                                            .size(ui_size(11.5)),
                                     );
                                     ui.label(
                                         egui::RichText::new(format!("+0x{:04X}", ch.offset))
                                             .color(muted)
                                             .monospace()
-                                            .size(11.5),
+                                            .size(ui_size(11.5)),
                                     );
-                                    ui.label(egui::RichText::new(&ch.desc).color(white).size(12.0));
+                                    ui.label(egui::RichText::new(&ch.desc).color(white).size(ui_size(12.0)));
                                     ui.end_row();
                                 }
                             });
@@ -2634,7 +2690,7 @@ fn draw_kpi_card(
             ui.label(
                 egui::RichText::new(title)
                     .color(settings.text_muted())
-                    .size(10.5)
+                    .size(ui_size(10.5))
                     .strong(),
             );
             ui.add_space(2.0);
@@ -2646,7 +2702,7 @@ fn draw_kpi_card(
             ui.label(
                 egui::RichText::new(sub_val)
                     .color(settings.text_muted())
-                    .size(11.0),
+                    .size(ui_size(11.0)),
             );
         });
 }
@@ -2656,7 +2712,7 @@ fn draw_legend_pill(ui: &mut egui::Ui, color: egui::Color32, text: &str, text_co
         ui.spacing_mut().item_spacing.x = 4.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 2.0, color);
-        ui.label(egui::RichText::new(text).color(text_col).size(11.0));
+        ui.label(egui::RichText::new(text).color(text_col).size(ui_size(11.0)));
     });
 }
 
@@ -2823,8 +2879,8 @@ fn draw_synchronized_trace_lane(
                 }
             });
 
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(title).color(white).size(11.5).strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(title).color(white).size(ui_size(11.5)).strong());
                 if let Some(idx) = hover_idx {
                     let pct = grid_dist_pct.get(idx).copied().unwrap_or(0.0) * 100.0;
                     let dist_m = grid_dist_m.get(idx).copied().unwrap_or(0.0);
@@ -2835,7 +2891,7 @@ fn draw_synchronized_trace_lane(
                     } else {
                         format!("@ {:.0} ft ({:.1}%)", dist_m * 3.28084, pct)
                     };
-                    ui.label(egui::RichText::new(dist_str).color(muted).monospace().size(11.0));
+                    ui.label(egui::RichText::new(dist_str).color(muted).monospace().size(ui_size(11.0)));
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2920,7 +2976,11 @@ fn draw_synchronized_trace_lane(
                 y_max += pad;
             }
 
-            let plot_rect = rect.shrink2(egui::vec2(44.0, 10.0));
+            let left_pad = 44.0 + settings.font_size_offset * 3.0;
+            let plot_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + left_pad, rect.top() + 10.0),
+                egui::pos2(rect.right() - 16.0, rect.bottom() - 10.0),
+            );
             if plot_rect.width() <= 10.0 || plot_rect.height() <= 10.0 {
                 return;
             }
@@ -2938,7 +2998,7 @@ fn draw_synchronized_trace_lane(
                     egui::pos2(plot_rect.left() - 5.0, y),
                     egui::Align2::RIGHT_CENTER,
                     format!("{:.1}", val),
-                    egui::FontId::monospace(9.5),
+                    egui::FontId::monospace(ui_size(9.5)),
                     muted,
                 );
             }
@@ -3057,7 +3117,7 @@ fn draw_shock_corner_histogram_card(
                         egui::RichText::new(format!("Σ = {:.1}%", corner.total_binned_pct))
                             .color(primary)
                             .monospace()
-                            .size(11.5)
+                            .size(ui_size(11.5))
                             .strong(),
                     );
                 });
@@ -3073,7 +3133,7 @@ fn draw_shock_corner_histogram_card(
                         corner.low_speed_compression_pct
                     ))
                     .color(egui::Color32::from_rgb(34, 211, 238))
-                    .size(11.0)
+                    .size(ui_size(11.0))
                     .strong(),
                 );
                 cols[1].label(
@@ -3082,7 +3142,7 @@ fn draw_shock_corner_histogram_card(
                         corner.low_speed_rebound_pct
                     ))
                     .color(egui::Color32::from_rgb(52, 211, 153))
-                    .size(11.0)
+                    .size(ui_size(11.0))
                     .strong(),
                 );
                 cols[2].label(
@@ -3091,7 +3151,7 @@ fn draw_shock_corner_histogram_card(
                         corner.high_speed_compression_pct
                     ))
                     .color(egui::Color32::from_rgb(245, 158, 11))
-                    .size(11.0)
+                    .size(ui_size(11.0))
                     .strong(),
                 );
                 cols[3].label(
@@ -3100,7 +3160,7 @@ fn draw_shock_corner_histogram_card(
                         corner.high_speed_rebound_pct
                     ))
                     .color(egui::Color32::from_rgb(168, 85, 247))
-                    .size(11.0)
+                    .size(ui_size(11.0))
                     .strong(),
                 );
             });
@@ -3178,27 +3238,27 @@ fn draw_shock_corner_histogram_card(
                 egui::pos2(plot_rect.left(), rect.bottom() - 2.0),
                 egui::Align2::LEFT_BOTTOM,
                 "-150 mm/s (Rebound)",
-                egui::FontId::monospace(9.5),
+                egui::FontId::monospace(ui_size(9.5)),
                 muted,
             );
             painter.text(
                 egui::pos2(x_zero, rect.bottom() - 2.0),
                 egui::Align2::CENTER_BOTTOM,
                 "0",
-                egui::FontId::monospace(9.5),
+                egui::FontId::monospace(ui_size(9.5)),
                 white,
             );
             painter.text(
                 egui::pos2(plot_rect.right(), rect.bottom() - 2.0),
                 egui::Align2::RIGHT_BOTTOM,
                 "+150 mm/s (Bump)",
-                egui::FontId::monospace(9.5),
+                egui::FontId::monospace(ui_size(9.5)),
                 muted,
             );
 
             ui.add_space(4.0);
             if let Some(info) = hovered_bin_info {
-                ui.label(egui::RichText::new(info).color(primary).monospace().size(11.0));
+                ui.label(egui::RichText::new(info).color(primary).monospace().size(ui_size(11.0)));
             } else {
                 ui.label(
                     egui::RichText::new(format!(
@@ -3209,7 +3269,7 @@ fn draw_shock_corner_histogram_card(
                         corner.peak_rebound_mms
                     ))
                     .color(muted)
-                    .size(11.0),
+                    .size(ui_size(11.0)),
                 );
             }
         });
@@ -3277,7 +3337,7 @@ fn draw_tire_corner_analysis_card(
                 ui.label(
                     egui::RichText::new(format!("{:.0}% Tread", avg_wear))
                         .color(wear_col)
-                        .size(11.5)
+                        .size(ui_size(11.5))
                         .strong(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3288,7 +3348,7 @@ fn draw_tire_corner_analysis_card(
                             corner.pressure_build_psi
                         ))
                         .color(primary)
-                        .size(12.0)
+                        .size(ui_size(12.0))
                         .strong(),
                     );
                 });
@@ -3301,14 +3361,14 @@ fn draw_tire_corner_analysis_card(
                 ui.label(
                     egui::RichText::new(format!("🔥 Peak: {}", fmt_temp(corner.peak_temp_f)))
                         .color(peak_col)
-                        .size(12.5)
+                        .size(ui_size(12.5))
                         .strong(),
                 );
                 if !corner.peak_track_loc.is_empty() {
                     ui.label(
                         egui::RichText::new(format!("📍 {}", corner.peak_track_loc))
                             .color(white)
-                            .size(11.5),
+                            .size(ui_size(11.5)),
                     );
                 }
             });
@@ -3365,7 +3425,7 @@ fn draw_tire_corner_analysis_card(
                         .inner_margin(8.0)
                         .show(col_ui, |ui| {
                             ui.vertical_centered(|ui| {
-                                ui.label(egui::RichText::new(lbl).color(muted).size(10.0).strong());
+                                ui.label(egui::RichText::new(lbl).color(muted).size(ui_size(10.0)).strong());
                                 ui.add_space(2.0);
                                 ui.label(
                                     egui::RichText::new(fmt_temp(stat.avg))
@@ -3379,7 +3439,7 @@ fn draw_tire_corner_analysis_card(
                                         fmt_temp(stat.max)
                                     ))
                                     .color(muted)
-                                    .size(10.5),
+                                    .size(ui_size(10.5)),
                                 );
                             });
                         });
@@ -3396,7 +3456,7 @@ fn draw_tire_corner_analysis_card(
                     ui.label(
                         egui::RichText::new("Inside-to-Outside Spread (ΔT = T_in - T_out):")
                             .color(muted)
-                            .size(11.5),
+                            .size(ui_size(11.5)),
                     );
                     let spread_col = if corner.spread_stats_f.avg >= 5.0 && corner.spread_stats_f.avg <= 25.0 {
                         green
@@ -3410,7 +3470,7 @@ fn draw_tire_corner_analysis_card(
                             fmt_diff_temp(corner.spread_stats_f.max)
                         ))
                         .color(spread_col)
-                        .size(12.0)
+                        .size(ui_size(12.0))
                         .strong(),
                     );
                     ui.end_row();
@@ -3418,7 +3478,7 @@ fn draw_tire_corner_analysis_card(
                     ui.label(
                         egui::RichText::new("Center Wear Bias (T_center - Avg(In,Out)):")
                             .color(muted)
-                            .size(11.5),
+                            .size(ui_size(11.5)),
                     );
                     let bias_desc = if corner.center_bias_stats_f.avg > 4.0 {
                         "Crown Hot / Over-inflated"
@@ -3434,14 +3494,14 @@ fn draw_tire_corner_analysis_card(
                             bias_desc
                         ))
                         .color(white)
-                        .size(12.0),
+                        .size(ui_size(12.0)),
                     );
                     ui.end_row();
 
                     ui.label(
                         egui::RichText::new("Pressure Progression (Cold/Start → Hot / Peak):")
                             .color(muted)
-                            .size(11.5),
+                            .size(ui_size(11.5)),
                     );
                     let base_p = if corner.cold_pressure_psi > 0.1 {
                         corner.cold_pressure_psi
@@ -3456,7 +3516,7 @@ fn draw_tire_corner_analysis_card(
                             fmt_press(corner.peak_pressure_psi)
                         ))
                         .color(primary)
-                        .size(12.0),
+                        .size(ui_size(12.0)),
                     );
                     ui.end_row();
 
@@ -3464,7 +3524,7 @@ fn draw_tire_corner_analysis_card(
                         ui.label(
                             egui::RichText::new("Comparison vs Lap B (ΔAvg Temp / ΔHot PSI):")
                                 .color(muted)
-                                .size(11.5),
+                                .size(ui_size(11.5)),
                         );
                         let dt_mid = cb.center_stats_f.avg - corner.center_stats_f.avg;
                         let dp_end = cb.end_pressure_psi - corner.end_pressure_psi;
@@ -3475,7 +3535,7 @@ fn draw_tire_corner_analysis_card(
                                 dp_end
                             ))
                             .color(settings.secondary_accent())
-                            .size(11.5)
+                            .size(ui_size(11.5))
                             .strong(),
                         );
                         ui.end_row();

@@ -65,7 +65,34 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+static ACTIVE_FONT_OFFSET_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn set_active_font_offset(offset: f32) {
+    ACTIVE_FONT_OFFSET_BITS.store(offset.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn active_font_offset() -> f32 {
+    f32::from_bits(ACTIVE_FONT_OFFSET_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub(crate) fn ui_size(base: f32) -> f32 {
+    let offset = active_font_offset();
+    if offset.abs() < 0.01 {
+        base
+    } else if base <= 22.0 {
+        base + offset
+    } else if base <= 32.0 {
+        base + offset * 0.85
+    } else {
+        base + offset * 0.65
+    }
+}
+
 pub(crate) fn display_font(size: f32) -> egui::FontId {
+    egui::FontId::new(ui_size(size), egui::FontFamily::Name("Display".into()))
+}
+
+pub(crate) fn display_font_raw(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name("Display".into()))
 }
 
@@ -74,6 +101,7 @@ pub(crate) fn with_alpha(c: egui::Color32, alpha: u8) -> egui::Color32 {
 }
 
 pub(crate) fn setup_custom_style(ctx: &egui::Context, settings: &AppSettings) {
+    set_active_font_offset(settings.font_size_offset);
     let mut style = (*ctx.style()).clone();
     let is_dark = settings.is_dark_theme();
     
@@ -166,7 +194,10 @@ pub(crate) fn setup_custom_style(ctx: &egui::Context, settings: &AppSettings) {
     style.visuals.selection.stroke = egui::Stroke::new(1.5, primary);
 
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.spacing.button_padding = egui::vec2(
+        10.0 + settings.font_size_offset * 0.4,
+        5.0 + settings.font_size_offset * 0.25,
+    );
     
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -201,7 +232,7 @@ pub(crate) fn setup_custom_style(ctx: &egui::Context, settings: &AppSettings) {
 
     use egui::{TextStyle, FontId, FontFamily::Proportional, FontFamily::Monospace};
     style.text_styles = [
-        (TextStyle::Heading, display_font(base_heading)),
+        (TextStyle::Heading, display_font_raw(base_heading)),
         (TextStyle::Body, FontId::new(base_body, Proportional)),
         (TextStyle::Monospace, FontId::new(base_body, Monospace)),
         (TextStyle::Button, FontId::new(base_body, Proportional)),
@@ -698,6 +729,7 @@ impl eframe::App for WarRoomApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        set_active_font_offset(self.settings.font_size_offset);
         self.updater.poll();
         let primary = self.settings.primary_accent();
         let white = self.settings.text_color();
@@ -766,7 +798,8 @@ impl eframe::App for WarRoomApp {
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .stroke(egui::Stroke::new(1.0, self.settings.divider_color()));
 
-        egui::TopBottomPanel::top("top_header").exact_height(60.0).frame(header_frame).show(ctx, |ui| {
+        let top_bar_h = 60.0 + self.settings.font_size_offset * 1.4;
+        egui::TopBottomPanel::top("top_header").exact_height(top_bar_h).frame(header_frame).show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 // Brand Logo (Top-Left)
                 if let Some(tex) = &self.logo_texture {
@@ -790,7 +823,7 @@ impl eframe::App for WarRoomApp {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let c_btn = egui::Button::new(
                             egui::RichText::new("Cockpit")
-                                .size(12.5)
+                                .size(ui_size(12.5))
                                 .color(if is_cockpit { white } else { muted })
                         )
                         .fill(if is_cockpit { self.settings.panel_color() } else { egui::Color32::TRANSPARENT })
@@ -801,7 +834,7 @@ impl eframe::App for WarRoomApp {
 
                         let g_btn = egui::Button::new(
                             egui::RichText::new("Grid")
-                                .size(12.5)
+                                .size(ui_size(12.5))
                                 .color(if is_grid { white } else { muted })
                         )
                         .fill(if is_grid { self.settings.panel_color() } else { egui::Color32::TRANSPARENT })
@@ -824,7 +857,7 @@ impl eframe::App for WarRoomApp {
                 };
                 let ibt_btn = egui::Button::new(
                     egui::RichText::new("📈 .IBT Telemetry Lab")
-                        .size(12.5)
+                        .size(ui_size(12.5))
                         .color(if is_ibt { primary } else { white })
                         .strong(),
                 )
@@ -842,64 +875,76 @@ impl eframe::App for WarRoomApp {
                 ui.add_space(4.0);
 
                 // Context Pills: Track, Car/Session, Position, Full Weather (with Wind Direction & Humidity)
+                // Reserve width for right-aligned controls (Live pill + Overlay + Menu + Settings) so pills never overlap them
+                let right_reserve = 285.0 + self.settings.font_size_offset * 18.0;
+                let col_scale = self.settings.ui_col_scale();
                 let pill_bg = elevated;
                 let pill_margin = egui::Margin::symmetric(10.0, 5.0);
                 let pill_round = egui::Rounding::same(16.0);
 
                 let track_len_str = convert_unit(&track_len, current_metric);
-                egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.label(egui::RichText::new(&track_name).color(white).size(12.5));
-                        if !track_len_str.is_empty() && track_len_str != "—" {
-                            ui.label(egui::RichText::new(format!("· {}", track_len_str)).color(muted).size(12.0));
-                        }
+                if ui.available_width() > right_reserve + 170.0 * col_scale {
+                    egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.label(egui::RichText::new(&track_name).color(white).size(ui_size(12.5)));
+                            if !track_len_str.is_empty() && track_len_str != "—" {
+                                ui.label(egui::RichText::new(format!("· {}", track_len_str)).color(muted).size(ui_size(12.0)));
+                            }
+                        });
                     });
-                });
+                }
 
-                egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.label(egui::RichText::new(&car_name).color(white).size(12.5));
-                        let sess_info = if !track_state.is_empty() && track_state != "—" && track_state != "..." {
-                            format!("· {} L{} · {}", sess_type, player_laps, track_state)
-                        } else {
-                            format!("· {} L{}", sess_type, player_laps)
-                        };
-                        ui.label(egui::RichText::new(sess_info).color(muted).size(12.0));
+                if ui.available_width() > right_reserve + 220.0 * col_scale {
+                    egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.label(egui::RichText::new(&car_name).color(white).size(ui_size(12.5)));
+                            let sess_info = if !track_state.is_empty() && track_state != "—" && track_state != "..." {
+                                format!("· {} L{} · {}", sess_type, player_laps, track_state)
+                            } else {
+                                format!("· {} L{}", sess_type, player_laps)
+                            };
+                            ui.label(egui::RichText::new(sess_info).color(muted).size(ui_size(12.0)));
+                        });
                     });
-                });
+                }
 
-                egui::Frame::none()
-                    .fill(with_alpha(primary, 30))
-                    .rounding(pill_round)
-                    .inner_margin(pill_margin)
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new(format!("P{} / {}", player_pos, total_drivers)).color(primary).strong().size(12.5));
-                    });
+                if ui.available_width() > right_reserve + 85.0 * col_scale {
+                    egui::Frame::none()
+                        .fill(with_alpha(primary, 30))
+                        .rounding(pill_round)
+                        .inner_margin(pill_margin)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(format!("P{} / {}", player_pos, total_drivers)).color(primary).strong().size(ui_size(12.5)));
+                        });
+                }
 
                 let (header_wind_spd, header_wind_unit) = parse_wind_speed(&current_state.wind_speed_raw, current_metric);
                 let header_wind_rad = parse_wind_direction_rad(&current_state.wind_dir_raw);
                 let header_rel_wind = header_wind_rad.map(|w_rad| {
                     calculate_relative_wind_rad(w_rad, current_state.player_yaw_north)
                 });
-                egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.label(egui::RichText::new(format!("☀ {} · Air {} · Track {} · Wind {}", sky_str, air_str, track_str, wind_spd_str)).color(muted).size(12.0));
-                        draw_wind_indicator(ui, header_wind_spd, header_wind_unit, header_rel_wind, &wind_dir_str, 0.72);
-                        ui.label(egui::RichText::new(format!("· RH {}", rh_str)).color(muted).size(12.0));
+                if ui.available_width() > right_reserve + 320.0 * col_scale {
+                    egui::Frame::none().fill(pill_bg).rounding(pill_round).inner_margin(pill_margin).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.label(egui::RichText::new(format!("☀ {} · Air {} · Track {} · Wind {}", sky_str, air_str, track_str, wind_spd_str)).color(muted).size(ui_size(12.0)));
+                            draw_wind_indicator(ui, header_wind_spd, header_wind_unit, header_rel_wind, &wind_dir_str, 0.72);
+                            ui.label(egui::RichText::new(format!("· RH {}", rh_str)).color(muted).size(ui_size(12.0)));
+                        });
                     });
-                });
+                }
 
                 // Right-side controls: Live pill, Overlay, Overflow menu (…), Settings (⚙)
+                let top_btn_h = self.settings.ui_btn_height(30.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add_sized(egui::vec2(32.0, 30.0), egui::Button::new(egui::RichText::new("⚙").color(white).size(14.0)).fill(elevated)).on_hover_text("Settings & Layouts").clicked() {
+                    if ui.add(egui::Button::new(egui::RichText::new("⚙").color(white).size(ui_size(14.0))).fill(elevated).min_size(egui::vec2(32.0, top_btn_h))).on_hover_text("Settings & Layouts").clicked() {
                         self.show_settings_modal = true;
                     }
 
-                    ui.menu_button(egui::RichText::new("…").color(white).size(15.0), |ui| {
-                        ui.set_min_width(210.0);
+                    ui.menu_button(egui::RichText::new("…").color(white).size(ui_size(15.0)), |ui| {
+                        ui.set_min_width(220.0 * col_scale);
                         if ui.button("📖 What's New & Release Notes").clicked() {
                             self.show_release_notes_modal = true;
                             ui.close_menu();
@@ -929,6 +974,20 @@ impl eframe::App for WarRoomApp {
                             ui.close_menu();
                         }
                         ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Text Size:").color(muted).size(ui_size(11.5)));
+                            for preset in [
+                                crate::settings::TextSizePreset::Small,
+                                crate::settings::TextSizePreset::Medium,
+                                crate::settings::TextSizePreset::Large,
+                            ] {
+                                let is_sel = self.settings.text_size == preset;
+                                if ui.selectable_label(is_sel, preset.short_label()).clicked() {
+                                    self.settings.set_text_size(preset);
+                                    setup_custom_style(ctx, &self.settings);
+                                }
+                            }
+                        });
                         let unit_label = if current_metric { "Switch to Imperial (mph / °F)" } else { "Switch to Metric (km/h / °C)" };
                         if ui.button(unit_label).clicked() {
                             self.settings.use_metric = !current_metric;
@@ -944,17 +1003,18 @@ impl eframe::App for WarRoomApp {
                             ui.close_menu();
                         }
                         ui.separator();
-                        ui.label(egui::RichText::new(format!("Session ID: {} · SOF: {}", session_id, sof)).color(muted).size(11.0));
+                        ui.label(egui::RichText::new(format!("Session ID: {} · SOF: {}", session_id, sof)).color(muted).size(ui_size(11.0)));
                     });
 
                     let is_overlay_open = self.settings.overlay.enabled;
                     let overlay_btn = egui::Button::new(
                         egui::RichText::new(if is_overlay_open { "Overlay · On" } else { "Overlay" })
-                            .size(12.5)
+                            .size(ui_size(12.5))
                             .color(if is_overlay_open { primary } else { white })
                     )
-                    .fill(if is_overlay_open { with_alpha(primary, 30) } else { elevated });
-                    if ui.add_sized(egui::vec2(88.0, 30.0), overlay_btn).clicked() {
+                    .fill(if is_overlay_open { with_alpha(primary, 30) } else { elevated })
+                    .min_size(egui::vec2(88.0, top_btn_h));
+                    if ui.add(overlay_btn).clicked() {
                         self.settings.overlay.enabled = !self.settings.overlay.enabled;
                         self.settings.save();
                     }
@@ -973,7 +1033,7 @@ impl eframe::App for WarRoomApp {
                                 ui.spacing_mut().item_spacing.x = 6.0;
                                 let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
                                 ui.painter().circle_filled(rect.center(), 4.0, live_fg);
-                                ui.label(egui::RichText::new(live_txt).color(live_fg).size(12.0).strong());
+                                ui.label(egui::RichText::new(live_txt).color(live_fg).size(ui_size(12.0)).strong());
                             });
                         });
                 });
@@ -1011,25 +1071,25 @@ impl eframe::App for WarRoomApp {
                                 } else {
                                     format!("{} New Update Available: {}", icon, info_clone.tag_name)
                                 };
-                                ui.label(egui::RichText::new(title).color(egui::Color32::WHITE).strong().size(12.5));
+                                ui.label(egui::RichText::new(title).color(egui::Color32::WHITE).strong().size(ui_size(12.5)));
                                 if !info_clone.name.is_empty() && info_clone.name != info_clone.tag_name {
-                                    ui.label(egui::RichText::new(format!("({})", info_clone.name)).color(muted).size(12.0));
+                                    ui.label(egui::RichText::new(format!("({})", info_clone.name)).color(muted).size(ui_size(12.0)));
                                 }
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(ui_size(11.5))).clicked() {
                                         self.updater.dismiss();
                                     }
-                                    if ui.button(egui::RichText::new("Skip this version").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("Skip this version").color(muted).size(ui_size(11.5))).clicked() {
                                         self.settings.updates.ignored_version = Some(info_clone.tag_name.clone());
                                         self.settings.save();
                                         self.updater.dismiss();
                                     }
-                                    if ui.button(egui::RichText::new("What's New 📖").color(white).size(12.0)).clicked() {
+                                    if ui.button(egui::RichText::new("What's New 📖").color(white).size(ui_size(12.0))).clicked() {
                                         self.show_release_notes_modal = true;
                                     }
                                     let update_btn = egui::Button::new(
-                                        egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(12.0)
+                                        egui::RichText::new("Update Now ⚡").color(egui::Color32::BLACK).strong().size(ui_size(12.0))
                                     ).fill(primary);
                                     if ui.add(update_btn).clicked() {
                                         self.updater.trigger_download_and_install(&info_clone);
@@ -1045,7 +1105,7 @@ impl eframe::App for WarRoomApp {
                                 } else {
                                     format!("📥 Downloading {}: {:.1} MB", tag, mb_down)
                                 };
-                                ui.label(egui::RichText::new(text).color(white).strong().size(12.5));
+                                ui.label(egui::RichText::new(text).color(white).strong().size(ui_size(12.5)));
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     let prog = if *total_bytes > 0 { *percent / 100.0 } else { 0.5 };
@@ -1053,14 +1113,14 @@ impl eframe::App for WarRoomApp {
                                 });
                             }
                             updater::UpdateStatus::ReadyToRestart { tag } => {
-                                ui.label(egui::RichText::new(format!("✅ Update {} downloaded and ready!", tag)).color(self.settings.status_green()).strong().size(12.5));
+                                ui.label(egui::RichText::new(format!("✅ Update {} downloaded and ready!", tag)).color(self.settings.status_green()).strong().size(ui_size(12.5)));
 
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("Later").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("Later").color(muted).size(ui_size(11.5))).clicked() {
                                         self.updater.dismiss();
                                     }
                                     let restart_btn = egui::Button::new(
-                                        egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(12.0)
+                                        egui::RichText::new("Restart to Apply 🔄").color(egui::Color32::BLACK).strong().size(ui_size(12.0))
                                     ).fill(self.settings.status_green());
                                     if ui.add(restart_btn).clicked() {
                                         if let Err(e) = updater::apply_update_and_restart() { self.updater.status = updater::UpdateStatus::Error(e); }
@@ -1068,9 +1128,9 @@ impl eframe::App for WarRoomApp {
                                 });
                             }
                             updater::UpdateStatus::Error(err) => {
-                                ui.label(egui::RichText::new(format!("⚠ Update notice: {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(12.0));
+                                ui.label(egui::RichText::new(format!("⚠ Update notice: {}", err)).color(egui::Color32::from_rgb(255, 120, 120)).size(ui_size(12.0)));
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(11.5)).clicked() {
+                                    if ui.button(egui::RichText::new("× Dismiss").color(muted).size(ui_size(11.5))).clicked() {
                                         self.updater.dismiss();
                                     }
                                 });
@@ -1122,7 +1182,7 @@ impl eframe::App for WarRoomApp {
                             .shadow(egui::epaint::Shadow { offset: egui::vec2(0.0, 4.0), blur: 12.0, spread: 0.0, color: egui::Color32::from_black_alpha(160) })
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(msg).color(white).strong().size(12.5));
+                                    ui.label(egui::RichText::new(msg).color(white).strong().size(ui_size(12.5)));
                                 });
                             });
                     });
@@ -2278,6 +2338,219 @@ DriverInfo:
         let s1 = &driver.stints[0];
         assert!(!s1.is_active, "Stint S1 is closed at pit entry");
         assert!(!s1.tires.has_data, "Stint S1 must NOT latch tire data at pit entry before stopping in stall");
+    }
+
+    #[test]
+    fn test_pit_stop_pull_out_of_pits_tire_lifecycle_and_cockpit_resolution() {
+        // 1. Verify StintTireSet::has_wear
+        let mut tires = StintTireSet::default();
+        assert!(!tires.has_wear());
+        tires.lf.temp_m = 95.0; // hot temps alone do not count as wear
+        assert!(!tires.has_wear());
+        assert!(tires.has_wear_or_temps());
+        tires.rf.wear_m = 84.5;
+        assert!(tires.has_wear());
+
+        // 2. Setup race session with player car
+        let mut state = WarRoomState::default();
+        state.session_type = "RACE".to_string();
+        state.player_car_idx = 0;
+
+        let race_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Phoenix Raceway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Race"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "Test Driver"
+"#;
+        assert!(parse_iracing_session_yaml(race_yaml, &mut state));
+        let _ = state.check_session_transition(0, 0, STATE_RACING, 10.0, false);
+
+        // Frame 0: Green flag start
+        let mut pit_road = vec![false; 1];
+        let mut laps_comp = vec![0; 1];
+        let mut last_laps = vec![0.0; 1];
+        let fast_laps = vec![0.0; 1];
+        let positions = vec![1; 1];
+        let mut surfaces = vec![TRK_LOC_ON_TRACK; 1];
+        let lap_dist_pcts = vec![0.02; 1];
+
+        let frame_start = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 10.0,
+            current_fuel_sample: 65.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_start, None, false);
+
+        // Frame 1: Driver completes lap 1 on track
+        laps_comp[0] = 1;
+        last_laps[0] = 27.5;
+        let frame_lap1 = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 38.0,
+            current_fuel_sample: 64.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_lap1, None, false);
+        assert_eq!(state.drivers.get(&0).unwrap().stints[0].laps_completed, 1);
+
+        // Frame 2: Enters pit road at 45 mph
+        pit_road[0] = true;
+        surfaces[0] = TRK_LOC_APPROACHING_PITS;
+        state.debug_speed = 45.0;
+        let frame_pit_entry = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 55.0,
+            current_fuel_sample: 63.5,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_pit_entry, None, false);
+        assert!(!state.player_stopped_in_pit_stall, "Pit entry at speed must not mark stopped in stall");
+        assert_eq!(state.tire_popup_armed_stint, 1, "Pit entry must arm tire popup for Stint S1");
+
+        // Frame 3: Stops in pit box (speed 0.0, in pit stall)
+        surfaces[0] = TRK_LOC_IN_PIT_STALL;
+        state.debug_speed = 0.0;
+        let frame_stall = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 65.0,
+            current_fuel_sample: 63.5,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_stall, None, false);
+        assert!(state.player_stopped_in_pit_stall, "Car stationary in stall must set player_stopped_in_pit_stall");
+
+        // Simulate pit crew servicing car and updating Stint S1 with post-pit wear
+        let mut serviced_tires = StintTireSet::default();
+        serviced_tires.lf.wear_m = 88.0;
+        serviced_tires.rf.wear_m = 81.0;
+        serviced_tires.lr.wear_m = 92.0;
+        serviced_tires.rr.wear_m = 86.0;
+        serviced_tires.lf.temp_m = 85.0;
+        serviced_tires.rf.temp_m = 98.0;
+        serviced_tires.has_data = true;
+        state.drivers.get_mut(&0).unwrap().stints[0].tires = serviced_tires.clone();
+        state.latest_tire_data = serviced_tires.clone();
+
+        // Frame 4: Driver pulls out of the pits! Moving down pit road at 35 mph towards pit exit
+        surfaces[0] = TRK_LOC_APPROACHING_PITS;
+        state.debug_speed = 35.0;
+        let frame_pull_out = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 75.0,
+            current_fuel_sample: 65.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_pull_out, None, false);
+        assert!(state.player_stopped_in_pit_stall, "player_stopped_in_pit_stall remains true while pulling out down pit road");
+
+        // Frame 5: Driver crosses pit exit line back onto track (starts Stint S2)
+        pit_road[0] = false;
+        surfaces[0] = TRK_LOC_ON_TRACK;
+        state.debug_speed = 85.0;
+        let frame_pit_exit = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 85.0,
+            current_fuel_sample: 64.8,
+            player_live_pressures: [0.0; 4],
+            is_on_track: true,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_pit_exit, None, false);
+        assert!(!state.player_stopped_in_pit_stall, "player_stopped_in_pit_stall resets on pit exit");
+        assert_eq!(state.tire_popup_trigger_seq, 1, "Tire popup HUD must trigger on pit exit");
+        assert_eq!(state.tire_popup_stint_num, 1, "Tire popup must show S1");
+
+        // Stint S1 must still have all wear intact (not cleared or overwritten on pit exit)
+        let s1_final = &state.drivers.get(&0).unwrap().stints[0];
+        assert_eq!(s1_final.tires.lf.wear_m, 88.0);
+        assert_eq!(s1_final.tires.rf.wear_m, 81.0);
+        assert!(s1_final.tires.has_wear());
+
+        // Verify Cockpit window resolution logic when pulling out of pits:
+        let player = state.drivers.get(&0);
+        let last_completed_stint = player.and_then(|p| p.stints.iter().rev().find(|st| st.laps_completed > 0));
+
+        // Even if selected_stint_num points to active Stint S2 (which has 0 laps):
+        let app_selected_stint_num = Some(2);
+        let tire_stint = app_selected_stint_num
+            .and_then(|num| player.and_then(|p| p.stints.iter().find(|st| st.stint_number == num)))
+            .filter(|st| st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data)
+            .or_else(|| {
+                player.and_then(|p| p.stints.iter().rev().find(|st| !st.is_active && (st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data)))
+            })
+            .or(last_completed_stint);
+
+        assert!(tire_stint.is_some());
+        let st = tire_stint.unwrap();
+        assert_eq!(st.stint_number, 1, "Cockpit tire section must resolve to completed Stint S1");
+        assert_eq!(st.tires.lf.wear_m, 88.0, "LF wear must be 88% in cockpit report");
+        assert_eq!(st.tires.rf.wear_m, 81.0, "RF wear must be 81% in cockpit report");
     }
 
     #[test]

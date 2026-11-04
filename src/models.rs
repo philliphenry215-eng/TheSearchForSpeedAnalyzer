@@ -31,6 +31,13 @@ impl StintTireSet {
         self.lf.temp_m > 5.0 || self.rf.temp_m > 5.0 || self.lf.wear_m > 0.1 || self.rf.wear_m > 0.1
     }
 
+    pub fn has_wear(&self) -> bool {
+        self.lf.wear_l > 0.1 || self.lf.wear_m > 0.1 || self.lf.wear_r > 0.1
+            || self.rf.wear_l > 0.1 || self.rf.wear_m > 0.1 || self.rf.wear_r > 0.1
+            || self.lr.wear_l > 0.1 || self.lr.wear_m > 0.1 || self.lr.wear_r > 0.1
+            || self.rr.wear_l > 0.1 || self.rr.wear_m > 0.1 || self.rr.wear_r > 0.1
+    }
+
     pub fn should_trigger_popup(&self, new_tires: &StintTireSet) -> bool {
         if !new_tires.has_wear_or_temps() {
             return false;
@@ -524,6 +531,8 @@ pub struct WarRoomState {
     /// Stint number whose tires should be shown when the player next leaves pit road (0 = nothing pending).
     /// Armed when the player enters pit road after a stint with completed laps; fired on pit exit.
     pub tire_popup_armed_stint: i32,
+    /// Tracks if the player has stopped in their pit stall or been stationary on pit road during this pit visit.
+    pub player_stopped_in_pit_stall: bool,
     pub player_is_in_car: bool,
     pub player_yaw_north: f32,
     pub player_incidents: i32,
@@ -599,6 +608,7 @@ impl Default for WarRoomState {
             tire_popup_trigger_seq: 0,
             tire_popup_stint_num: 1,
             tire_popup_armed_stint: 0,
+            player_stopped_in_pit_stall: false,
             player_is_in_car: false,
             player_yaw_north: 0.0,
             player_incidents: 0,
@@ -798,6 +808,7 @@ impl WarRoomState {
         // has seen, so resetting it to 0 silently suppressed every popup after a session change.
         self.tire_popup_stint_num = 1;
         self.tire_popup_armed_stint = 0;
+        self.player_stopped_in_pit_stall = false;
         self.player_yaw_north = 0.0;
 
         if manual {
@@ -1362,17 +1373,26 @@ impl WarRoomState {
             // fire when the player leaves pit road, cancel if the player leaves the car / world.
             if idx == player_idx {
                 if !was_in_pit && is_pit && in_world {
+                    self.player_stopped_in_pit_stall = false;
                     if let Some(last) = driver.last_live_stint() {
                         if !last.is_active && last.laps_completed > 0 {
                             arm_tire_popup_stint = Some(last.stint_number);
                         }
                     }
                 }
+                if is_pit && in_world {
+                    let surface = *frame.surfaces.get(player_idx).unwrap_or(&TRK_LOC_NOT_IN_WORLD) as i32;
+                    if surface == TRK_LOC_IN_PIT_STALL || self.debug_speed < 2.0 {
+                        self.player_stopped_in_pit_stall = true;
+                    }
+                }
                 if was_in_pit && !is_pit && in_world && was_in_world {
                     fire_tire_popup = true;
+                    self.player_stopped_in_pit_stall = false;
                 }
                 if !in_world {
                     disarm_tire_popup = true;
+                    self.player_stopped_in_pit_stall = false;
                 }
             }
 
@@ -1672,10 +1692,11 @@ impl WarRoomState {
             self.had_caution_since_last_green = false;
         }
 
-        // Continuous Pit Stall / Garage Tire Capture for Player (only after completed laps)
-        // Latch tire wear & temperatures when the car is stationary in the pit stall or in the garage.
-        // This only *records* the data on the closed stint; the popup itself is fired on pit exit (see below).
+        // Continuous Pit Stall / Pit Road / Garage Tire Capture for Player (only after completed laps)
+        // Latch tire wear & temperatures when the car is stationary in the pit stall, rolling out of pits after service,
+        // or in the garage. This records the data on the closed stint; the popup itself is fired on pit exit (see below).
         let is_in_stall_or_garage = frame.surfaces.get(player_idx).map_or(false, |&s| s == TRK_LOC_IN_PIT_STALL)
+            || (self.debug_on_pit_road && self.player_stopped_in_pit_stall)
             || (self.debug_on_pit_road && self.debug_speed < 2.0)
             || !self.debug_is_on_track
             || !self.player_is_in_car
@@ -1686,25 +1707,42 @@ impl WarRoomState {
                 let player_drv_opt = self.drivers.get(&player_idx);
                 let closed_stint_opt = player_drv_opt.and_then(|d| {
                     d.stints.iter().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0)
+                        .or_else(|| d.stints.iter().rev().find(|st| !st.is_imported && st.laps_completed > 0))
                 });
 
-                if let Some(closed_stint) = closed_stint_opt {
-                    let prev_hot = Some(&closed_stint.tires);
-                    let pit_tires = read_player_tires(live, prev_hot);
-                    if pit_tires.is_valid() {
-                        if let Some(player_drv) = self.drivers.get_mut(&player_idx) {
-                            if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
-                                // Never replace real wear/temps (e.g. from the garage CarSetup YAML) with a pressure-only sample
-                                let keeps_detail = pit_tires.has_wear_or_temps() || !target_stint.tires.has_wear_or_temps();
-                                if keeps_detail {
-                                    target_stint.tires = pit_tires.clone();
-                                    state_changed = true;
-                                }
+                let prev_hot = closed_stint_opt.map(|st| &st.tires);
+                let pit_tires = read_player_tires(live, prev_hot);
+                if pit_tires.is_valid() {
+                    if let Some(player_drv) = self.drivers.get_mut(&player_idx) {
+                        let target_idx = player_drv.stints.iter().rposition(|st| !st.is_imported && !st.is_active && st.laps_completed > 0)
+                            .or_else(|| player_drv.stints.iter().rposition(|st| !st.is_imported && st.laps_completed > 0));
+                        if let Some(t_idx) = target_idx {
+                            let target_stint = &mut player_drv.stints[t_idx];
+                            // If target stint already has true wear, NEVER overwrite with a sample that has no wear
+                            let keeps_detail = if target_stint.tires.has_wear() {
+                                pit_tires.has_wear()
+                            } else if pit_tires.has_wear() {
+                                true
+                            } else {
+                                pit_tires.has_wear_or_temps() || !target_stint.tires.has_wear_or_temps()
+                            };
+                            if keeps_detail {
+                                target_stint.tires = pit_tires.clone();
+                                state_changed = true;
                             }
                         }
-                        if pit_tires.has_wear_or_temps() || !self.latest_tire_data.has_wear_or_temps() {
-                            self.latest_tire_data = pit_tires;
-                        }
+                    }
+
+                    // Update latest_tire_data without erasing existing true wear
+                    let latest_keeps_detail = if self.latest_tire_data.has_wear() {
+                        pit_tires.has_wear()
+                    } else if pit_tires.has_wear() {
+                        true
+                    } else {
+                        pit_tires.has_wear_or_temps() || !self.latest_tire_data.has_wear_or_temps()
+                    };
+                    if latest_keeps_detail {
+                        self.latest_tire_data = pit_tires;
                     }
                 }
             }
@@ -1717,12 +1755,18 @@ impl WarRoomState {
         if let Some(stint_num) = arm_tire_popup_stint {
             self.tire_popup_armed_stint = stint_num;
         }
-        if fire_tire_popup && self.tire_popup_armed_stint > 0 {
-            let stint_num = self.tire_popup_armed_stint;
+        if fire_tire_popup {
+            let stint_num = if self.tire_popup_armed_stint > 0 {
+                self.tire_popup_armed_stint
+            } else {
+                self.drivers.get(&player_idx).and_then(|d| {
+                    d.stints.iter().rev().find(|st| !st.is_imported && st.laps_completed > 0).map(|st| st.stint_number)
+                }).unwrap_or(1)
+            };
             self.tire_popup_armed_stint = 0;
             let has_real_tire_data = self.drivers.get(&player_idx).map_or(false, |d| {
-                d.stints.iter().any(|st| !st.is_imported && st.stint_number == stint_num && st.tires.has_wear_or_temps())
-            }) || self.latest_tire_data.has_wear_or_temps();
+                d.stints.iter().any(|st| !st.is_imported && st.stint_number == stint_num && (st.tires.has_wear() || st.tires.has_wear_or_temps()))
+            }) || self.latest_tire_data.has_wear() || self.latest_tire_data.has_wear_or_temps();
             if has_real_tire_data {
                 self.tire_popup_trigger_seq += 1;
                 self.tire_popup_stint_num = stint_num;

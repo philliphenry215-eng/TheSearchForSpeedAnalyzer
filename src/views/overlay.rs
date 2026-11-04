@@ -1,5 +1,5 @@
 use eframe::egui;
-use crate::{display_font, with_alpha, WarRoomApp};
+use crate::{display_font_raw as display_font, with_alpha, WarRoomApp};
 use crate::formatters::*;
 use crate::models::*;
 use crate::settings::*;
