@@ -394,6 +394,8 @@ pub struct DriverState {
     pub exited_pits_on_current_lap: bool,
     pub ignored_lap_sdk: i32,
     pub setup_name: String,
+    pub raw_setup_path: String,
+    pub car_path: String,
     pub stints: Vec<StintData>,
     pub historical_fuel_burn_rate: f32,
     /// Session time when `CarIdxLapCompleted` incremented but `CarIdxLastLapTime` has not (yet) changed.
@@ -505,6 +507,8 @@ pub struct WarRoomState {
     pub track_state: String,
     pub track_wetness: i32,
     pub player_setup_name: String,
+    pub player_raw_setup_path: String,
+    pub player_car_path: String,
     
     // Telemetry Environmental strings
     pub weather_type: String,
@@ -590,6 +594,8 @@ impl Default for WarRoomState {
             track_state: "Clean Track".to_string(),
             track_wetness: 0,
             player_setup_name: "Baseline".to_string(),
+            player_raw_setup_path: String::new(),
+            player_car_path: String::new(),
             weather_type: "...".to_string(),
             air_temp_raw: "...".to_string(),
             track_temp_raw: "...".to_string(),
@@ -697,6 +703,8 @@ impl WarRoomState {
             } else {
                 "Baseline".to_string()
             },
+            raw_setup_path: String::new(),
+            car_path: String::new(),
             stints: Vec::new(),
             historical_fuel_burn_rate: 0.0,
             pending_lap_count_since: 0.0,
@@ -1036,6 +1044,8 @@ impl WarRoomState {
                 exited_pits_on_current_lap: false,
                 ignored_lap_sdk: -1,
                 setup_name: if idx == player_idx && !player_setup_snapshot.is_empty() { player_setup_snapshot.clone() } else { "Baseline".to_string() },
+                raw_setup_path: if idx == player_idx { self.player_raw_setup_path.clone() } else { String::new() },
+                car_path: if idx == player_idx { self.player_car_path.clone() } else { String::new() },
                 stints: Vec::new(),
                 historical_fuel_burn_rate: 0.0,
                 pending_lap_count_since: 0.0,

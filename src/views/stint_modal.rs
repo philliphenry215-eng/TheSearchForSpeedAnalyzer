@@ -1605,6 +1605,61 @@ impl WarRoomApp {
                                 }
                             }
                         }
+
+                        let sto_btn = egui::Button::new(
+                            egui::RichText::new("⚙ Share .sto Setup")
+                                .color(white)
+                                .size(ui_size(11.5)),
+                        )
+                        .fill(elevated)
+                        .min_size(egui::vec2(0.0, btn_h));
+                        if ui
+                            .add(sto_btn)
+                            .on_hover_text("Locate the active iRacing .sto setup file and copy it to clipboard (press Ctrl+V in Discord to attach)")
+                            .clicked()
+                        {
+                            let candidate = crate::setup_file::resolve_sto_file(
+                                &drv_ref.raw_setup_path,
+                                single_setup_display,
+                                &drv_ref.car_path,
+                                &drv_ref.driver_name,
+                            ).or_else(|| {
+                                crate::setup_file::resolve_sto_file(
+                                    &s.player_raw_setup_path,
+                                    single_setup_display,
+                                    &s.player_car_path,
+                                    &s.car_name,
+                                )
+                            });
+
+                            if let Some(path) = candidate {
+                                match crate::setup_file::copy_sto_file_to_clipboard(&path) {
+                                    Ok(()) => {
+                                        this.toast_message = Some((
+                                            format!("⚙ Copied setup '{}' to clipboard — press Ctrl+V in Discord to attach!", path.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                    Err(err) => {
+                                        this.toast_message = Some((format!("⚠ Setup copy failed: {}", err), std::time::Instant::now()));
+                                    }
+                                }
+                            } else {
+                                if let Some(picked) = crate::setup_file::pick_open_sto_file_dialog() {
+                                    if let Ok(()) = crate::setup_file::copy_sto_file_to_clipboard(&picked) {
+                                        this.toast_message = Some((
+                                            format!("⚙ Copied setup '{}' to clipboard!", picked.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                } else {
+                                    this.toast_message = Some((
+                                        format!("⚠ Setup file not found for '{}'", single_setup_display),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                            }
+                        }
                     }
 
                     let saved_btn = egui::Button::new(
@@ -1624,7 +1679,9 @@ impl WarRoomApp {
                 };
 
                 // Row 1: Segmented Mode Switcher (Left) + Global Window Actions (Right)
-                let single_row_min_w = if is_compare { 580.0 } else { 860.0 } * col_scale;
+                // When width is tight or fonts are scaled up, keep Row 1 clean (Mode Switcher + Popout/Close)
+                // and put secondary export actions on Row 2 to prevent any button collisions.
+                let single_row_min_w = if is_compare { 620.0 } else { 1220.0 } * col_scale;
                 let can_fit_single_action_row = ui.available_width() >= single_row_min_w;
 
                 ui.horizontal(|ui| {
@@ -1790,6 +1847,92 @@ impl WarRoomApp {
                             "Baseline"
                         };
                         ui.label(egui::RichText::new(setup_display).color(white).strong().size(ui_size(12.5)));
+
+                        let sto_file_path = crate::setup_file::resolve_sto_file(
+                            &drv_ref.raw_setup_path,
+                            setup_display,
+                            &drv_ref.car_path,
+                            &drv_ref.driver_name,
+                        ).or_else(|| {
+                            crate::setup_file::resolve_sto_file(
+                                &s.player_raw_setup_path,
+                                setup_display,
+                                &s.player_car_path,
+                                &s.car_name,
+                            )
+                        });
+
+                        if let Some(ref sto_p) = sto_file_path {
+                            ui.add_space(4.0);
+                            let copy_sto_btn = egui::Button::new(
+                                egui::RichText::new("📋 Copy .sto")
+                                    .color(primary)
+                                    .size(ui_size(10.5))
+                                    .strong(),
+                            )
+                            .fill(with_alpha(elevated, 180))
+                            .rounding(egui::Rounding::same(4.0));
+                            if ui
+                                .add(copy_sto_btn)
+                                .on_hover_text(format!("Copy '{}' to clipboard (Ctrl+V into Discord)", sto_p.display()))
+                                .clicked()
+                            {
+                                match crate::setup_file::copy_sto_file_to_clipboard(sto_p) {
+                                    Ok(()) => {
+                                        self.toast_message = Some((
+                                            format!("📋 Copied setup '{}' to clipboard!", sto_p.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                    Err(err) => {
+                                        self.toast_message = Some((format!("⚠ Copy failed: {}", err), std::time::Instant::now()));
+                                    }
+                                }
+                            }
+
+                            let save_sto_btn = egui::Button::new(
+                                egui::RichText::new("💾 Save As...")
+                                    .color(white)
+                                    .size(ui_size(10.5)),
+                            )
+                            .fill(with_alpha(elevated, 180))
+                            .rounding(egui::Rounding::same(4.0));
+                            if ui
+                                .add(save_sto_btn)
+                                .on_hover_text("Export a copy of this .sto setup file")
+                                .clicked()
+                            {
+                                let def_name = sto_p.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto");
+                                match crate::setup_file::export_sto_file(sto_p, def_name) {
+                                    Ok(dest) => {
+                                        self.toast_message = Some((
+                                            format!("💾 Exported setup to '{}'", dest.file_name().and_then(|f| f.to_str()).unwrap_or("")),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        if e != "Export cancelled by user" {
+                                            self.toast_message = Some((format!("⚠ Export failed: {}", e), std::time::Instant::now()));
+                                        }
+                                    }
+                                }
+                            }
+
+                            let show_sto_btn = egui::Button::new(
+                                egui::RichText::new("📂 Show")
+                                    .color(muted)
+                                    .size(ui_size(10.5)),
+                            )
+                            .fill(with_alpha(elevated, 180))
+                            .rounding(egui::Rounding::same(4.0));
+                            if ui
+                                .add(show_sto_btn)
+                                .on_hover_text("Show setup file in Windows Explorer")
+                                .clicked()
+                            {
+                                crate::stint_db::reveal_file_in_explorer(sto_p);
+                            }
+                        }
                         
                         ui.add_space(16.0);
                         ui.label(egui::RichText::new("Track").color(muted).size(ui_size(12.0)));

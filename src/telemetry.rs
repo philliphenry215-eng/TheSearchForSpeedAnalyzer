@@ -451,6 +451,9 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     }
 
     let raw_setup = driver_info["DriverSetupName"].as_str().unwrap_or("");
+    if !raw_setup.is_empty() {
+        s.player_raw_setup_path = raw_setup.to_string();
+    }
     let clean_setup = clean_setup_name(raw_setup);
     if !clean_setup.is_empty() {
         s.player_setup_name = clean_setup;
@@ -499,14 +502,15 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
             let car_screen_short = d["CarScreenNameShort"].as_str().unwrap_or("").to_string();
             let car_path = d["CarPath"].as_str().unwrap_or("").to_string();
 
-            // Set player's car name
+            // Set player's car name & car path
             if idx == player_idx {
+                s.player_car_path = car_path.clone();
                 if !car_screen_name.is_empty() {
                     s.car_name = car_screen_name.clone();
                 } else if !car_screen_short.is_empty() {
                     s.car_name = car_screen_short;
                 } else if !car_path.is_empty() {
-                    s.car_name = car_path;
+                    s.car_name = car_path.clone();
                 } else {
                     s.car_name = format!("Car #{}", car_num);
                 }
@@ -542,8 +546,14 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                 if !irating_str.is_empty() && irating_str != "—" {
                     target.irating = irating_str.clone();
                 }
-                if idx == player_idx && setup_to_assign != "Baseline" {
-                    target.setup_name = setup_to_assign.clone();
+                target.car_path = car_path.clone();
+                if idx == player_idx {
+                    if !raw_setup.is_empty() {
+                        target.raw_setup_path = raw_setup.to_string();
+                    }
+                    if setup_to_assign != "Baseline" {
+                        target.setup_name = setup_to_assign.clone();
+                    }
                 }
             }).or_insert(DriverState {
                 car_idx: idx,
@@ -561,6 +571,8 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                 exited_pits_on_current_lap: false,
                 ignored_lap_sdk: -1,
                 setup_name: setup_to_assign,
+                raw_setup_path: if idx == player_idx { raw_setup.to_string() } else { String::new() },
+                car_path: car_path.clone(),
                 stints: Vec::new(),
                 historical_fuel_burn_rate: 0.0,
                 pending_lap_count_since: 0.0,

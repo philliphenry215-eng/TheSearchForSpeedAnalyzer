@@ -741,6 +741,7 @@ impl WarRoomApp {
         muted: egui::Color32,
         elevated: egui::Color32,
     ) {
+        let primary = self.settings.primary_accent();
         ui.label(egui::RichText::new("IN-CAR OVERLAY & HUD MODULES").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
         ui.add_space(6.0);
 
@@ -795,6 +796,79 @@ impl WarRoomApp {
                         self.settings.save();
                     }
                 });
+            });
+
+        ui.add_space(8.0);
+
+        egui::Frame::none()
+            .fill(elevated)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("HUD Layout Style").color(white).size(ui_size(13.0)).strong());
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Choose how Race Lap, Pace, and Fuel metrics are structured on your floating in-car HUD:").color(muted).size(ui_size(11.0)));
+                ui.add_space(6.0);
+
+                let current = self.settings.overlay.hud_layout;
+                let layouts = [
+                    (
+                        HudLayoutPreset::TopBeacon,
+                        "Option 1A: Top Lap Beacon (Recommended ⭐)",
+                        "Dedicated top-left Race Lap beacon pod, prominent delta, and spacious 3-column fuel card with pill badges.",
+                    ),
+                    (
+                        HudLayoutPreset::LeftPillar,
+                        "Option 1B: Left Lap Pillar Pod",
+                        "Dedicated tall left pillar for Race Lap & Stint, paired with clean 3x3 telemetry grids for pace and fuel.",
+                    ),
+                    (
+                        HudLayoutPreset::TopHub,
+                        "Option 1C: Dedicated Top Lap Hub",
+                        "Dedicated top Race Lap header card with live stint progress bar and 3-column pace & fuel cards.",
+                    ),
+                    (
+                        HudLayoutPreset::CenterPill,
+                        "Option 1D: Center Hero Lap Pill",
+                        "Center-stage hero Race Lap pill bridging race control status with 4-column pace and 3-column fuel cards.",
+                    ),
+                    (
+                        HudLayoutPreset::Classic,
+                        "Option 0: Classic 4x4 Grid",
+                        "Legacy balanced 4-column pace and 4-column fuel grid baseline.",
+                    ),
+                ];
+
+                for (preset, title, desc) in layouts {
+                    let is_sel = current == preset;
+                    let (card_bg, stroke_color) = if is_sel {
+                        (with_alpha(primary, 40), primary)
+                    } else {
+                        (with_alpha(elevated, 180), self.settings.divider_color())
+                    };
+
+                    let response = egui::Frame::none()
+                        .fill(card_bg)
+                        .stroke(egui::Stroke::new(if is_sel { 1.5 } else { 1.0 }, stroke_color))
+                        .rounding(egui::Rounding::same(6.0))
+                        .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let radio_sym = if is_sel { "●" } else { "○" };
+                                ui.label(egui::RichText::new(radio_sym).color(if is_sel { primary } else { muted }).size(ui_size(13.0)).strong());
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(title).color(if is_sel { white } else { egui::Color32::from_rgb(200, 205, 215) }).size(ui_size(12.0)).strong());
+                                    ui.label(egui::RichText::new(desc).color(muted).size(ui_size(10.5)));
+                                });
+                            });
+                        });
+
+                    if response.response.interact(egui::Sense::click()).clicked() {
+                        self.settings.overlay.hud_layout = preset;
+                        self.settings.save();
+                    }
+                    ui.add_space(4.0);
+                }
             });
 
         ui.add_space(8.0);
@@ -1294,6 +1368,8 @@ impl WarRoomApp {
         let mut action_export_as: Option<stint_db::SavedStintRecord> = None;
         let mut action_import_file: Option<std::path::PathBuf> = None;
         let mut action_delete_id: Option<String> = None;
+        let mut action_share_sto: Option<std::path::PathBuf> = None;
+        let mut action_export_sto: Option<std::path::PathBuf> = None;
 
         egui::Window::new("📂 Saved Stints Database · Track Re-Import & Share")
             .id(egui::Id::new("stint_database_modal_window_v4"))
@@ -1310,11 +1386,12 @@ impl WarRoomApp {
                 }
 
                 // Top Filter & Action Bar — responsive so buttons wrap cleanly onto Row 2 when font size is Medium/Large or window is narrower
-                let single_row_fits = ui.available_width() >= 1320.0 * col_scale;
+                let single_row_fits = ui.available_width() >= 1420.0 * col_scale;
                 let mut click_open_folder = false;
                 let mut click_sync_folder = false;
                 let mut click_import_file = false;
                 let mut click_paste_clipboard = false;
+                let mut click_import_sto = false;
 
                 ui.horizontal(|ui| {
                     if has_real_track {
@@ -1441,6 +1518,23 @@ impl WarRoomApp {
                             {
                                 click_paste_clipboard = true;
                             }
+
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("⚙ Import .sto to Garage...")
+                                            .color(white)
+                                            .size(ui_size(11.5)),
+                                    )
+                                    .fill(elevated)
+                                    .rounding(egui::Rounding::same(6.0))
+                                    .min_size(egui::vec2(0.0, btn_h)),
+                                )
+                                .on_hover_text("Select a .sto setup file to copy directly into your active car's iRacing setups folder")
+                                .clicked()
+                            {
+                                click_import_sto = true;
+                            }
                         }
                     });
                 });
@@ -1482,6 +1576,23 @@ impl WarRoomApp {
                             .clicked()
                         {
                             click_paste_clipboard = true;
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("⚙ Import .sto to Garage...")
+                                        .color(white)
+                                        .size(ui_size(11.5)),
+                                )
+                                .fill(elevated)
+                                .rounding(egui::Rounding::same(6.0))
+                                .min_size(egui::vec2(0.0, btn_h)),
+                            )
+                            .on_hover_text("Select a .sto setup file to copy directly into your active car's iRacing setups folder")
+                            .clicked()
+                        {
+                            click_import_sto = true;
                         }
 
                         if ui
@@ -1551,6 +1662,28 @@ impl WarRoomApp {
                                     format!("⚠ Clipboard import failed: {}", err),
                                     std::time::Instant::now(),
                                 ));
+                            }
+                        }
+                    }
+                }
+                if click_import_sto {
+                    if let Some(src_sto) = crate::setup_file::pick_open_sto_file_dialog() {
+                        let car_dir = if !s.player_car_path.is_empty() {
+                            &s.player_car_path
+                        } else if !s.car_name.is_empty() && s.car_name != "—" {
+                            &s.car_name
+                        } else {
+                            ""
+                        };
+                        match crate::setup_file::import_sto_to_iracing_garage(&src_sto, car_dir) {
+                            Ok(dest) => {
+                                self.toast_message = Some((
+                                    format!("📥 Installed setup '{}' into iRacing garage!", dest.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                            Err(e) => {
+                                self.toast_message = Some((format!("⚠ Failed to import setup: {}", e), std::time::Instant::now()));
                             }
                         }
                     }
@@ -1761,6 +1894,45 @@ impl WarRoomApp {
                                                             let resp = ui.label(egui::RichText::new(drv_txt).color(muted).size(ui_size(10.5)));
                                                             if !rec.stint.notes.is_empty() {
                                                                 resp.on_hover_text(format!("Notes: {}", rec.stint.notes));
+                                                            }
+
+                                                            if let Some(sto_p) = crate::setup_file::resolve_sto_file("", &rec.setup_name, "", &rec.car_name) {
+                                                                ui.horizontal(|ui| {
+                                                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                                                    if ui
+                                                                        .add(
+                                                                            egui::Button::new(egui::RichText::new("📋 .sto").color(white).size(ui_size(9.5)))
+                                                                                .fill(with_alpha(elevated, 180))
+                                                                                .rounding(egui::Rounding::same(3.0)),
+                                                                        )
+                                                                        .on_hover_text(format!("Copy '{}' to clipboard (Ctrl+V into Discord)", sto_p.display()))
+                                                                        .clicked()
+                                                                    {
+                                                                        action_share_sto = Some(sto_p.clone());
+                                                                    }
+                                                                    if ui
+                                                                        .add(
+                                                                            egui::Button::new(egui::RichText::new("💾").color(white).size(ui_size(9.5)))
+                                                                                .fill(with_alpha(elevated, 180))
+                                                                                .rounding(egui::Rounding::same(3.0)),
+                                                                        )
+                                                                        .on_hover_text("Export this .sto setup file")
+                                                                        .clicked()
+                                                                    {
+                                                                        action_export_sto = Some(sto_p.clone());
+                                                                    }
+                                                                    if ui
+                                                                        .add(
+                                                                            egui::Button::new(egui::RichText::new("📂").color(muted).size(ui_size(9.5)))
+                                                                                .fill(with_alpha(elevated, 180))
+                                                                                .rounding(egui::Rounding::same(3.0)),
+                                                                        )
+                                                                        .on_hover_text("Highlight setup file in Windows Explorer")
+                                                                        .clicked()
+                                                                    {
+                                                                        crate::stint_db::reveal_file_in_explorer(&sto_p);
+                                                                    }
+                                                                });
                                                             }
                                                         });
                                                     });
@@ -2031,6 +2203,37 @@ impl WarRoomApp {
         if let Some(del_id) = action_delete_id {
             if self.stint_db.delete_stint(&del_id) {
                 self.toast_message = Some(("🗑 Removed stint from local database".to_string(), std::time::Instant::now()));
+            }
+        }
+
+        if let Some(path) = action_share_sto {
+            match crate::setup_file::copy_sto_file_to_clipboard(&path) {
+                Ok(()) => {
+                    self.toast_message = Some((
+                        format!("⚙ Copied setup '{}' to clipboard — press Ctrl+V in Discord to attach!", path.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    self.toast_message = Some((format!("⚠ Copy setup failed: {}", e), std::time::Instant::now()));
+                }
+            }
+        }
+
+        if let Some(path) = action_export_sto {
+            let def_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto");
+            match crate::setup_file::export_sto_file(&path, def_name) {
+                Ok(dest) => {
+                    self.toast_message = Some((
+                        format!("💾 Exported setup to '{}'!", dest.display()),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    if e != "Export cancelled by user" {
+                        self.toast_message = Some((format!("⚠ Export failed: {}", e), std::time::Instant::now()));
+                    }
+                }
             }
         }
 

@@ -1,3 +1,29 @@
+# The Search For Speed Analyzer — v0.4.4
+
+### Multiple Selectable In-Car HUD Overlay Layouts:
+* **Custom HUD Layout Styles:**
+  * Added 5 user-selectable in-car HUD overlay layout presets in Settings -> In-Car Overlays -> "HUD Layout Style":
+    * `TopBeacon` (Option 1A - Default): Dedicated top-left lap beacon (`LAP X/Y`, `STINT S#`, `REMAIN`) separated from timing, with a spacious 3-column fuel section (`USED`, `BURN/L`, `EST. LAPS`).
+    * `LeftPillar` (Option 1B): Dedicated left-side race lap and stint pillar with clean 3x3 grids for pace, deltas, and fuel.
+    * `TopHub` (Option 1C): Dedicated full-width top lap hub featuring a visual stint progress bar, separate timing rows, and 3-column fuel telemetry.
+    * `CenterPill` (Option 1D): Center-stage hero lap pill anchored between pace telemetry and fuel readouts.
+    * `Classic` (Option 0): Original compact 4x4 grid layout for users who prefer the legacy layout.
+
+### Native iRacing .sto Setup Resolution, Sharing & Garage Import:
+* **Direct .sto File Handling:**
+  * Added automatic physical `.sto` file discovery matching active setups in `%USERPROFILE%\Documents\iRacing\setups\<car>\`.
+  * Added one-click `.sto` setup file clipboard copy (`CF_HDROP`) for instant `Ctrl+V` pasting into Discord, Slack, and Explorer.
+  * Added `[Save .sto As...]` export dialog to save copies of active or saved setups anywhere on disk.
+  * Added `[Show]` button to reveal and highlight `.sto` files in Windows Explorer.
+  * Added `[Import .sto to Garage...]` button in the Saved Stints Database modal to install teammate setup files directly into the active car's iRacing garage.
+  * Added `Share .sto Setup` button in the Stint Analyzer modal and `.sto` action pills under the setup column in the Stint Database table.
+
+### Stint Analyzer Anti-Collision Refinement:
+* **Responsive Action Toolbar:**
+  * Refined action toolbar wrapping threshold to ensure buttons wrap cleanly onto Row 2 when window width is constrained or font scaling is enabled, preventing button overlap.
+
+---
+
 # The Search For Speed Analyzer — v0.4.3
 
 ### 🔤 Text Size Presets & Responsive Layout Scaling:

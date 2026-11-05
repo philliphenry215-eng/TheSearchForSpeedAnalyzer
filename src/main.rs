@@ -6,6 +6,7 @@ pub mod ibt;
 pub mod ibt_ui;
 pub mod models;
 pub mod settings;
+pub mod setup_file;
 pub mod stint_db;
 pub mod telemetry;
 mod updater;
@@ -2131,11 +2132,13 @@ DriverInfo:
         assert!(parsed.show_race_control_card, "show_race_control_card should default to true");
         assert!(parsed.show_weather, "show_weather should default to true");
         assert_eq!(parsed.fuel_hero_metric, FuelHeroMetric::FuelAmount);
+        assert_eq!(parsed.hud_layout, settings::HudLayoutPreset::TopBeacon, "Legacy JSON must default to TopBeacon");
         assert!((parsed.hud_scale - 1.0).abs() < 0.001);
 
         // 2. Custom settings serialization & roundtrip
         let mut custom = parsed;
         custom.fuel_hero_metric = FuelHeroMetric::LapsToEmpty;
+        custom.hud_layout = settings::HudLayoutPreset::LeftPillar;
         custom.show_pace_card = false;
         custom.show_weather = true;
         custom.hud_scale = 1.20;
@@ -2143,10 +2146,26 @@ DriverInfo:
         let serialized = serde_json::to_string(&custom).expect("Must serialize");
         let roundtrip: settings::OverlaySettings = serde_json::from_str(&serialized).expect("Roundtrip must parse");
         assert_eq!(roundtrip.fuel_hero_metric, FuelHeroMetric::LapsToEmpty);
+        assert_eq!(roundtrip.hud_layout, settings::HudLayoutPreset::LeftPillar);
         assert!(!roundtrip.show_pace_card);
         assert!(roundtrip.show_fuel_card);
         assert!(roundtrip.show_weather);
         assert!((roundtrip.hud_scale - 1.20).abs() < 0.001);
+
+        // 3. Test all HUD layout presets serialize and deserialize correctly
+        for preset in [
+            settings::HudLayoutPreset::TopBeacon,
+            settings::HudLayoutPreset::LeftPillar,
+            settings::HudLayoutPreset::TopHub,
+            settings::HudLayoutPreset::CenterPill,
+            settings::HudLayoutPreset::Classic,
+        ] {
+            let mut s = settings::OverlaySettings::default();
+            s.hud_layout = preset;
+            let json = serde_json::to_string(&s).expect("Must serialize");
+            let rt: settings::OverlaySettings = serde_json::from_str(&json).expect("Must deserialize");
+            assert_eq!(rt.hud_layout, preset);
+        }
     }
 
     #[test]
@@ -3426,6 +3445,7 @@ DriverInfo:
             include_str!("settings.rs"),
             include_str!("discord_card.rs"),
             include_str!("stint_db.rs"),
+            include_str!("setup_file.rs"),
             include_str!("ibt.rs"),
             include_str!("../RELEASE_NOTES.md"),
         ];

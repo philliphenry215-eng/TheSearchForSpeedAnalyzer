@@ -806,37 +806,37 @@ pub fn import_stint_from_file(path: &Path) -> Result<SavedStintRecord, String> {
 #[cfg(target_os = "windows")]
 #[repr(C)]
 #[allow(non_snake_case)]
-struct OPENFILENAMEW {
-    lStructSize: u32,
-    hwndOwner: *mut std::ffi::c_void,
-    hInstance: *mut std::ffi::c_void,
-    lpstrFilter: *const u16,
-    lpstrCustomFilter: *mut u16,
-    nMaxCustFilter: u32,
-    nFilterIndex: u32,
-    lpstrFile: *mut u16,
-    nMaxFile: u32,
-    lpstrFileTitle: *mut u16,
-    nMaxFileTitle: u32,
-    lpstrInitialDir: *const u16,
-    lpstrTitle: *const u16,
-    Flags: u32,
-    nFileOffset: u16,
-    nFileExtension: u16,
-    lpstrDefExt: *const u16,
-    lCustData: usize,
-    lpfnHook: *mut std::ffi::c_void,
-    lpTemplateName: *const u16,
-    pvReserved: *mut std::ffi::c_void,
-    dwReserved: u32,
-    FlagsEx: u32,
+pub(crate) struct OPENFILENAMEW {
+    pub(crate) lStructSize: u32,
+    pub(crate) hwndOwner: *mut std::ffi::c_void,
+    pub(crate) hInstance: *mut std::ffi::c_void,
+    pub(crate) lpstrFilter: *const u16,
+    pub(crate) lpstrCustomFilter: *mut u16,
+    pub(crate) nMaxCustFilter: u32,
+    pub(crate) nFilterIndex: u32,
+    pub(crate) lpstrFile: *mut u16,
+    pub(crate) nMaxFile: u32,
+    pub(crate) lpstrFileTitle: *mut u16,
+    pub(crate) nMaxFileTitle: u32,
+    pub(crate) lpstrInitialDir: *const u16,
+    pub(crate) lpstrTitle: *const u16,
+    pub(crate) Flags: u32,
+    pub(crate) nFileOffset: u16,
+    pub(crate) nFileExtension: u16,
+    pub(crate) lpstrDefExt: *const u16,
+    pub(crate) lCustData: usize,
+    pub(crate) lpfnHook: *mut std::ffi::c_void,
+    pub(crate) lpTemplateName: *const u16,
+    pub(crate) pvReserved: *mut std::ffi::c_void,
+    pub(crate) dwReserved: u32,
+    pub(crate) FlagsEx: u32,
 }
 
 #[cfg(target_os = "windows")]
 #[link(name = "comdlg32")]
 extern "system" {
-    fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
-    fn GetSaveFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+    pub(crate) fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+    pub(crate) fn GetSaveFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
 }
 
 /// Opens native Windows file dialog to select an existing .s4s.json stint file for importing.

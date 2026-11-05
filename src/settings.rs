@@ -117,6 +117,25 @@ fn default_hud_scale() -> f32 { 1.0 }
 fn default_tire_popup_duration() -> f32 { 15.0 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HudLayoutPreset {
+    TopBeacon,   // Option 1A (Recommended Default) - Top Race Lap Beacon + 3-Col Fuel
+    LeftPillar,  // Option 1B - Dedicated Left Race Lap Pillar + 3x3 Grid
+    TopHub,      // Option 1C - Top Race Lap Hub Card with progress bar + 3-Col Pace & Fuel
+    CenterPill,  // Option 1D - Center Hero Lap Pill + 4-Col Pace & 3-Col Fuel
+    Classic,     // Option 0 - Legacy 4x4 Grid baseline
+}
+
+impl Default for HudLayoutPreset {
+    fn default() -> Self {
+        Self::TopBeacon
+    }
+}
+
+fn default_hud_layout() -> HudLayoutPreset {
+    HudLayoutPreset::TopBeacon
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FuelHeroMetric {
     FuelAmount,  // Fuel level in tank (gallons / liters) is primary
     LapsToEmpty, // Laps remaining is primary
@@ -176,6 +195,8 @@ pub struct OverlaySettings {
     pub show_fastest: bool,
     #[serde(default = "default_true")]
     pub show_averages: bool,
+    #[serde(default = "default_hud_layout")]
+    pub hud_layout: HudLayoutPreset,
     #[serde(default)]
     pub position: Option<[f32; 2]>,
 }
@@ -193,6 +214,7 @@ impl Default for OverlaySettings {
             show_fuel_card: true,
             show_race_control_card: true,
             fuel_hero_metric: FuelHeroMetric::FuelAmount,
+            hud_layout: HudLayoutPreset::TopBeacon,
             hud_scale: 1.0,
             show_weather: true,
             show_fastest: true,
