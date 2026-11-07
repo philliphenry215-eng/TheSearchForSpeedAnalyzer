@@ -5,6 +5,18 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.5.0] — 2026-11-06
+
+### Added
+* **Drag-to-Zoom on Stint Lap Graphs (Single & Compare):**
+  * Click and drag left or right across the Lap Time Progression graph (single stint) or Lap Time Progression Overlay (compare) to zoom into the selected laps. A shaded selection box previews the range while dragging.
+  * The time (Y) axis automatically re-fits to the visible laps, and X-axis lap labels thin out cleanly for larger ranges.
+  * A `Zoomed: Lx – Ly` row with a **Reset Zoom** button appears above a zoomed graph.
+  * The lap-by-lap log tables (single and compare) filter to the zoomed laps; the single-stint Running Avg remains cumulative from the stint's first lap.
+  * In Compare mode a single shared zoom range applies to every overlaid stint.
+
+---
+
 ## [0.4.5] — 2026-11-06
 
 ### Improved & Fixed

@@ -136,6 +136,104 @@ pub(crate) fn render_tire_corner_card(
         });
 }
 
+// ---------------------------------------------------------------------------
+// Drag-to-zoom state shared by the single-stint and comparison lap charts.
+// The zoom range is a visible lap-index window (inclusive, 0-based) stored in egui memory.
+// ---------------------------------------------------------------------------
+
+pub(crate) fn single_chart_zoom_id(stint: &StintData) -> egui::Id {
+    egui::Id::new(("s4s_single_chart_zoom", stint.stint_number, stint.start_lap, stint.saved_id.clone()))
+}
+
+pub(crate) fn compare_chart_zoom_id<'a>(stints: impl Iterator<Item = &'a StintData>) -> egui::Id {
+    let key: Vec<(i32, i32, String)> = stints
+        .map(|s| (s.stint_number, s.start_lap, s.saved_id.clone()))
+        .collect();
+    egui::Id::new(("s4s_compare_chart_zoom", key))
+}
+
+/// Returns the active zoom window clamped to `n_laps`, or `None` when not zoomed.
+pub(crate) fn chart_zoom_get(ctx: &egui::Context, id: egui::Id, n_laps: usize) -> Option<(usize, usize)> {
+    if n_laps < 2 {
+        return None;
+    }
+    let stored: Option<(usize, usize)> = ctx.data_mut(|d| d.get_temp::<Option<(usize, usize)>>(id)).flatten();
+    stored.and_then(|(a, b)| {
+        let b = b.min(n_laps - 1);
+        if a < b { Some((a, b)) } else { None }
+    })
+}
+
+fn chart_zoom_set(ctx: &egui::Context, id: egui::Id, zoom: Option<(usize, usize)>) {
+    ctx.data_mut(|d| d.insert_temp(id, zoom));
+}
+
+/// Shows "Zoomed: Lx–Ly [Reset Zoom]" above a zoomed chart.
+fn render_zoom_reset_row(ui: &mut egui::Ui, id: egui::Id, lo: usize, hi: usize, settings: &crate::settings::AppSettings) {
+    let muted = settings.text_muted();
+    let white = settings.text_color();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(format!("Zoomed: L{} – L{}", lo + 1, hi + 1)).color(muted).size(ui_size(11.0)));
+        if ui
+            .add(egui::Button::new(egui::RichText::new("Reset Zoom").color(white).size(ui_size(11.0))).fill(settings.card_elevated_color()))
+            .clicked()
+        {
+            chart_zoom_set(ui.ctx(), id, None);
+        }
+    });
+    ui.add_space(2.0);
+}
+
+fn chart_x_to_lap_idx(x: f32, chart_rect: egui::Rect, lo: usize, hi: usize) -> usize {
+    let n_vis = hi - lo + 1;
+    if n_vis < 2 || chart_rect.width() <= 0.0 {
+        return lo;
+    }
+    let frac = ((x - chart_rect.min.x) / chart_rect.width()).clamp(0.0, 1.0);
+    lo + (frac * (n_vis - 1) as f32).round() as usize
+}
+
+/// Draws the drag selection box and commits the zoom range when the drag is released.
+fn handle_chart_drag_zoom(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    painter: &egui::Painter,
+    chart_rect: egui::Rect,
+    lo: usize,
+    hi: usize,
+    zoom_id: egui::Id,
+    color: egui::Color32,
+) {
+    let origin = ui.ctx().input(|i| i.pointer.press_origin());
+    let latest = ui.ctx().input(|i| i.pointer.latest_pos());
+    if response.dragged() {
+        if let (Some(o), Some(c)) = (origin, latest) {
+            let x0 = o.x.clamp(chart_rect.min.x, chart_rect.max.x);
+            let x1 = c.x.clamp(chart_rect.min.x, chart_rect.max.x);
+            let sel = egui::Rect::from_min_max(
+                egui::pos2(x0.min(x1), chart_rect.min.y),
+                egui::pos2(x0.max(x1), chart_rect.max.y),
+            );
+            painter.rect_filled(sel, 2.0, egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 40));
+            painter.rect_stroke(sel, 2.0, egui::Stroke::new(1.0, color));
+        }
+    }
+    if response.drag_stopped() {
+        if let (Some(o), Some(c)) = (origin, latest) {
+            let a = chart_x_to_lap_idx(o.x, chart_rect, lo, hi);
+            let b = chart_x_to_lap_idx(c.x, chart_rect, lo, hi);
+            let (new_lo, new_hi) = (a.min(b), a.max(b));
+            if new_hi > new_lo {
+                chart_zoom_set(ui.ctx(), zoom_id, Some((new_lo, new_hi)));
+            }
+        }
+    }
+}
+
+fn x_label_interval(n_vis: usize) -> usize {
+    if n_vis <= 15 { 1 } else if n_vis <= 35 { 2 } else if n_vis <= 70 { 5 } else { 10 }
+}
+
 pub(crate) fn render_stint_lap_chart(
     ui: &mut egui::Ui,
     stint: &StintData,
@@ -159,16 +257,27 @@ pub(crate) fn render_stint_lap_chart(
         return;
     }
 
-    let min_t = valid_laps.iter().cloned().fold(f32::INFINITY, f32::min);
-    let max_t = valid_laps.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let n_all = valid_laps.len();
+    let zoom_id = single_chart_zoom_id(stint);
+    let zoom = chart_zoom_get(ui.ctx(), zoom_id, n_all);
+    let (lo, hi) = zoom.unwrap_or((0, n_all - 1));
+    if zoom.is_some() {
+        render_zoom_reset_row(ui, zoom_id, lo, hi, settings);
+    }
 
-    let margin = (max_t - min_t).max(0.300) * 0.20;
-    let y_min = (min_t - margin).max(0.0);
-    let y_max = max_t + margin;
+    // Overall best lap (kept highlighted even when zoomed); Y-axis fits only the visible laps.
+    let min_t = valid_laps.iter().cloned().fold(f32::INFINITY, f32::min);
+    let visible = &valid_laps[lo..=hi];
+    let vis_min = visible.iter().cloned().fold(f32::INFINITY, f32::min);
+    let vis_max = visible.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+
+    let margin = (vis_max - vis_min).max(0.300) * 0.20;
+    let y_min = (vis_min - margin).max(0.0);
+    let y_max = vis_max + margin;
     let y_range = (y_max - y_min).max(0.001);
 
     let scaled_h = height + settings.font_size_offset * 5.0;
-    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::hover());
+    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::click_and_drag());
     let rect = response.rect;
 
     // Background & Soft Rounding
@@ -206,36 +315,42 @@ pub(crate) fn render_stint_lap_chart(
         );
     }
 
-    // Map lap points to screen coordinates
-    let n = valid_laps.len();
-    let x_step = if n > 1 { chart_rect.width() / (n - 1) as f32 } else { 0.0 };
+    // Map visible lap points to screen coordinates
+    let n_vis = hi - lo + 1;
+    let x_step = if n_vis > 1 { chart_rect.width() / (n_vis - 1) as f32 } else { 0.0 };
+    let label_interval = x_label_interval(n_vis);
 
-    let mut points = Vec::new();
-    for (i, &t) in valid_laps.iter().enumerate() {
-        let x = if n > 1 { chart_rect.min.x + i as f32 * x_step } else { chart_rect.center().x };
+    let mut points: Vec<(usize, egui::Pos2)> = Vec::new();
+    for idx in lo..=hi {
+        let t = valid_laps[idx];
+        let rel = idx - lo;
+        let x = if n_vis > 1 { chart_rect.min.x + rel as f32 * x_step } else { chart_rect.center().x };
         let y = chart_rect.max.y - ((t - y_min) / y_range) * chart_rect.height();
-        points.push(egui::pos2(x, y));
+        points.push((idx, egui::pos2(x, y)));
 
-        painter.text(
-            egui::pos2(x, chart_rect.max.y + 12.0 + settings.font_size_offset * 0.6),
-            egui::Align2::CENTER_CENTER,
-            format!("L{}", i + 1),
-            egui::FontId::proportional(ui_size(10.0)),
-            muted,
-        );
+        let lap_num = idx + 1;
+        if n_vis <= 15 || rel == 0 || idx == hi || lap_num % label_interval == 0 {
+            painter.text(
+                egui::pos2(x, chart_rect.max.y + 12.0 + settings.font_size_offset * 0.6),
+                egui::Align2::CENTER_CENTER,
+                format!("L{}", lap_num),
+                egui::FontId::proportional(ui_size(10.0)),
+                muted,
+            );
+        }
     }
 
     // Draw Lap Trend Line
     for w in points.windows(2) {
-        painter.line_segment([w[0], w[1]], egui::Stroke::new(2.2, primary));
+        painter.line_segment([w[0].1, w[1].1], egui::Stroke::new(2.2, primary));
     }
 
     // Draw Data Points & Fast Lap Highlight
     let mouse_pos = response.hover_pos();
     let mut hovered_lap: Option<(usize, f32, egui::Pos2)> = None;
 
-    for (i, &pt) in points.iter().enumerate() {
-        let t = valid_laps[i];
+    for &(idx, pt) in points.iter() {
+        let t = valid_laps[idx];
         let is_fast = (t - min_t).abs() < 0.0001;
 
         if is_fast {
@@ -248,28 +363,33 @@ pub(crate) fn render_stint_lap_chart(
 
         if let Some(mp) = mouse_pos {
             if (mp - pt).length() < 16.0 {
-                hovered_lap = Some((i + 1, t, pt));
+                hovered_lap = Some((idx + 1, t, pt));
             }
         }
     }
 
-    // Hover Tooltip
-    if let Some((lap_num, lap_time, pt)) = hovered_lap {
-        painter.circle_filled(pt, 7.0, white);
-        let delta = lap_time - min_t;
-        let tooltip_text = if delta <= 0.001 {
-            format!("Lap {}: {} (Best)", lap_num, format_time(lap_time))
-        } else {
-            format!("Lap {}: {} (+{:.3}s)", lap_num, format_time(lap_time), delta)
-        };
+    // Hover Tooltip (suppressed while dragging a zoom selection)
+    if !response.dragged() {
+        if let Some((lap_num, lap_time, pt)) = hovered_lap {
+            painter.circle_filled(pt, 7.0, white);
+            let delta = lap_time - min_t;
+            let tooltip_text = if delta <= 0.001 {
+                format!("Lap {}: {} (Best)", lap_num, format_time(lap_time))
+            } else {
+                format!("Lap {}: {} (+{:.3}s)", lap_num, format_time(lap_time), delta)
+            };
 
-        let tooltip_pos = egui::pos2(pt.x, pt.y - 18.0);
-        let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(ui_size(12.0)), white);
-        let bg_rect = egui::Rect::from_center_size(tooltip_pos, galley.size() + egui::vec2(14.0, 8.0));
-        painter.rect_filled(bg_rect, 6.0, tooltip_bg);
-        painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, tooltip_stroke));
-        painter.galley(bg_rect.min + egui::vec2(7.0, 4.0), galley, white);
+            let tooltip_pos = egui::pos2(pt.x, pt.y - 18.0);
+            let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(ui_size(12.0)), white);
+            let bg_rect = egui::Rect::from_center_size(tooltip_pos, galley.size() + egui::vec2(14.0, 8.0));
+            painter.rect_filled(bg_rect, 6.0, tooltip_bg);
+            painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, tooltip_stroke));
+            painter.galley(bg_rect.min + egui::vec2(7.0, 4.0), galley, white);
+        }
     }
+
+    handle_chart_drag_zoom(ui, &response, &painter, chart_rect, lo, hi, zoom_id, primary);
+    response.on_hover_cursor(egui::CursorIcon::Crosshair);
 }
 
 pub(crate) fn render_multi_stint_lap_chart(
@@ -281,6 +401,7 @@ pub(crate) fn render_multi_stint_lap_chart(
     let is_dark = settings.is_dark_theme();
     let muted = settings.text_muted();
     let white = settings.text_color();
+    let primary = settings.primary_accent();
     let chart_bg = if is_dark { egui::Color32::from_rgb(14, 17, 23) } else { settings.panel_color() };
     let chart_border = if is_dark { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12) } else { settings.divider_color() };
     let grid_line_col = if is_dark { egui::Color32::from_rgb(28, 33, 44) } else { egui::Color32::from_rgb(226, 232, 240) };
@@ -289,33 +410,48 @@ pub(crate) fn render_multi_stint_lap_chart(
 
     let mut all_valid: Vec<Vec<f32>> = Vec::new();
     let mut max_laps = 0;
-    let mut global_min = f32::INFINITY;
-    let mut global_max = f32::NEG_INFINITY;
 
     for (st, _, _) in stints {
         let valid = st.valid_laps();
-        if !valid.is_empty() {
-            max_laps = max_laps.max(valid.len());
-            for &t in &valid {
-                global_min = global_min.min(t);
-                global_max = global_max.max(t);
-            }
-        }
+        max_laps = max_laps.max(valid.len());
         all_valid.push(valid);
     }
 
-    if max_laps == 0 || global_min.is_infinite() {
+    if max_laps == 0 {
         ui.label(egui::RichText::new("No completed green laps recorded yet for the selected stints.").color(muted));
         return;
     }
 
-    let margin = (global_max - global_min).max(0.300) * 0.20;
-    let y_min = (global_min - margin).max(0.0);
-    let y_max = global_max + margin;
+    let zoom_id = compare_chart_zoom_id(stints.iter().map(|(s, _, _)| *s));
+    let zoom = chart_zoom_get(ui.ctx(), zoom_id, max_laps);
+    let (lo, hi) = zoom.unwrap_or((0, max_laps - 1));
+    if zoom.is_some() {
+        render_zoom_reset_row(ui, zoom_id, lo, hi, settings);
+    }
+
+    // Y-axis fits only the visible laps across all stints
+    let mut vis_min = f32::INFINITY;
+    let mut vis_max = f32::NEG_INFINITY;
+    for valid in &all_valid {
+        for idx in lo..=hi {
+            if let Some(&t) = valid.get(idx) {
+                vis_min = vis_min.min(t);
+                vis_max = vis_max.max(t);
+            }
+        }
+    }
+    if vis_min.is_infinite() {
+        ui.label(egui::RichText::new("No laps in the zoomed range. Click Reset Zoom.").color(muted));
+        return;
+    }
+
+    let margin = (vis_max - vis_min).max(0.300) * 0.20;
+    let y_min = (vis_min - margin).max(0.0);
+    let y_max = vis_max + margin;
     let y_range = (y_max - y_min).max(0.001);
 
     let scaled_h = height + settings.font_size_offset * 5.0;
-    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::hover());
+    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::click_and_drag());
     let rect = response.rect;
 
     // Background & Soft Rounding
@@ -365,15 +501,16 @@ pub(crate) fn render_multi_stint_lap_chart(
         legend_x += text_w + 24.0;
     }
 
-    // X-step
-    let x_step = if max_laps > 1 { chart_rect.width() / (max_laps - 1) as f32 } else { 0.0 };
+    // X-step over the visible lap window
+    let n_vis = hi - lo + 1;
+    let x_step = if n_vis > 1 { chart_rect.width() / (n_vis - 1) as f32 } else { 0.0 };
 
     // Draw X-axis tick labels
-    let label_interval = if max_laps <= 15 { 1 } else if max_laps <= 35 { 2 } else if max_laps <= 70 { 5 } else { 10 };
-    for lap_idx in 0..max_laps {
+    let label_interval = x_label_interval(n_vis);
+    for lap_idx in lo..=hi {
         let lap_num = lap_idx + 1;
-        if lap_num == 1 || lap_num == max_laps || lap_num % label_interval == 0 {
-            let x = if max_laps > 1 { chart_rect.min.x + lap_idx as f32 * x_step } else { chart_rect.center().x };
+        if lap_idx == lo || lap_idx == hi || lap_num % label_interval == 0 {
+            let x = if n_vis > 1 { chart_rect.min.x + (lap_idx - lo) as f32 * x_step } else { chart_rect.center().x };
             painter.text(
                 egui::pos2(x, chart_rect.max.y + 12.0 + settings.font_size_offset * 0.6),
                 egui::Align2::CENTER_CENTER,
@@ -384,15 +521,17 @@ pub(crate) fn render_multi_stint_lap_chart(
         }
     }
 
-    // Calculate and draw points and lines for each stint
+    // Calculate and draw points and lines for each stint (visible window only).
+    // stint_points[s][k] corresponds to absolute lap index lo + k.
     let mut stint_points: Vec<Vec<egui::Pos2>> = Vec::new();
     for (s_idx, valid) in all_valid.iter().enumerate() {
         let mut pts = Vec::new();
         let col = stints[s_idx].2;
         let stint_best = valid.iter().cloned().fold(f32::INFINITY, f32::min);
 
-        for (lap_idx, &t) in valid.iter().enumerate() {
-            let x = if max_laps > 1 { chart_rect.min.x + lap_idx as f32 * x_step } else { chart_rect.center().x };
+        for lap_idx in lo..=hi {
+            let Some(&t) = valid.get(lap_idx) else { break };
+            let x = if n_vis > 1 { chart_rect.min.x + (lap_idx - lo) as f32 * x_step } else { chart_rect.center().x };
             let y = chart_rect.max.y - ((t - y_min) / y_range) * chart_rect.height();
             pts.push(egui::pos2(x, y));
         }
@@ -403,8 +542,8 @@ pub(crate) fn render_multi_stint_lap_chart(
         }
 
         // Draw dots
-        for (lap_idx, &pt) in pts.iter().enumerate() {
-            let t = valid[lap_idx];
+        for (k, &pt) in pts.iter().enumerate() {
+            let t = valid[lo + k];
             let is_stint_best = (t - stint_best).abs() < 0.0001;
             if is_stint_best {
                 painter.circle_filled(pt, 5.0, col);
@@ -418,69 +557,75 @@ pub(crate) fn render_multi_stint_lap_chart(
         stint_points.push(pts);
     }
 
-    // Interactive Hover on Chart
-    if let Some(mouse_pos) = response.hover_pos() {
-        if chart_rect.contains(mouse_pos) && max_laps > 0 {
-            let rel_x = (mouse_pos.x - chart_rect.min.x).clamp(0.0, chart_rect.width());
-            let nearest_lap_idx = if max_laps > 1 {
-                ((rel_x / x_step).round() as usize).min(max_laps - 1)
-            } else {
-                0
-            };
-            let nearest_x = if max_laps > 1 { chart_rect.min.x + nearest_lap_idx as f32 * x_step } else { chart_rect.center().x };
+    // Interactive Hover on Chart (suppressed while dragging a zoom selection)
+    if !response.dragged() {
+        if let Some(mouse_pos) = response.hover_pos() {
+            if chart_rect.contains(mouse_pos) {
+                let rel_x = (mouse_pos.x - chart_rect.min.x).clamp(0.0, chart_rect.width());
+                let nearest_rel = if n_vis > 1 {
+                    ((rel_x / x_step).round() as usize).min(n_vis - 1)
+                } else {
+                    0
+                };
+                let nearest_lap_idx = lo + nearest_rel;
+                let nearest_x = if n_vis > 1 { chart_rect.min.x + nearest_rel as f32 * x_step } else { chart_rect.center().x };
 
-            // Draw vertical cursor line
-            painter.line_segment(
-                [egui::pos2(nearest_x, chart_rect.min.y), egui::pos2(nearest_x, chart_rect.max.y)],
-                egui::Stroke::new(1.0, if is_dark { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60) } else { egui::Color32::from_rgba_unmultiplied(0, 0, 0, 80) }),
-            );
+                // Draw vertical cursor line
+                painter.line_segment(
+                    [egui::pos2(nearest_x, chart_rect.min.y), egui::pos2(nearest_x, chart_rect.max.y)],
+                    egui::Stroke::new(1.0, if is_dark { egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60) } else { egui::Color32::from_rgba_unmultiplied(0, 0, 0, 80) }),
+                );
 
-            // Find best time on this lap among active stints
-            let mut best_lap_on_this = f32::INFINITY;
-            for valid in &all_valid {
-                if nearest_lap_idx < valid.len() {
-                    best_lap_on_this = best_lap_on_this.min(valid[nearest_lap_idx]);
+                // Find best time on this lap among active stints
+                let mut best_lap_on_this = f32::INFINITY;
+                for valid in &all_valid {
+                    if nearest_lap_idx < valid.len() {
+                        best_lap_on_this = best_lap_on_this.min(valid[nearest_lap_idx]);
+                    }
                 }
-            }
 
-            let mut tooltip_lines = Vec::new();
-            tooltip_lines.push(format!("——— Lap {} ———", nearest_lap_idx + 1));
+                let mut tooltip_lines = Vec::new();
+                tooltip_lines.push(format!("——— Lap {} ———", nearest_lap_idx + 1));
 
-            for (s_idx, valid) in all_valid.iter().enumerate() {
-                if nearest_lap_idx < valid.len() {
-                    let pt = stint_points[s_idx][nearest_lap_idx];
-                    let col = stints[s_idx].2;
-                    painter.circle_filled(pt, 6.0, col);
-                    painter.circle_stroke(pt, 6.0, egui::Stroke::new(2.0, white));
+                for (s_idx, valid) in all_valid.iter().enumerate() {
+                    if nearest_lap_idx < valid.len() {
+                        let pt = stint_points[s_idx][nearest_rel];
+                        let col = stints[s_idx].2;
+                        painter.circle_filled(pt, 6.0, col);
+                        painter.circle_stroke(pt, 6.0, egui::Stroke::new(2.0, white));
 
-                    let t = valid[nearest_lap_idx];
-                    let delta = t - best_lap_on_this;
-                    let line = if delta <= 0.0001 {
-                        format!("{}: {} (Fastest)", stints[s_idx].1, format_time(t))
-                    } else {
-                        format!("{}: {} (+{:.3}s)", stints[s_idx].1, format_time(t), delta)
-                    };
-                    tooltip_lines.push(line);
+                        let t = valid[nearest_lap_idx];
+                        let delta = t - best_lap_on_this;
+                        let line = if delta <= 0.0001 {
+                            format!("{}: {} (Fastest)", stints[s_idx].1, format_time(t))
+                        } else {
+                            format!("{}: {} (+{:.3}s)", stints[s_idx].1, format_time(t), delta)
+                        };
+                        tooltip_lines.push(line);
+                    }
                 }
+
+                let tooltip_text = tooltip_lines.join("\n");
+                let tooltip_anchor = egui::pos2(nearest_x, chart_rect.min.y + 20.0);
+                let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(ui_size(11.5)), white);
+
+                let mut tooltip_pos = tooltip_anchor;
+                if tooltip_pos.x + galley.size().x + 20.0 > rect.max.x {
+                    tooltip_pos.x -= galley.size().x + 20.0;
+                } else {
+                    tooltip_pos.x += 12.0;
+                }
+
+                let bg_rect = egui::Rect::from_min_size(tooltip_pos, galley.size() + egui::vec2(16.0, 10.0));
+                painter.rect_filled(bg_rect, 6.0, tooltip_bg);
+                painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, tooltip_stroke));
+                painter.galley(bg_rect.min + egui::vec2(8.0, 5.0), galley, white);
             }
-
-            let tooltip_text = tooltip_lines.join("\n");
-            let tooltip_anchor = egui::pos2(nearest_x, chart_rect.min.y + 20.0);
-            let galley = painter.layout_no_wrap(tooltip_text, egui::FontId::proportional(ui_size(11.5)), white);
-
-            let mut tooltip_pos = tooltip_anchor;
-            if tooltip_pos.x + galley.size().x + 20.0 > rect.max.x {
-                tooltip_pos.x -= galley.size().x + 20.0;
-            } else {
-                tooltip_pos.x += 12.0;
-            }
-
-            let bg_rect = egui::Rect::from_min_size(tooltip_pos, galley.size() + egui::vec2(16.0, 10.0));
-            painter.rect_filled(bg_rect, 6.0, tooltip_bg);
-            painter.rect_stroke(bg_rect, 6.0, egui::Stroke::new(1.0, tooltip_stroke));
-            painter.galley(bg_rect.min + egui::vec2(8.0, 5.0), galley, white);
         }
     }
+
+    handle_chart_drag_zoom(ui, &response, &painter, chart_rect, lo, hi, zoom_id, primary);
+    response.on_hover_cursor(egui::CursorIcon::Crosshair);
 }
 
 impl WarRoomApp {
@@ -1041,6 +1186,7 @@ impl WarRoomApp {
             // 4. Lap-by-Lap Comparison Table
             let valid_laps_per_stint: Vec<Vec<f32>> = resolved.iter().map(|e| e.stint.valid_laps()).collect();
             let max_laps = valid_laps_per_stint.iter().map(|v| v.len()).max().unwrap_or(0);
+            let table_zoom = chart_zoom_get(ui.ctx(), compare_chart_zoom_id(resolved.iter().map(|e| e.stint)), max_laps);
 
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("LAP-BY-LAP COMPARISON LOG").color(muted).size(ui_size(11.0)).extra_letter_spacing(0.8));
@@ -1116,6 +1262,12 @@ impl WarRoomApp {
                             })
                             .body(|mut body| {
                                 for lap_idx in 0..max_laps {
+                                    // Graph zoom: only list laps inside the zoomed window
+                                    if let Some((z_lo, z_hi)) = table_zoom {
+                                        if lap_idx < z_lo || lap_idx > z_hi {
+                                            continue;
+                                        }
+                                    }
                                     let mut lap_times: Vec<Option<f32>> = Vec::new();
                                     for v in &valid_laps_per_stint {
                                         if lap_idx < v.len() {
@@ -1970,6 +2122,7 @@ impl WarRoomApp {
                     // --- SECTION: LAP-BY-LAP SPREADSHEET TABLE ---
                     let valid_laps = stint.valid_laps();
                     let numbered_laps = stint.numbered_valid_laps();
+                    let table_zoom = chart_zoom_get(ui.ctx(), single_chart_zoom_id(stint), valid_laps.len());
                     let render_lap_log_btns = |ui: &mut egui::Ui, this: &mut WarRoomApp| {
                         if ui.add(egui::Button::new(egui::RichText::new("⚖ Add to Compare").color(white).size(ui_size(11.5))).fill(elevated)).on_hover_text("Add this stint into the Side-by-Side Comparison").clicked() {
                             let slot_entry = StintCompareSlot { car_idx: target_car_idx, stint_number: stint.stint_number };
@@ -2049,6 +2202,13 @@ impl WarRoomApp {
                                             sum_lap_times += t;
                                             let cum_avg = sum_lap_times / (i + 1) as f32;
                                             let is_fast = (t - min_t).abs() < 0.0001;
+
+                                            // Graph zoom: only list laps inside the zoomed window (running avg stays cumulative)
+                                            if let Some((z_lo, z_hi)) = table_zoom {
+                                                if i < z_lo || i > z_hi {
+                                                    continue;
+                                                }
+                                            }
 
                                             body.row(row_h, |mut row| {
                                                 row.col(|ui| {

@@ -1,3 +1,16 @@
+# The Search For Speed Analyzer — v0.5.0
+
+### Drag-to-Zoom on Stint Lap Graphs (Single & Compare):
+* **Zoom Into Any Range of Laps:**
+  * Click and drag left or right across the lap time graph in the Stint Analyzer (single stint and compare) to zoom in on those laps. A shaded box previews your selection while you drag.
+  * The time axis re-fits to the visible laps so small pace differences are easy to read.
+  * Click **Reset Zoom** (shown above the graph while zoomed) to return to the full stint.
+* **Tables Follow the Zoom:**
+  * The lap-by-lap tables below the graph show only the zoomed laps. Running Avg in the single-stint table stays cumulative from the first lap.
+  * In Compare mode one shared zoom range applies to all overlaid stints.
+
+---
+
 # The Search For Speed Analyzer — v0.4.5
 
 ### Static Single-Line In-Car HUD Overlay (Anti-Jitter Fix):
