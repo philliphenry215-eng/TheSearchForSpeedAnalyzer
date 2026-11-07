@@ -451,12 +451,23 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     }
 
     let raw_setup = driver_info["DriverSetupName"].as_str().unwrap_or("");
-    if !raw_setup.is_empty() {
-        s.player_raw_setup_path = raw_setup.to_string();
-    }
     let clean_setup = clean_setup_name(raw_setup);
-    if !clean_setup.is_empty() {
-        s.player_setup_name = clean_setup;
+    let yaml_setup_changed = !raw_setup.is_empty() && raw_setup != s.last_yaml_raw_setup_path;
+    if yaml_setup_changed {
+        s.last_yaml_raw_setup_path = raw_setup.to_string();
+        s.player_raw_setup_path = raw_setup.to_string();
+        if !clean_setup.is_empty() {
+            s.player_setup_name = clean_setup;
+        }
+    } else {
+        if s.player_raw_setup_path.is_empty() && !raw_setup.is_empty() {
+            s.player_raw_setup_path = raw_setup.to_string();
+        }
+        if (s.player_setup_name.is_empty() || s.player_setup_name == "—" || s.player_setup_name == "Baseline")
+            && !clean_setup.is_empty()
+        {
+            s.player_setup_name = clean_setup;
+        }
     }
     let effective_setup = if !s.player_setup_name.is_empty() {
         s.player_setup_name.clone()
@@ -548,10 +559,17 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                 }
                 target.car_path = car_path.clone();
                 if idx == player_idx {
-                    if !raw_setup.is_empty() {
-                        target.raw_setup_path = raw_setup.to_string();
+                    if yaml_setup_changed || target.raw_setup_path.is_empty() {
+                        if !s.player_raw_setup_path.is_empty() {
+                            target.raw_setup_path = s.player_raw_setup_path.clone();
+                        }
                     }
-                    if setup_to_assign != "Baseline" {
+                    if setup_to_assign != "Baseline"
+                        && (yaml_setup_changed
+                            || target.setup_name.is_empty()
+                            || target.setup_name == "—"
+                            || target.setup_name == "Baseline")
+                    {
                         target.setup_name = setup_to_assign.clone();
                     }
                 }
@@ -571,7 +589,7 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                 exited_pits_on_current_lap: false,
                 ignored_lap_sdk: -1,
                 setup_name: setup_to_assign,
-                raw_setup_path: if idx == player_idx { raw_setup.to_string() } else { String::new() },
+                raw_setup_path: if idx == player_idx { s.player_raw_setup_path.clone() } else { String::new() },
                 car_path: car_path.clone(),
                 stints: Vec::new(),
                 historical_fuel_burn_rate: 0.0,
@@ -612,10 +630,19 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     // Backfill setup_name into player driver and any live stints that were started before setup was known
     if effective_setup != "Baseline" {
         if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-            player_drv.setup_name = effective_setup.clone();
+            if yaml_setup_changed
+                || player_drv.setup_name.is_empty()
+                || player_drv.setup_name == "—"
+                || player_drv.setup_name == "Baseline"
+            {
+                player_drv.setup_name = effective_setup.clone();
+            }
             for stint in &mut player_drv.stints {
                 if !stint.is_imported && (stint.setup_name.is_empty() || stint.setup_name == "—" || stint.setup_name == "Baseline") {
                     stint.setup_name = effective_setup.clone();
+                    if stint.raw_setup_path.is_empty() && !s.player_raw_setup_path.is_empty() {
+                        stint.raw_setup_path = s.player_raw_setup_path.clone();
+                    }
                 }
             }
         }

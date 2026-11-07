@@ -1,3 +1,15 @@
+# The Search For Speed Analyzer — v0.5.2
+
+### Save / Rename `.sto` Setup & Graph Drag-to-Zoom Fixes:
+* **Save / Rename `.sto` Setup Takes Immediate Effect:**
+  * Saving or renaming a `.sto` setup from the Stint Analyzer (Single Stint toolbar, Setup bar, or Compare Stints cards) or Saved Stints Database now immediately updates the stint's setup name, active session setup, Discord export card, and `.s4s.json` database record.
+  * Always opens a single Windows File Explorer Save dialog in your car's setup folder (supporting both standard and OneDrive `Documents\iRacing\setups` folders, plus in-place right-click renames inside the dialog) and prevents the 1Hz iRacing YAML poll from overwriting your renamed setup.
+* **Graph Drag-to-Zoom Commits Cleanly on Mouse Release:**
+  * Fixed the Stint Analyzer lap chart drag-to-zoom (both Single Stint and Compare Stints) so releasing the mouse button after dragging across laps immediately zooms the graph and filters the lap-by-lap table below.
+  * You can also right-click or double-click the graph (or click **Reset Zoom**) to return to the full stint view.
+
+---
+
 # The Search For Speed Analyzer — v0.5.1
 
 ### In-Car HUD Overlay (Option 1B `LeftPillar`) Display Fix:

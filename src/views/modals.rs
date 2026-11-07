@@ -1368,7 +1368,7 @@ impl WarRoomApp {
         let mut action_export_as: Option<stint_db::SavedStintRecord> = None;
         let mut action_import_file: Option<std::path::PathBuf> = None;
         let mut action_delete_id: Option<String> = None;
-        let mut action_export_sto: Option<std::path::PathBuf> = None;
+        let mut action_export_sto: Option<(String, String, String, String)> = None;
 
         egui::Window::new("📂 Saved Stints Database · Track Re-Import & Share")
             .id(egui::Id::new("stint_database_modal_window_v4"))
@@ -1895,20 +1895,31 @@ impl WarRoomApp {
                                                                 resp.on_hover_text(format!("Notes: {}", rec.stint.notes));
                                                             }
 
-                                                            if let Some(sto_p) = crate::setup_file::resolve_sto_file("", &rec.setup_name, "", &rec.car_name) {
-                                                                ui.horizontal(|ui| {
-                                                                    ui.spacing_mut().item_spacing.x = 2.0;
-                                                                    if ui
-                                                                        .add(
-                                                                            egui::Button::new(egui::RichText::new("💾 Save .sto").color(white).size(ui_size(9.5)))
-                                                                                .fill(with_alpha(elevated, 180))
-                                                                                .rounding(egui::Rounding::same(3.0)),
-                                                                        )
-                                                                        .on_hover_text("Open Windows File Explorer to save or rename this .sto setup file directly to your files")
-                                                                        .clicked()
-                                                                    {
-                                                                        action_export_sto = Some(sto_p.clone());
-                                                                    }
+                                                            let sto_opt = crate::setup_file::resolve_sto_file(
+                                                                &rec.stint.raw_setup_path,
+                                                                &rec.setup_name,
+                                                                "",
+                                                                &rec.car_name,
+                                                            );
+                                                            ui.horizontal(|ui| {
+                                                                ui.spacing_mut().item_spacing.x = 2.0;
+                                                                if ui
+                                                                    .add(
+                                                                        egui::Button::new(egui::RichText::new("💾 Save .sto").color(white).size(ui_size(9.5)))
+                                                                            .fill(with_alpha(elevated, 180))
+                                                                            .rounding(egui::Rounding::same(3.0)),
+                                                                    )
+                                                                    .on_hover_text("Open Windows File Explorer to save or rename this .sto setup file directly to your files")
+                                                                    .clicked()
+                                                                {
+                                                                    action_export_sto = Some((
+                                                                        rec.id.clone(),
+                                                                        rec.stint.raw_setup_path.clone(),
+                                                                        rec.setup_name.clone(),
+                                                                        rec.car_name.clone(),
+                                                                    ));
+                                                                }
+                                                                if let Some(ref sto_p) = sto_opt {
                                                                     if ui
                                                                         .add(
                                                                             egui::Button::new(egui::RichText::new("📂").color(muted).size(ui_size(9.5)))
@@ -1918,10 +1929,10 @@ impl WarRoomApp {
                                                                         .on_hover_text("Highlight setup file in Windows File Explorer")
                                                                         .clicked()
                                                                     {
-                                                                        crate::stint_db::reveal_file_in_explorer(&sto_p);
+                                                                        crate::stint_db::reveal_file_in_explorer(sto_p);
                                                                     }
-                                                                });
-                                                            }
+                                                                }
+                                                            });
                                                         });
                                                     });
 
@@ -2194,18 +2205,48 @@ impl WarRoomApp {
             }
         }
 
-        if let Some(path) = action_export_sto {
-            let def_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto");
-            match crate::setup_file::export_sto_file(&path, def_name) {
+        if let Some((rec_id, raw_path, setup_name, car_name)) = action_export_sto {
+            let car_path_hint = if !s.player_car_path.is_empty() && s.car_name == car_name {
+                s.player_car_path.as_str()
+            } else {
+                ""
+            };
+            match crate::setup_file::save_or_rename_stint_setup(&raw_path, &setup_name, car_path_hint, &car_name) {
                 Ok(dest) => {
+                    let dest_str = dest.to_string_lossy().to_string();
+                    let cleaned = clean_setup_name(&dest_str);
+                    let new_name = if cleaned.is_empty() { "setup".to_string() } else { cleaned };
+
+                    let mut updated_rec_copy = None;
+                    if let Some(rec) = self.stint_db.records.iter_mut().find(|r| r.id == rec_id) {
+                        rec.setup_name = new_name.clone();
+                        rec.stint.setup_name = new_name.clone();
+                        rec.stint.raw_setup_path = dest_str.clone();
+                        updated_rec_copy = Some(rec.clone());
+                    }
+                    if let Some(rec_copy) = updated_rec_copy {
+                        let _ = self.stint_db.write_individual_stint_file(&rec_copy);
+                        self.stint_db.save();
+                    }
+                    if let Ok(mut state_guard) = self.state.lock() {
+                        for drv in state_guard.drivers.values_mut() {
+                            for st in &mut drv.stints {
+                                if st.saved_id == rec_id {
+                                    st.setup_name = new_name.clone();
+                                    st.raw_setup_path = dest_str.clone();
+                                }
+                            }
+                        }
+                    }
+
                     self.toast_message = Some((
-                        format!("💾 Exported setup to '{}'!", dest.display()),
+                        format!("💾 Saved setup as '{}.sto'!", new_name),
                         std::time::Instant::now(),
                     ));
                 }
                 Err(e) => {
                     if e != "Export cancelled by user" {
-                        self.toast_message = Some((format!("⚠ Export failed: {}", e), std::time::Instant::now()));
+                        self.toast_message = Some((format!("⚠ Save failed: {}", e), std::time::Instant::now()));
                     }
                 }
             }

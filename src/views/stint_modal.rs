@@ -204,27 +204,86 @@ fn handle_chart_drag_zoom(
     zoom_id: egui::Id,
     color: egui::Color32,
 ) {
+    let drag_state_id = zoom_id.with("active_drag_x");
+
+    if response.double_clicked() || response.clicked_by(egui::PointerButton::Secondary) {
+        ui.ctx().data_mut(|d| d.remove::<(f32, f32)>(drag_state_id));
+        chart_zoom_set(ui.ctx(), zoom_id, None);
+        ui.ctx().request_repaint();
+        return;
+    }
+
+    let primary_down = ui.ctx().input(|i| i.pointer.primary_down());
     let origin = ui.ctx().input(|i| i.pointer.press_origin());
-    let latest = ui.ctx().input(|i| i.pointer.latest_pos());
-    if response.dragged() {
-        if let (Some(o), Some(c)) = (origin, latest) {
-            let x0 = o.x.clamp(chart_rect.min.x, chart_rect.max.x);
-            let x1 = c.x.clamp(chart_rect.min.x, chart_rect.max.x);
-            let sel = egui::Rect::from_min_max(
-                egui::pos2(x0.min(x1), chart_rect.min.y),
-                egui::pos2(x0.max(x1), chart_rect.max.y),
-            );
-            painter.rect_filled(sel, 2.0, egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 40));
-            painter.rect_stroke(sel, 2.0, egui::Stroke::new(1.0, color));
+    let latest = ui
+        .ctx()
+        .input(|i| i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()));
+    let stored_drag = ui.ctx().data_mut(|d| d.get_temp::<(f32, f32)>(drag_state_id));
+
+    if primary_down {
+        let active_pair = if let Some((start_x, prev_x)) = stored_drag {
+            let cur_x = latest.map(|p| p.x).unwrap_or(prev_x);
+            Some((start_x, cur_x))
+        } else if response.dragged()
+            || response.is_pointer_button_down_on()
+            || origin.map_or(false, |o| response.rect.contains(o))
+        {
+            let start_pos = origin.or(latest);
+            let cur_pos = latest.or(origin);
+            if let (Some(o), Some(c)) = (start_pos, cur_pos) {
+                Some((o.x, c.x))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some((start_x, cur_x)) = active_pair {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(drag_state_id, (start_x, cur_x)));
+            if (cur_x - start_x).abs() >= 3.0 {
+                let x0 = start_x.clamp(chart_rect.min.x, chart_rect.max.x);
+                let x1 = cur_x.clamp(chart_rect.min.x, chart_rect.max.x);
+                let sel = egui::Rect::from_min_max(
+                    egui::pos2(x0.min(x1), chart_rect.min.y),
+                    egui::pos2(x0.max(x1), chart_rect.max.y),
+                );
+                painter.rect_filled(
+                    sel,
+                    2.0,
+                    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 40),
+                );
+                painter.rect_stroke(sel, 2.0, egui::Stroke::new(1.0, color));
+            }
         }
     }
-    if response.drag_stopped() {
-        if let (Some(o), Some(c)) = (origin, latest) {
-            let a = chart_x_to_lap_idx(o.x, chart_rect, lo, hi);
-            let b = chart_x_to_lap_idx(c.x, chart_rect, lo, hi);
-            let (new_lo, new_hi) = (a.min(b), a.max(b));
+
+    if (!primary_down || response.drag_stopped()) && stored_drag.is_some() {
+        let (start_x, last_x) = stored_drag.unwrap();
+        ui.ctx().data_mut(|d| d.remove::<(f32, f32)>(drag_state_id));
+        let end_x = latest.map(|p| p.x).unwrap_or(last_x);
+        let drag_dx = (end_x - start_x).abs();
+        if drag_dx >= 4.0 && hi > lo {
+            let a = chart_x_to_lap_idx(start_x, chart_rect, lo, hi);
+            let b = chart_x_to_lap_idx(end_x, chart_rect, lo, hi);
+            let (mut new_lo, mut new_hi) = (a.min(b), a.max(b));
+            if new_hi == new_lo && drag_dx >= 12.0 {
+                if end_x >= start_x {
+                    if new_hi < hi {
+                        new_hi += 1;
+                    } else if new_lo > lo {
+                        new_lo -= 1;
+                    }
+                } else if new_lo > lo {
+                    new_lo -= 1;
+                } else if new_hi < hi {
+                    new_hi += 1;
+                }
+            }
             if new_hi > new_lo {
                 chart_zoom_set(ui.ctx(), zoom_id, Some((new_lo, new_hi)));
+                ui.ctx().request_repaint();
             }
         }
     }
@@ -277,7 +336,11 @@ pub(crate) fn render_stint_lap_chart(
     let y_range = (y_max - y_min).max(0.001);
 
     let scaled_h = height + settings.font_size_offset * 5.0;
-    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::click_and_drag());
+    let (response, painter) = ui
+        .push_id(zoom_id.with("chart_canvas"), |ui| {
+            ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::click_and_drag())
+        })
+        .inner;
     let rect = response.rect;
 
     // Background & Soft Rounding
@@ -451,7 +514,11 @@ pub(crate) fn render_multi_stint_lap_chart(
     let y_range = (y_max - y_min).max(0.001);
 
     let scaled_h = height + settings.font_size_offset * 5.0;
-    let (response, painter) = ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::click_and_drag());
+    let (response, painter) = ui
+        .push_id(zoom_id.with("chart_canvas"), |ui| {
+            ui.allocate_painter(egui::vec2(ui.available_width(), scaled_h), egui::Sense::click_and_drag())
+        })
+        .inner;
     let rect = response.rect;
 
     // Background & Soft Rounding
@@ -629,6 +696,101 @@ pub(crate) fn render_multi_stint_lap_chart(
 }
 
 impl WarRoomApp {
+    /// Applies a newly saved/renamed `.sto` setup file to the specified stint, the driver,
+    /// the live session state, and the Saved Stints database so the UI updates immediately.
+    pub(crate) fn apply_saved_stint_setup(
+        &mut self,
+        target_car_idx: usize,
+        stint_number: i32,
+        saved_path: &std::path::Path,
+    ) -> String {
+        let saved_path_str = saved_path.to_string_lossy().to_string();
+        let cleaned = clean_setup_name(&saved_path_str);
+        let new_setup_name = if cleaned.is_empty() {
+            "setup".to_string()
+        } else {
+            cleaned
+        };
+
+        let mut saved_id_to_update = String::new();
+        let mut maybe_built_record: Option<stint_db::SavedStintRecord> = None;
+
+        if let Ok(mut state_guard) = self.state.lock() {
+            let is_player_car = target_car_idx == state_guard.player_car_idx;
+            if is_player_car {
+                state_guard.player_setup_name = new_setup_name.clone();
+                state_guard.player_raw_setup_path = saved_path_str.clone();
+            }
+
+            if let Some(drv) = state_guard.drivers.get_mut(&target_car_idx) {
+                let last_stint_num = drv.stints.last().map(|s| s.stint_number);
+                if is_player_car || last_stint_num == Some(stint_number) {
+                    drv.setup_name = new_setup_name.clone();
+                    drv.raw_setup_path = saved_path_str.clone();
+                }
+                if let Some(st) = drv.stints.iter_mut().find(|st| st.stint_number == stint_number) {
+                    st.setup_name = new_setup_name.clone();
+                    st.raw_setup_path = saved_path_str.clone();
+                    saved_id_to_update = st.saved_id.clone();
+                }
+            }
+
+            if let Some(drv) = state_guard.drivers.get(&target_car_idx) {
+                if let Some(st) = drv.stints.iter().find(|st| st.stint_number == stint_number) {
+                    if is_player_car && !st.is_imported && st.laps_completed > 0 {
+                        maybe_built_record = Some(stint_db::build_record_from_state(
+                            &state_guard,
+                            target_car_idx,
+                            st,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let mut updated_existing_db = false;
+        if !saved_id_to_update.is_empty() {
+            let mut cloned_for_file = None;
+            if let Some(rec) = self
+                .stint_db
+                .records
+                .iter_mut()
+                .find(|r| r.id == saved_id_to_update)
+            {
+                rec.setup_name = new_setup_name.clone();
+                rec.stint.setup_name = new_setup_name.clone();
+                rec.stint.raw_setup_path = saved_path_str.clone();
+                cloned_for_file = Some(rec.clone());
+                updated_existing_db = true;
+            }
+            if let Some(rec_copy) = cloned_for_file {
+                let _ = self.stint_db.write_individual_stint_file(&rec_copy);
+                self.stint_db.save();
+            }
+        }
+
+        if !updated_existing_db {
+            if let Some(mut built) = maybe_built_record {
+                built.setup_name = new_setup_name.clone();
+                built.stint.setup_name = new_setup_name.clone();
+                built.stint.raw_setup_path = saved_path_str;
+                let id = built.id.clone();
+                self.stint_db.upsert_stint(built);
+                if let Ok(mut state_guard) = self.state.lock() {
+                    if let Some(drv) = state_guard.drivers.get_mut(&target_car_idx) {
+                        if let Some(st) = drv.stints.iter_mut().find(|st| st.stint_number == stint_number) {
+                            if st.saved_id.is_empty() {
+                                st.saved_id = id;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        new_setup_name
+    }
+
     pub fn sanitize_compare_slots(&mut self, s: &WarRoomState) {
         self.stint_compare_slots.retain(|slot| {
             if let Some(drv) = s.drivers.get(&slot.car_idx) {
@@ -818,6 +980,7 @@ impl WarRoomApp {
         let mut new_driver_for_slot: Option<(usize, usize)> = None;
         let mut new_stint_for_slot: Option<(usize, i32)> = None;
         let mut updated_notes: Option<(usize, i32, String)> = None;
+        let mut updated_setup_for_slot: Option<(usize, i32, std::path::PathBuf)> = None;
         let col_scale = self.settings.ui_col_scale();
 
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -985,6 +1148,51 @@ impl WarRoomApp {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(egui::RichText::new("Setup:").color(muted).size(ui_size(10.5)));
                                         ui.label(egui::RichText::new(entry.setup_name).color(if entry.is_player { white } else { muted }).size(ui_size(11.0)));
+                                        if entry.is_player {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("💾 .sto")
+                                                            .color(primary)
+                                                            .size(ui_size(9.5))
+                                                            .strong(),
+                                                    )
+                                                    .fill(with_alpha(elevated, 180))
+                                                    .rounding(egui::Rounding::same(3.0)),
+                                                )
+                                                .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file")
+                                                .clicked()
+                                            {
+                                                let drv_opt = s.drivers.get(&entry.car_idx);
+                                                let raw_path = if !entry.stint.raw_setup_path.is_empty() {
+                                                    entry.stint.raw_setup_path.as_str()
+                                                } else if let Some(d) = drv_opt.filter(|d| !d.raw_setup_path.is_empty()) {
+                                                    d.raw_setup_path.as_str()
+                                                } else {
+                                                    s.player_raw_setup_path.as_str()
+                                                };
+                                                let car_path_str = if let Some(d) = drv_opt.filter(|d| !d.car_path.is_empty()) {
+                                                    d.car_path.as_str()
+                                                } else {
+                                                    s.player_car_path.as_str()
+                                                };
+                                                match crate::setup_file::save_or_rename_stint_setup(
+                                                    raw_path,
+                                                    entry.setup_name,
+                                                    car_path_str,
+                                                    &s.car_name,
+                                                ) {
+                                                    Ok(dest) => {
+                                                        updated_setup_for_slot = Some((entry.car_idx, entry.stint_num, dest));
+                                                    }
+                                                    Err(err) => {
+                                                        if err != "Export cancelled by user" {
+                                                            self.toast_message = Some((format!("⚠ Save setup failed: {}", err), std::time::Instant::now()));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     });
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(egui::RichText::new("Track:").color(muted).size(ui_size(10.5)));
@@ -1537,6 +1745,14 @@ impl WarRoomApp {
                 }
             }
         }
+
+        if let Some((car_idx, s_num, dest)) = updated_setup_for_slot {
+            let new_name = self.apply_saved_stint_setup(car_idx, s_num, &dest);
+            self.toast_message = Some((
+                format!("💾 Saved setup as '{}.sto'!", new_name),
+                std::time::Instant::now(),
+            ));
+        }
     }
 
     pub(crate) fn render_stint_comparison_window(&mut self, ctx: &egui::Context, s: &WarRoomState) {
@@ -1668,6 +1884,7 @@ impl WarRoomApp {
         let mut is_open = self.show_stint_analyzer_modal;
         let mut close_modal = false;
         let mut updated_notes: Option<(i32, String)> = None;
+        let mut updated_setup_path: Option<(usize, i32, std::path::PathBuf)> = None;
 
         let window_title = if is_compare {
             "⚖ Stint Comparison (Side-by-Side) · Up to 3 Stints".to_string()
@@ -1688,7 +1905,7 @@ impl WarRoomApp {
                 }
 
                 // Helper to render the secondary action buttons (Discord Image, Share File, Saved Stints)
-                let render_secondary_actions = |ui: &mut egui::Ui, this: &mut WarRoomApp| {
+                let mut render_secondary_actions = |ui: &mut egui::Ui, this: &mut WarRoomApp| {
                     if !is_compare {
                         let discord_btn = egui::Button::new(
                             egui::RichText::new("📸 Copy Discord Image")
@@ -1770,7 +1987,9 @@ impl WarRoomApp {
                             .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
                             .clicked()
                         {
-                            let raw_path = if !drv_ref.raw_setup_path.is_empty() {
+                            let raw_path = if !stint.raw_setup_path.is_empty() {
+                                &stint.raw_setup_path
+                            } else if !drv_ref.raw_setup_path.is_empty() {
                                 &drv_ref.raw_setup_path
                             } else {
                                 &s.player_raw_setup_path
@@ -1787,10 +2006,7 @@ impl WarRoomApp {
                                 &s.car_name,
                             ) {
                                 Ok(dest) => {
-                                    this.toast_message = Some((
-                                        format!("💾 Saved setup as '{}'!", dest.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
-                                        std::time::Instant::now(),
-                                    ));
+                                    updated_setup_path = Some((target_car_idx, stint.stint_number, dest));
                                 }
                                 Err(err) => {
                                     if err != "Export cancelled by user" {
@@ -1987,14 +2203,21 @@ impl WarRoomApp {
                         };
                         ui.label(egui::RichText::new(setup_display).color(white).strong().size(ui_size(12.5)));
 
+                        let stint_raw_path = if !stint.raw_setup_path.is_empty() {
+                            &stint.raw_setup_path
+                        } else if !drv_ref.raw_setup_path.is_empty() {
+                            &drv_ref.raw_setup_path
+                        } else {
+                            &s.player_raw_setup_path
+                        };
                         let sto_file_path = crate::setup_file::resolve_sto_file(
-                            &drv_ref.raw_setup_path,
+                            stint_raw_path,
                             setup_display,
                             &drv_ref.car_path,
                             &drv_ref.driver_name,
                         ).or_else(|| {
                             crate::setup_file::resolve_sto_file(
-                                &s.player_raw_setup_path,
+                                stint_raw_path,
                                 setup_display,
                                 &s.player_car_path,
                                 &s.car_name,
@@ -2015,27 +2238,19 @@ impl WarRoomApp {
                             .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
                             .clicked()
                         {
-                            let raw_path = if !drv_ref.raw_setup_path.is_empty() {
-                                &drv_ref.raw_setup_path
-                            } else {
-                                &s.player_raw_setup_path
-                            };
                             let car_path_str = if !drv_ref.car_path.is_empty() {
                                 &drv_ref.car_path
                             } else {
                                 &s.player_car_path
                             };
                             match crate::setup_file::save_or_rename_stint_setup(
-                                raw_path,
+                                stint_raw_path,
                                 setup_display,
                                 car_path_str,
                                 &s.car_name,
                             ) {
                                 Ok(dest) => {
-                                    self.toast_message = Some((
-                                        format!("💾 Saved setup as '{}'!", dest.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
-                                        std::time::Instant::now(),
-                                    ));
+                                    updated_setup_path = Some((target_car_idx, stint.stint_number, dest));
                                 }
                                 Err(e) => {
                                     if e != "Export cancelled by user" {
@@ -2060,17 +2275,12 @@ impl WarRoomApp {
                             if let Some(ref sto_p) = sto_file_path {
                                 crate::stint_db::reveal_file_in_explorer(sto_p);
                             } else {
-                                let raw_path = if !drv_ref.raw_setup_path.is_empty() {
-                                    &drv_ref.raw_setup_path
-                                } else {
-                                    &s.player_raw_setup_path
-                                };
                                 let car_path_str = if !drv_ref.car_path.is_empty() {
                                     &drv_ref.car_path
                                 } else {
                                     &s.player_car_path
                                 };
-                                if let Some(car_dir) = crate::setup_file::resolve_car_setups_dir(raw_path, car_path_str, &s.car_name) {
+                                if let Some(car_dir) = crate::setup_file::resolve_car_setups_dir(stint_raw_path, car_path_str, &s.car_name) {
                                     crate::stint_db::open_folder_in_explorer(&car_dir);
                                 }
                             }
@@ -2391,10 +2601,205 @@ impl WarRoomApp {
                     }
                 }
             }
+            if let Some((car_idx, s_num, dest)) = updated_setup_path {
+                let new_name = self.apply_saved_stint_setup(car_idx, s_num, &dest);
+                self.toast_message = Some((
+                    format!("💾 Saved setup as '{}.sto'!", new_name),
+                    std::time::Instant::now(),
+                ));
+            }
         }
 
         if !is_open || close_modal {
             self.show_stint_analyzer_modal = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_stint_with_laps(num: i32, count: usize) -> StintData {
+        let mut lap_times = Vec::with_capacity(count);
+        let mut lap_numbers = Vec::with_capacity(count);
+        for i in 0..count {
+            lap_times.push(30.0 + (i as f32) * 0.1);
+            lap_numbers.push((i + 1) as i32);
+        }
+        StintData {
+            stint_number: num,
+            start_lap: 0,
+            end_lap: count as i32,
+            out_lap_completed: true,
+            laps_completed: count as i32,
+            lap_times,
+            lap_numbers,
+            last_lap: 30.0 + (count.saturating_sub(1) as f32) * 0.1,
+            fast_lap: 30.0,
+            is_active: false,
+            setup_name: "Baseline".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_single_and_compare_chart_drag_zoom_commits_on_release() {
+        let ctx = egui::Context::default();
+        let settings = crate::settings::AppSettings::default();
+        let stint_a = sample_stint_with_laps(1, 20);
+        let stint_b = sample_stint_with_laps(2, 20);
+        let single_id = single_chart_zoom_id(&stint_a);
+        let compare_entries = vec![
+            (&stint_a, "S1".to_string(), egui::Color32::from_rgb(0, 210, 255)),
+            (&stint_b, "S2".to_string(), egui::Color32::from_rgb(255, 175, 40)),
+        ];
+        let compare_id = compare_chart_zoom_id(compare_entries.iter().map(|(st, _, _)| *st));
+
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 800.0));
+
+        // Frame 1: initial layout pass
+        let mut raw = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_stint_lap_chart(ui, &stint_a, 160.0, &settings);
+                render_multi_stint_lap_chart(ui, &compare_entries, 180.0, &settings);
+            });
+        });
+        assert_eq!(chart_zoom_get(&ctx, single_id, 20), None);
+        assert_eq!(chart_zoom_get(&ctx, compare_id, 20), None);
+
+        // Drag on single stint chart (around y = 90, x = 200 -> 600)
+        let start_pos = egui::pos2(200.0, 90.0);
+        let mid_pos = egui::pos2(420.0, 90.0);
+        let end_pos = egui::pos2(600.0, 90.0);
+
+        raw.events = vec![
+            egui::Event::PointerMoved(start_pos),
+            egui::Event::PointerButton {
+                pos: start_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let _ = ctx.run(raw.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_stint_lap_chart(ui, &stint_a, 160.0, &settings);
+            });
+        });
+
+        raw.events = vec![egui::Event::PointerMoved(mid_pos)];
+        let _ = ctx.run(raw.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_stint_lap_chart(ui, &stint_a, 160.0, &settings);
+            });
+        });
+
+        raw.events = vec![
+            egui::Event::PointerMoved(end_pos),
+            egui::Event::PointerButton {
+                pos: end_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let _ = ctx.run(raw.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_stint_lap_chart(ui, &stint_a, 160.0, &settings);
+            });
+        });
+
+        let zoomed_single = chart_zoom_get(&ctx, single_id, 20);
+        assert!(
+            zoomed_single.is_some(),
+            "Expected single stint chart zoom range to commit on mouse release"
+        );
+        let (lo, hi) = zoomed_single.unwrap();
+        assert!(lo > 0 && hi < 19 && hi > lo, "Unexpected zoom bounds: ({}, {})", lo, hi);
+
+        // Drag on compare chart as well
+        let cmp_start = egui::pos2(250.0, 90.0);
+        let cmp_end = egui::pos2(700.0, 90.0);
+        raw.events = vec![
+            egui::Event::PointerMoved(cmp_start),
+            egui::Event::PointerButton {
+                pos: cmp_start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let _ = ctx.run(raw.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_multi_stint_lap_chart(ui, &compare_entries, 180.0, &settings);
+            });
+        });
+        raw.events = vec![
+            egui::Event::PointerMoved(cmp_end),
+            egui::Event::PointerButton {
+                pos: cmp_end,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ];
+        let _ = ctx.run(raw.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_multi_stint_lap_chart(ui, &compare_entries, 180.0, &settings);
+            });
+        });
+
+        let zoomed_cmp = chart_zoom_get(&ctx, compare_id, 20);
+        assert!(
+            zoomed_cmp.is_some(),
+            "Expected compare chart zoom range to commit on mouse release"
+        );
+    }
+
+    #[test]
+    fn test_saved_setup_persists_across_unchanged_yaml_poll() {
+        let mut state = WarRoomState::default();
+        let yaml = r#"
+WeekendInfo:
+  TrackDisplayName: Charlotte Motor Speedway
+  TrackLength: 1.50 mi
+  SessionID: 100
+  SubSessionID: 200
+DriverInfo:
+  DriverCarIdx: 0
+  DriverSetupName: setups\nascar\baseline.sto
+  Drivers:
+    - CarIdx: 0
+      UserName: Test Driver
+      CarNumber: "24"
+      CarScreenName: NASCAR Cup Next Gen Chevrolet
+      CarPath: stockcars\chevycamarozl12022
+"#;
+        crate::telemetry::parse_iracing_session_yaml(yaml, &mut state);
+        assert_eq!(state.player_setup_name, "Baseline");
+
+        // User saves/renames the setup to "Charlotte_Q_Run1.sto"
+        state.player_setup_name = "Charlotte_Q_Run1".to_string();
+        state.player_raw_setup_path = r"C:\Setups\stockcars\chevycamarozl12022\Charlotte_Q_Run1.sto".to_string();
+        if let Some(drv) = state.drivers.get_mut(&0) {
+            drv.setup_name = "Charlotte_Q_Run1".to_string();
+            drv.raw_setup_path = state.player_raw_setup_path.clone();
+            let mut st = sample_stint_with_laps(1, 5);
+            st.setup_name = "Charlotte_Q_Run1".to_string();
+            st.raw_setup_path = state.player_raw_setup_path.clone();
+            drv.stints.push(st);
+        }
+
+        // Subsequent 1Hz YAML poll arrives with the same unchanged DriverSetupName
+        crate::telemetry::parse_iracing_session_yaml(yaml, &mut state);
+        assert_eq!(state.player_setup_name, "Charlotte_Q_Run1");
+        let drv = state.drivers.get(&0).unwrap();
+        assert_eq!(drv.setup_name, "Charlotte_Q_Run1");
+        assert_eq!(drv.stints[0].setup_name, "Charlotte_Q_Run1");
     }
 }

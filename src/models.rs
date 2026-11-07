@@ -78,6 +78,7 @@ pub struct StintData {
     pub is_expanded: bool,
     pub tires: StintTireSet,
     pub setup_name: String,
+    pub raw_setup_path: String,
     pub track_temp_at_start: String,
     pub air_temp_at_start: String,
     pub notes: String,
@@ -111,6 +112,7 @@ impl Default for StintData {
             is_expanded: false,
             tires: StintTireSet::default(),
             setup_name: "—".to_string(),
+            raw_setup_path: String::new(),
             track_temp_at_start: "—".to_string(),
             air_temp_at_start: "—".to_string(),
             notes: String::new(),
@@ -333,6 +335,8 @@ pub fn clean_setup_name(raw: &str) -> String {
     };
     if clean.is_empty() {
         String::new()
+    } else if clean.eq_ignore_ascii_case("baseline") {
+        "Baseline".to_string()
     } else {
         clean.to_string()
     }
@@ -508,6 +512,7 @@ pub struct WarRoomState {
     pub track_wetness: i32,
     pub player_setup_name: String,
     pub player_raw_setup_path: String,
+    pub last_yaml_raw_setup_path: String,
     pub player_car_path: String,
     
     // Telemetry Environmental strings
@@ -595,6 +600,7 @@ impl Default for WarRoomState {
             track_wetness: 0,
             player_setup_name: "Baseline".to_string(),
             player_raw_setup_path: String::new(),
+            last_yaml_raw_setup_path: String::new(),
             player_car_path: String::new(),
             weather_type: "...".to_string(),
             air_temp_raw: "...".to_string(),
@@ -843,6 +849,8 @@ impl WarRoomState {
         self.car_name = "—".to_string();
         self.session_type = "—".to_string();
         self.player_setup_name = "Baseline".to_string();
+        self.player_raw_setup_path = String::new();
+        self.last_yaml_raw_setup_path = String::new();
         self.player_fuel_level = 0.0;
         self.player_fuel_capacity = 0.0;
         self.player_fuel_pct = 0.0;
@@ -1071,6 +1079,13 @@ impl WarRoomState {
             } else {
                 "Baseline".to_string()
             };
+            let active_raw_setup = if !driver.raw_setup_path.is_empty() {
+                driver.raw_setup_path.clone()
+            } else if idx == player_idx {
+                self.player_raw_setup_path.clone()
+            } else {
+                String::new()
+            };
 
             // First-frame initialization guard (runs once per driver per session)
             if !driver.is_initialized {
@@ -1106,6 +1121,7 @@ impl WarRoomState {
                         is_expanded: false,
                         tires: StintTireSet::default(),
                         setup_name: active_setup.clone(),
+                        raw_setup_path: active_raw_setup.clone(),
                         track_temp_at_start: track_temp_snapshot.clone(),
                         air_temp_at_start: air_temp_snapshot.clone(),
                         notes: String::new(),
@@ -1138,6 +1154,9 @@ impl WarRoomState {
                     if active_setup != "Baseline" {
                         active.setup_name = active_setup.clone();
                     }
+                }
+                if active.is_active && active.raw_setup_path.is_empty() && !active_raw_setup.is_empty() {
+                    active.raw_setup_path = active_raw_setup.clone();
                 }
             }
 
@@ -1260,6 +1279,7 @@ impl WarRoomState {
                     is_expanded: false,
                     tires: StintTireSet::default(),
                     setup_name: active_setup.clone(),
+                    raw_setup_path: active_raw_setup.clone(),
                     track_temp_at_start: track_temp_snapshot.clone(),
                     air_temp_at_start: air_temp_snapshot.clone(),
                     notes: String::new(),
@@ -1318,6 +1338,7 @@ impl WarRoomState {
                         is_expanded: false,
                         tires: StintTireSet::default(),
                         setup_name: active_setup.clone(),
+                        raw_setup_path: active_raw_setup.clone(),
                         track_temp_at_start: track_temp_snapshot.clone(),
                         air_temp_at_start: air_temp_snapshot.clone(),
                         notes: String::new(),

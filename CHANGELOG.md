@@ -5,6 +5,19 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.5.2] — 2026-11-07
+
+### Fixed
+* **Save / Rename `.sto` Setup Taking Immediate Effect:**
+  * Fixed `.sto` setup saving and renaming in the Stint Analyzer (Single Stint toolbar, Setup row, and Compare cards) and Saved Stints Database so saving or renaming a setup immediately updates the stint's setup name and `.sto` path, the active driver/session setup display, and the `.s4s.json` database record.
+  * Unified the Windows File Explorer prompt onto a single Save dialog (`GetSaveFileNameW`) in the car's setup folder (with OneDrive `Documents\iRacing\setups` support and automatic `.sto` extension handling) and added detection for in-place right-click file renames inside the File Explorer dialog.
+  * Tracked `last_yaml_raw_setup_path` in the 1Hz iRacing YAML parser so user-renamed setups are never overwritten while `DriverSetupName` in iRacing YAML remains unchanged.
+* **Graph Drag-to-Zoom Mouse Release Fix (Single & Compare):**
+  * Fixed an `egui 0.27` input timing bug where `pointer.press_origin()` was cleared on the mouse button release frame before `drag_stopped()` could read the selection start position, causing drag-to-zoom to do nothing when letting go of the mouse button.
+  * Added right-click and double-click on the chart to quickly reset zoom in addition to the **Reset Zoom** button.
+
+---
+
 ## [0.5.1] — 2026-11-06
 
 ### Fixed

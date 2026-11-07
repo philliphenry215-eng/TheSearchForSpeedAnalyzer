@@ -1341,8 +1341,8 @@ mod tests {
     fn test_clean_setup_name() {
         assert_eq!(clean_setup_name(r"C:\Users\peebs\Documents\iRacing\setups\mustanggt3\Atlanta_Race_v2.sto"), "Atlanta_Race_v2");
         assert_eq!(clean_setup_name("mustanggt3/Atlanta_Qual.STO"), "Atlanta_Qual");
-        assert_eq!(clean_setup_name("baseline.sto"), "baseline");
-        assert_eq!(clean_setup_name("baseline"), "baseline");
+        assert_eq!(clean_setup_name("baseline.sto"), "Baseline");
+        assert_eq!(clean_setup_name("baseline"), "Baseline");
         assert_eq!(clean_setup_name(""), "");
         assert_eq!(clean_setup_name("—"), "");
     }
