@@ -392,6 +392,12 @@ impl StintDatabase {
             }
         }
 
+        for r in &mut db.records {
+            if r.stint.laps_completed > 0 {
+                r.stint.tires.sanitize_for_completed_stint();
+            }
+        }
+
         // Also scan individual .s4s.json files in the stints/ folder so dropped files are picked up
         let _ = db.scan_stints_folder();
         db.sort_records();
@@ -460,10 +466,24 @@ impl StintDatabase {
         record.stint.is_active = false;
         record.stint.is_imported = false;
 
+        // If the stint ran laps, make sure it does not retain bogus 100% unworn tires
+        if record.stint.laps_completed > 0 {
+            record.stint.tires.sanitize_for_completed_stint();
+        }
+
         if let Some(existing) = self.records.iter_mut().find(|r| r.id == record.id) {
             // Preserve original timestamp when updating an existing stint in-place (e.g. tire latch or note edit)
             record.saved_at_unix = existing.saved_at_unix;
             record.saved_at_display = existing.saved_at_display.clone();
+
+            // CRITICAL SAFEGUARD: Never let an existing stint that has real wear (< 99.5%)
+            // be downgraded or overwritten by a record that has lost wear!
+            if existing.stint.tires.has_real_wear() && !record.stint.tires.has_real_wear() {
+                record.stint.tires = existing.stint.tires.clone();
+            } else if existing.stint.tires.has_data {
+                record.stint.tires.merge_with(&existing.stint.tires);
+            }
+
             *existing = record.clone();
         } else {
             self.records.push(record.clone());
@@ -540,6 +560,9 @@ impl StintDatabase {
                         rec.stint.saved_id = rec.id.clone();
                         rec.stint.is_active = false;
                         rec.stint.is_imported = false;
+                        if rec.stint.laps_completed > 0 {
+                            rec.stint.tires.sanitize_for_completed_stint();
+                        }
                         self.records.push(rec);
                         newly_added += 1;
                     }
@@ -611,7 +634,20 @@ impl StintDatabase {
             if stint.is_imported || stint.laps_completed < 1 {
                 continue;
             }
-            let rec = build_record_from_state(s, s.player_car_idx, stint);
+            let mut rec = build_record_from_state(s, s.player_car_idx, stint);
+            if let Some(existing) = self.records.iter().find(|r| r.id == rec.id) {
+                // If existing saved record already has real post-stint wear (<99.5%),
+                // and incoming rec has lost wear or was reset to unworn (>=99.5% or 0%),
+                // preserve the existing record's tire data!
+                if existing.stint.tires.has_real_wear() && !rec.stint.tires.has_real_wear() {
+                    rec.stint.tires = existing.stint.tires.clone();
+                } else if existing.stint.tires.has_data {
+                    rec.stint.tires.merge_with(&existing.stint.tires);
+                }
+            }
+            if rec.stint.laps_completed > 0 {
+                rec.stint.tires.sanitize_for_completed_stint();
+            }
             let needs_write = match self.records.iter().find(|r| r.id == rec.id) {
                 None => true,
                 Some(existing) => {

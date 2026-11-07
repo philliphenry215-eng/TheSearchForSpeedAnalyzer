@@ -2573,6 +2573,201 @@ DriverInfo:
     }
 
     #[test]
+    fn test_garage_setup_load_does_not_overwrite_completed_stint_wear_with_unworn_tires() {
+        let mut state = WarRoomState::default();
+        state.session_type = "PRACTICE".to_string();
+        state.player_car_idx = 0;
+
+        // Driver ran 15 laps in Stint S2
+        let initial_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Michigan International Speedway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Practice"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "James Grantham"
+CarSetup:
+  UpdateCount: 1
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "27.8 psi"
+      LastTempsOMI: "202F, 191F, 176F"
+      TreadRemaining: "82%, 82%, 100%"
+    RightFront:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "48.4 psi"
+      LastTempsIMO: "208F, 206F, 196F"
+      TreadRemaining: "74%, 74%, 93%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "27.7 psi"
+      LastTempsOMI: "184F, 177F, 175F"
+      TreadRemaining: "85%, 85%, 96%"
+    RightRear:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "50.6 psi"
+      LastTempsIMO: "219F, 212F, 223F"
+      TreadRemaining: "66%, 65%, 69%"
+"#;
+        assert!(parse_iracing_session_yaml(initial_yaml, &mut state));
+
+        // Create completed Stint S2 with 15 laps
+        let mut s2 = StintData::default();
+        s2.stint_number = 2;
+        s2.laps_completed = 15;
+        s2.is_active = false;
+        s2.setup_name = "S426_HBSpeedLab_MICHIGAN_R2.21".to_string();
+        state.drivers.get_mut(&0).unwrap().stints.push(s2);
+
+        // When returning to the garage, YAML parser latches post-run wear from CarSetup
+        assert!(parse_iracing_session_yaml(initial_yaml, &mut state));
+        let player = state.drivers.get(&0).unwrap();
+        let stint = &player.stints[0];
+        assert_eq!(stint.tires.lf.wear_m, 82.0, "LF wear must be 82% from garage CarSetup");
+        assert_eq!(stint.tires.rf.wear_m, 74.0, "RF wear must be 74% from garage CarSetup");
+        assert!(stint.tires.has_real_wear(), "Stint must have real wear");
+
+        // Now, while still in the garage, the player loads a NEW setup or resets tires!
+        // In iRacing, a loaded/reset setup has TreadRemaining: "100%, 100%, 100%" and cold/ambient temps
+        let fresh_setup_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Michigan International Speedway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Practice"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "James Grantham"
+CarSetup:
+  UpdateCount: 2
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "22.0 psi"
+      LastTempsOMI: "110F, 110F, 110F"
+      TreadRemaining: "100%, 100%, 100%"
+    RightFront:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "40.0 psi"
+      LastTempsIMO: "110F, 110F, 110F"
+      TreadRemaining: "100%, 100%, 100%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "22.0 psi"
+      LastTempsOMI: "110F, 110F, 110F"
+      TreadRemaining: "100%, 100%, 100%"
+    RightRear:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "40.0 psi"
+      LastTempsIMO: "110F, 110F, 110F"
+      TreadRemaining: "100%, 100%, 100%"
+"#;
+        assert!(parse_iracing_session_yaml(fresh_setup_yaml, &mut state));
+
+        // CRITICAL CHECK: Stint S2's 15-lap wear MUST NOT be overwritten by the 100% unworn setup!
+        let stint_after = &state.drivers.get(&0).unwrap().stints[0];
+        assert_eq!(stint_after.tires.lf.wear_m, 82.0, "LF wear must remain 82% after loading fresh setup");
+        assert_eq!(stint_after.tires.rf.wear_m, 74.0, "RF wear must remain 74% after loading fresh setup");
+        assert_eq!(stint_after.tires.rr.wear_m, 65.0, "RR wear must remain 65% after loading fresh setup");
+        assert!(stint_after.tires.has_real_wear(), "Stint must retain true post-run wear");
+        assert!(!stint_after.tires.is_unworn(), "Stint must not be marked unworn 100%");
+
+        // Also verify hot pressures and hot temps were not downgraded to ambient 110F
+        assert!((stint_after.tires.lf.pressure * 0.145038 - 27.8).abs() < 0.2, "LF hot pressure must be preserved");
+        assert!((stint_after.tires.rf.pressure * 0.145038 - 48.4).abs() < 0.2, "RF hot pressure must be preserved");
+    }
+
+    #[test]
+    fn test_stint_db_sync_protects_existing_real_wear_from_corrupted_samples() {
+        use crate::stint_db::{current_unix_millis, StintDatabase};
+        let temp_dir = std::env::temp_dir().join(format!("s4s_stint_db_test_{}", current_unix_millis()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let mut db = StintDatabase::load_from_dir(temp_dir.clone());
+
+        let mut state = WarRoomState::default();
+        state.track_name = "Michigan International Speedway".to_string();
+        state.car_name = "NASCAR Cup Chevrolet Camaro ZL1".to_string();
+        state.player_car_idx = 0;
+
+        let mut drv = DriverState::default();
+        drv.car_idx = 0;
+        drv.driver_name = "James Grantham".to_string();
+
+        let mut s2 = StintData::default();
+        s2.stint_number = 2;
+        s2.laps_completed = 15;
+        s2.is_active = false;
+        s2.setup_name = "S426_HBSpeedLab_MICHIGAN_R2.21".to_string();
+        s2.tires.lf.wear_m = 82.0;
+        s2.tires.rf.wear_m = 74.0;
+        s2.tires.has_data = true;
+        drv.stints.push(s2);
+        state.drivers.insert(0, drv);
+
+        // Sync initial stint with real wear into database
+        let updated = db.sync_player_stints_from_state(&state);
+        assert_eq!(updated, 1);
+        let rec = &db.records[0];
+        assert_eq!(rec.stint.tires.lf.wear_m, 82.0);
+
+        // Now simulate a corrupt state where live memory was reset to 100% unworn tires
+        let player_drv = state.drivers.get_mut(&0).unwrap();
+        player_drv.stints[0].tires.lf.wear_m = 100.0;
+        player_drv.stints[0].tires.rf.wear_m = 100.0;
+        player_drv.stints[0].tires.lr.wear_m = 100.0;
+        player_drv.stints[0].tires.rr.wear_m = 100.0;
+
+        // Sync again: database safeguard must reject the 100% downgrade!
+        db.sync_player_stints_from_state(&state);
+        let rec_after = &db.records[0];
+        assert_eq!(rec_after.stint.tires.lf.wear_m, 82.0, "Database record must retain 82% real wear");
+        assert_eq!(rec_after.stint.tires.rf.wear_m, 74.0, "Database record must retain 74% real wear");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_sanitize_for_completed_stint_clears_bogus_100_percent_wear() {
+        let mut tires = StintTireSet::default();
+        tires.lf.wear_l = 100.0;
+        tires.lf.wear_m = 100.0;
+        tires.lf.wear_r = 100.0;
+        tires.rf.wear_l = 100.0;
+        tires.rf.wear_m = 100.0;
+        tires.rf.wear_r = 100.0;
+        tires.lr.wear_l = 100.0;
+        tires.lr.wear_m = 100.0;
+        tires.lr.wear_r = 100.0;
+        tires.rr.wear_l = 100.0;
+        tires.rr.wear_m = 100.0;
+        tires.rr.wear_r = 100.0;
+        assert!(tires.is_unworn());
+        assert!(!tires.has_real_wear());
+
+        tires.sanitize_for_completed_stint();
+        assert_eq!(tires.lf.wear_m, 0.0, "Bogus 100% wear must be zeroed out on completed stint");
+        assert_eq!(tires.rf.wear_m, 0.0);
+        assert!(!tires.has_wear(), "Zeroed wear must not report has_wear");
+
+        // Tires with real wear (< 99.5%) must NOT be cleared
+        let mut real_tires = StintTireSet::default();
+        real_tires.lf.wear_m = 85.0;
+        real_tires.rf.wear_m = 78.0;
+        assert!(real_tires.has_real_wear());
+        real_tires.sanitize_for_completed_stint();
+        assert_eq!(real_tires.lf.wear_m, 85.0, "Real wear must not be cleared");
+        assert_eq!(real_tires.rf.wear_m, 78.0);
+    }
+
+    #[test]
     fn test_weather_overlay_parsing_and_formatting() {
         // 1. Temperature parsing
         assert_eq!(parse_temp_num("72.4 F", false), Some(72));

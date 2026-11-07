@@ -654,11 +654,13 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     if let Some(car_setup) = root.get("CarSetup") {
         if let Some(garage_tires) = parse_car_setup_tires(car_setup) {
             if garage_tires.is_valid() {
-                s.latest_tire_data = garage_tires.clone();
+                if garage_tires.has_real_wear() || !s.latest_tire_data.has_real_wear() {
+                    s.latest_tire_data.merge_with(&garage_tires);
+                }
                 if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                    if let Some(last_stint) = player_drv.last_live_stint_mut() {
-                        if !last_stint.is_active && last_stint.laps_completed > 0 {
-                            last_stint.tires = garage_tires;
+                    if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
+                        if garage_tires.has_real_wear() {
+                            target_stint.tires.merge_with(&garage_tires);
                         }
                     }
                 }
@@ -911,9 +913,28 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
         if w > 0.0 && w <= 1.0 { w * 100.0 } else { w.max(0.0) }
     };
 
+    let resolve_wear = |w_raw: f32, prev_w: f32| -> f32 {
+        let live_w = to_wear(w_raw);
+        if live_w > 0.1 && live_w < 99.5 {
+            // Live sample has real wear (< 99.5%)
+            if prev_w > 0.1 && prev_w < 99.5 {
+                live_w.min(prev_w)
+            } else {
+                live_w
+            }
+        } else if prev_w > 0.1 && prev_w < 99.5 {
+            // Keep existing real wear; never let fresh 100% tires or 0% overwrite real wear
+            prev_w
+        } else if previous_hot.is_none() && live_w > 0.1 {
+            live_w
+        } else {
+            0.0
+        }
+    };
+
     let resolve_pressure = |p_live: f32, prev_p: f32| -> f32 {
         if p_live > 1.0 {
-            p_live
+            if prev_p > 1.0 { p_live.max(prev_p) } else { p_live }
         } else if prev_p > 1.0 {
             prev_p
         } else {
@@ -921,58 +942,65 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
         }
     };
 
-    let read_temp = |cl: &'static str, l: &'static str| -> f32 {
+    let resolve_temp = |cl: &'static str, l: &'static str, prev_t: f32| -> f32 {
         let v_cl = get_sample_f32(live, cl);
-        if v_cl > 1.0 {
+        let live_t = if v_cl > 1.0 {
             v_cl
         } else {
             get_sample_f32(live, l)
+        };
+        if live_t > 1.0 {
+            if prev_t > 1.0 { live_t.max(prev_t) } else { live_t }
+        } else if prev_t > 1.0 {
+            prev_t
+        } else {
+            0.0
         }
     };
 
-    let prev_lf = previous_hot.map(|p| p.lf.pressure).unwrap_or(0.0);
-    let prev_rf = previous_hot.map(|p| p.rf.pressure).unwrap_or(0.0);
-    let prev_lr = previous_hot.map(|p| p.lr.pressure).unwrap_or(0.0);
-    let prev_rr = previous_hot.map(|p| p.rr.pressure).unwrap_or(0.0);
+    let prev_lf = previous_hot.map(|p| &p.lf);
+    let prev_rf = previous_hot.map(|p| &p.rf);
+    let prev_lr = previous_hot.map(|p| &p.lr);
+    let prev_rr = previous_hot.map(|p| &p.rr);
 
     let lf = TireCornerData {
-        temp_l: read_temp("LFtempCL", "LFtempL"),
-        temp_m: read_temp("LFtempCM", "LFtempM"),
-        temp_r: read_temp("LFtempCR", "LFtempR"),
-        wear_l: to_wear(get_sample_f32(live, "LFwearL")),
-        wear_m: to_wear(get_sample_f32(live, "LFwearM")),
-        wear_r: to_wear(get_sample_f32(live, "LFwearR")),
-        pressure: resolve_pressure(get_sample_f32(live, "LFpressure"), prev_lf),
+        temp_l: resolve_temp("LFtempCL", "LFtempL", prev_lf.map_or(0.0, |p| p.temp_l)),
+        temp_m: resolve_temp("LFtempCM", "LFtempM", prev_lf.map_or(0.0, |p| p.temp_m)),
+        temp_r: resolve_temp("LFtempCR", "LFtempR", prev_lf.map_or(0.0, |p| p.temp_r)),
+        wear_l: resolve_wear(get_sample_f32(live, "LFwearL"), prev_lf.map_or(0.0, |p| p.wear_l)),
+        wear_m: resolve_wear(get_sample_f32(live, "LFwearM"), prev_lf.map_or(0.0, |p| p.wear_m)),
+        wear_r: resolve_wear(get_sample_f32(live, "LFwearR"), prev_lf.map_or(0.0, |p| p.wear_r)),
+        pressure: resolve_pressure(get_sample_f32(live, "LFpressure"), prev_lf.map_or(0.0, |p| p.pressure)),
     };
 
     let rf = TireCornerData {
-        temp_l: read_temp("RFtempCL", "RFtempL"),
-        temp_m: read_temp("RFtempCM", "RFtempM"),
-        temp_r: read_temp("RFtempCR", "RFtempR"),
-        wear_l: to_wear(get_sample_f32(live, "RFwearL")),
-        wear_m: to_wear(get_sample_f32(live, "RFwearM")),
-        wear_r: to_wear(get_sample_f32(live, "RFwearR")),
-        pressure: resolve_pressure(get_sample_f32(live, "RFpressure"), prev_rf),
+        temp_l: resolve_temp("RFtempCL", "RFtempL", prev_rf.map_or(0.0, |p| p.temp_l)),
+        temp_m: resolve_temp("RFtempCM", "RFtempM", prev_rf.map_or(0.0, |p| p.temp_m)),
+        temp_r: resolve_temp("RFtempCR", "RFtempR", prev_rf.map_or(0.0, |p| p.temp_r)),
+        wear_l: resolve_wear(get_sample_f32(live, "RFwearL"), prev_rf.map_or(0.0, |p| p.wear_l)),
+        wear_m: resolve_wear(get_sample_f32(live, "RFwearM"), prev_rf.map_or(0.0, |p| p.wear_m)),
+        wear_r: resolve_wear(get_sample_f32(live, "RFwearR"), prev_rf.map_or(0.0, |p| p.wear_r)),
+        pressure: resolve_pressure(get_sample_f32(live, "RFpressure"), prev_rf.map_or(0.0, |p| p.pressure)),
     };
 
     let lr = TireCornerData {
-        temp_l: read_temp("LRtempCL", "LRtempL"),
-        temp_m: read_temp("LRtempCM", "LRtempM"),
-        temp_r: read_temp("LRtempCR", "LRtempR"),
-        wear_l: to_wear(get_sample_f32(live, "LRwearL")),
-        wear_m: to_wear(get_sample_f32(live, "LRwearM")),
-        wear_r: to_wear(get_sample_f32(live, "LRwearR")),
-        pressure: resolve_pressure(get_sample_f32(live, "LRpressure"), prev_lr),
+        temp_l: resolve_temp("LRtempCL", "LRtempL", prev_lr.map_or(0.0, |p| p.temp_l)),
+        temp_m: resolve_temp("LRtempCM", "LRtempM", prev_lr.map_or(0.0, |p| p.temp_m)),
+        temp_r: resolve_temp("LRtempCR", "LRtempR", prev_lr.map_or(0.0, |p| p.temp_r)),
+        wear_l: resolve_wear(get_sample_f32(live, "LRwearL"), prev_lr.map_or(0.0, |p| p.wear_l)),
+        wear_m: resolve_wear(get_sample_f32(live, "LRwearM"), prev_lr.map_or(0.0, |p| p.wear_m)),
+        wear_r: resolve_wear(get_sample_f32(live, "LRwearR"), prev_lr.map_or(0.0, |p| p.wear_r)),
+        pressure: resolve_pressure(get_sample_f32(live, "LRpressure"), prev_lr.map_or(0.0, |p| p.pressure)),
     };
 
     let rr = TireCornerData {
-        temp_l: read_temp("RRtempCL", "RRtempL"),
-        temp_m: read_temp("RRtempCM", "RRtempM"),
-        temp_r: read_temp("RRtempCR", "RRtempR"),
-        wear_l: to_wear(get_sample_f32(live, "RRwearL")),
-        wear_m: to_wear(get_sample_f32(live, "RRwearM")),
-        wear_r: to_wear(get_sample_f32(live, "RRwearR")),
-        pressure: resolve_pressure(get_sample_f32(live, "RRpressure"), prev_rr),
+        temp_l: resolve_temp("RRtempCL", "RRtempL", prev_rr.map_or(0.0, |p| p.temp_l)),
+        temp_m: resolve_temp("RRtempCM", "RRtempM", prev_rr.map_or(0.0, |p| p.temp_m)),
+        temp_r: resolve_temp("RRtempCR", "RRtempR", prev_rr.map_or(0.0, |p| p.temp_r)),
+        wear_l: resolve_wear(get_sample_f32(live, "RRwearL"), prev_rr.map_or(0.0, |p| p.wear_l)),
+        wear_m: resolve_wear(get_sample_f32(live, "RRwearM"), prev_rr.map_or(0.0, |p| p.wear_m)),
+        wear_r: resolve_wear(get_sample_f32(live, "RRwearR"), prev_rr.map_or(0.0, |p| p.wear_r)),
+        pressure: resolve_pressure(get_sample_f32(live, "RRpressure"), prev_rr.map_or(0.0, |p| p.pressure)),
     };
 
     let has_data = lf.temp_m > 5.0 || rf.temp_m > 5.0 || lf.wear_m > 0.1 || rf.wear_m > 0.1 || lf.pressure > 1.0;

@@ -5,6 +5,17 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.5.3] — 2026-11-07
+
+### Fixed
+* **Post-Stint Tire Wear and Temperature Latching & Retention (Bugfix):**
+  * **Prevented Garage Setup Overwrite of Completed Stints:** Resolved the root cause where loading a new setup, editing settings, or resetting tires in the garage unconditionally overwrote the just-completed stint's genuine tire wear with fresh 100% unworn tires and ambient temps (`100% 100% 100%` wear bug).
+  * **Intelligent Peak Hot Tire Retention (`merge_with`):** Replaced blind tire assignments with an intelligent merge algorithm on `TireCornerData` and `StintTireSet`. Genuine post-stint wear (`< 99.5%`) is permanently preserved and can never be overwritten by fresh 100% tires, cool-down samples, or setup resets. Stints also retain their highest peak hot temperatures and pressures reached during the run.
+  * **Pit Service & Exit Safeguard:** Removed `|| fire_tire_popup` from `is_in_stall_or_garage` and restricted tire latching strictly to closed completed stints (`!st.is_active && st.laps_completed > 0`), ensuring fresh tires mounted in the pits are never latched as the wear of the previous stint.
+  * **Stint Database Protection & Self-Healing:** Added guard rails to `sync_player_stints_from_state` and `upsert_stint` to ensure saved database records with real tire wear are never downgraded or overwritten by unworn/empty samples. Added automatic sanitization (`sanitize_for_completed_stint`) to purge bogus 100% unworn readings from multi-lap completed stints across database loads and imports.
+
+---
+
 ## [0.5.2] — 2026-11-07
 
 ### Fixed
