@@ -5,6 +5,15 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.5.1] — 2026-11-06
+
+### Fixed
+* **In-Car HUD Overlay (Option 1B `LeftPillar`) Static 2-Line Fuel Pills & Alignment:**
+  * Restored the 2-line stacked sub-pill layout in the Option 1B (`LeftPillar`) fuel card (`20.0 gal IN` / `TANK`, `BURN: 0.344` / `gal/lap`, `+1.0 LAP` / `MARGIN`) using explicit two-line formatting so the badges stay permanently locked to 2 lines and never swap between 1 and 2 lines as fuel numbers change.
+  * Fixed column overflow and right-edge clipping in `LeftPillar` so all fuel badges stay cleanly separated within their columns and the Pace Card, Fuel Card, and Bottom Status Bar (`● Green`) align flush within the `595px` overlay.
+
+---
+
 ## [0.5.0] — 2026-11-06
 
 ### Added

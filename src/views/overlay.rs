@@ -322,8 +322,8 @@ impl WarRoomApp {
             }
             HudLayoutPreset::LeftPillar => {
                 let mut h = 14.0_f32;
-                let right_h: f32 = (if show_pace { 76.0 } else { 0.0 }) + (if show_fuel { 76.0 } else { 0.0 });
-                h += right_h.max(152.0_f32);
+                let right_h: f32 = (if show_pace { 76.0 } else { 0.0 }) + (if show_fuel { 97.0 } else { 0.0 });
+                h += right_h.max(173.0_f32);
                 if show_bottom_bar { h += 32.0; }
                 h + 4.0
             }
@@ -358,11 +358,7 @@ impl WarRoomApp {
         };
 
         let target_height = (base_h * scale).round();
-        let base_w = match self.settings.overlay.hud_layout {
-            HudLayoutPreset::LeftPillar => 635.0,
-            _ => 595.0,
-        };
-        let target_width = (base_w * scale).round();
+        let target_width = (595.0 * scale).round();
 
         let hdr_font_size = (11.5 * scale).round();
         let hero_font_size = (22.0 * scale).round();
@@ -497,8 +493,6 @@ impl WarRoomApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(bg_color).rounding(12.0).inner_margin(8.0 * scale).stroke(outer_stroke))
                 .show(ctx, |ui| {
-                    // Enforce single-line static rendering across the entire in-car HUD so text never wraps or shifts card height while driving
-                    ui.style_mut().wrap = Some(false);
                     ui.spacing_mut().item_spacing = egui::vec2(6.0 * scale, (5.0 * scale).max(3.0));
 
                     match hud_preset {
@@ -649,6 +643,7 @@ fn render_bottom_status_bar(ui: &mut egui::Ui, style: &HudStyleContext, tel: &Hu
         .rounding(8.0)
         .inner_margin(egui::Margin::symmetric(style.card_padding_x, (4.0 * style.scale).max(2.5)))
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0 * style.scale;
 
@@ -683,13 +678,14 @@ fn render_bottom_status_bar(ui: &mut egui::Ui, style: &HudStyleContext, tel: &Hu
         });
 }
 
-fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTelemetryContext) {
+fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTelemetryContext, two_line_pills: bool) {
     egui::Frame::none()
         .fill(style.card_fill)
         .stroke(style.inner_card_stroke)
         .rounding(8.0)
         .inner_margin(egui::Margin::symmetric(style.card_padding_x, style.card_padding_y))
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.columns(3, |cols| {
                 cols[0].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
@@ -702,10 +698,16 @@ fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                                 format!("— {}", tel.fuel_unit_str)
                             };
                             ui.label(egui::RichText::new(tank_str).font(display_font(style.hero_font_size)).color(style.primary));
-                            let laps_sub = if tel.laps_of_fuel > 0.05 && tel.fuel_burn_rate_ltr > 0.001 {
-                                format!("{:.1} LAPS LEFT", tel.laps_of_fuel)
+                            let laps_sub = if two_line_pills {
+                                if tel.laps_of_fuel > 0.05 && tel.fuel_burn_rate_ltr > 0.001 {
+                                    format!("{:.1} LAPS\nREMAINING", tel.laps_of_fuel)
+                                } else {
+                                    "— LAPS\nREMAINING".to_string()
+                                }
+                            } else if tel.laps_of_fuel > 0.05 && tel.fuel_burn_rate_ltr > 0.001 {
+                                format!("{:.1} LAPS REMAINING", tel.laps_of_fuel)
                             } else {
-                                "— LAPS LEFT".to_string()
+                                "— LAPS REMAINING".to_string()
                             };
                             render_sub_pill(ui, &laps_sub, style.primary, with_alpha(style.primary, 45), with_alpha(style.primary, 85), style.sub_font_size);
                         }
@@ -717,10 +719,16 @@ fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                                 "— laps".to_string()
                             };
                             ui.label(egui::RichText::new(laps_hero_str).font(display_font(style.hero_font_size)).color(style.primary));
-                            let tank_sub = if tel.fuel_level_ltr > 0.01 {
+                            let tank_sub = if two_line_pills {
+                                if tel.fuel_level_ltr > 0.01 {
+                                    format!("{:.1} {} IN\nTANK", tel.fuel_level_ltr * tel.fuel_conv, tel.fuel_unit_str)
+                                } else {
+                                    format!("— {} IN\nTANK", tel.fuel_unit_str)
+                                }
+                            } else if tel.fuel_level_ltr > 0.01 {
                                 format!("{:.1} {} IN TANK", tel.fuel_level_ltr * tel.fuel_conv, tel.fuel_unit_str)
                             } else {
-                                "— IN TANK".to_string()
+                                format!("— {} IN TANK", tel.fuel_unit_str)
                             };
                             render_sub_pill(ui, &tank_sub, style.primary, with_alpha(style.primary, 45), with_alpha(style.primary, 85), style.sub_font_size);
                         }
@@ -736,7 +744,13 @@ fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                         "—".to_string()
                     };
                     ui.label(egui::RichText::new(pit_str).font(display_font(style.hero_font_size)).color(style.amber));
-                    let rate_str = if tel.fuel_burn_rate_ltr > 0.001 {
+                    let rate_str = if two_line_pills {
+                        if tel.fuel_burn_rate_ltr > 0.001 {
+                            format!("BURN: {:.3}\n{}/lap", tel.fuel_burn_rate_ltr * tel.fuel_conv, tel.fuel_unit_str)
+                        } else {
+                            "AWAITING\nLAP 1".to_string()
+                        }
+                    } else if tel.fuel_burn_rate_ltr > 0.001 {
                         format!("BURN: {:.3} {}/lap", tel.fuel_burn_rate_ltr * tel.fuel_conv, tel.fuel_unit_str)
                     } else {
                         "AWAITING LAP 1".to_string()
@@ -766,7 +780,11 @@ fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                         style.green
                     };
                     ui.label(egui::RichText::new(add_str).font(display_font(style.hero_font_size)).color(add_color));
-                    let margin_str = format!("+{:.1} LAP MARGIN", tel.safety_margin);
+                    let margin_str = if two_line_pills {
+                        format!("+{:.1} LAP\nMARGIN", tel.safety_margin)
+                    } else {
+                        format!("+{:.1} LAP MARGIN", tel.safety_margin)
+                    };
                     render_sub_pill(ui, &margin_str, add_color, with_alpha(add_color, 45), with_alpha(add_color, 85), style.sub_font_size);
                 });
             });
@@ -774,19 +792,21 @@ fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
 }
 
 fn render_4col_pace_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTelemetryContext) {
+    let pace_sub_size = (style.sub_font_size * 0.85).round();
     egui::Frame::none()
         .fill(style.card_fill)
         .stroke(style.inner_card_stroke)
         .rounding(8.0)
         .inner_margin(egui::Margin::symmetric(style.card_padding_x, style.card_padding_y))
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.columns(4, |cols| {
                 cols[0].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
                     ui.label(egui::RichText::new("STINT RUN").color(style.muted).size(style.hdr_font_size).extra_letter_spacing(0.8));
                     ui.label(egui::RichText::new(format!("S{} · L{}", tel.stint_num, tel.stint_lap_count)).font(display_font(style.hero_font_size)).color(style.primary));
                     let avg_str = if tel.stint_avg > 0.0 { format!("AVG {}", format_time(tel.stint_avg)) } else { "AVG —".to_string() };
-                    render_sub_pill(ui, &avg_str, egui::Color32::from_rgb(205, 212, 224), egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), style.sub_font_size);
+                    render_sub_pill(ui, &avg_str, egui::Color32::from_rgb(205, 212, 224), egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), pace_sub_size);
                 });
                 cols[1].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
@@ -794,14 +814,14 @@ fn render_4col_pace_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                     let last_str = if tel.last_lap > 0.0 { format_time(tel.last_lap) } else { "—".to_string() };
                     ui.label(egui::RichText::new(last_str).font(display_font(style.hero_font_size)).color(style.white));
                     let best_str = if tel.fast_lap > 0.0 { format!("BEST {}", format_time(tel.fast_lap)) } else { "BEST —".to_string() };
-                    render_sub_pill(ui, &best_str, style.green, egui::Color32::from_rgba_unmultiplied(16, 44, 28, 190), with_alpha(style.green, 70), style.sub_font_size);
+                    render_sub_pill(ui, &best_str, style.green, egui::Color32::from_rgba_unmultiplied(16, 44, 28, 190), with_alpha(style.green, 70), pace_sub_size);
                 });
                 cols[2].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
                     ui.label(egui::RichText::new(tel.comp_header).color(style.muted).size(style.hdr_font_size).extra_letter_spacing(0.8));
                     let comp_str = if tel.comp_last_lap > 0.0 { format_time(tel.comp_last_lap) } else { "—".to_string() };
                     ui.label(egui::RichText::new(comp_str).font(display_font(style.hero_font_size)).color(style.white));
-                    render_sub_pill(ui, tel.comp_sub, style.primary, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), style.sub_font_size);
+                    render_sub_pill(ui, tel.comp_sub, style.primary, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), pace_sub_size);
                 });
                 cols[3].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
@@ -809,17 +829,17 @@ fn render_4col_pace_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                     ui.label(egui::RichText::new(delta_title).color(style.muted).size(style.hdr_font_size).extra_letter_spacing(0.8));
                     if let Some(delta) = tel.delta_opt {
                         let (delta_str, delta_color, sub_text) = if delta < -0.005 {
-                            (format!("-{:.3}s", delta.abs()), style.green, if tel.player_pos == 1 { "▲ PULLING AWAY" } else { "▲ FASTER THAN P1" })
+                            (format!("-{:.3}s", delta.abs()), style.green, if tel.player_pos == 1 { "▲ PULLING AWAY" } else { "▲ FASTER" })
                         } else if delta > 0.005 {
-                            (format!("+{:.3}s", delta), style.amber, if tel.player_pos == 1 { "▼ P2 CLOSING" } else { "▼ SLOWER THAN P1" })
+                            (format!("+{:.3}s", delta), style.amber, if tel.player_pos == 1 { "▼ P2 CLOSING" } else { "▼ SLOWER" })
                         } else {
                             ("±0.000s".to_string(), style.white, "■ EQUAL PACE")
                         };
                         ui.label(egui::RichText::new(delta_str).font(display_font(style.hero_font_size)).color(delta_color));
-                        render_sub_pill(ui, sub_text, delta_color, with_alpha(delta_color, 45), with_alpha(delta_color, 85), style.sub_font_size);
+                        render_sub_pill(ui, sub_text, delta_color, with_alpha(delta_color, 45), with_alpha(delta_color, 85), pace_sub_size);
                     } else {
                         ui.label(egui::RichText::new("—").font(display_font(style.hero_font_size)).color(style.muted));
-                        render_sub_pill(ui, "AWAITING LAPS", style.muted, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), style.sub_font_size);
+                        render_sub_pill(ui, "AWAITING LAPS", style.muted, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), pace_sub_size);
                     }
                 });
             });
@@ -827,12 +847,14 @@ fn render_4col_pace_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
 }
 
 fn render_3col_pace_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTelemetryContext) {
+    let pace_sub_size = (style.sub_font_size * 0.85).round();
     egui::Frame::none()
         .fill(style.card_fill)
         .stroke(style.inner_card_stroke)
         .rounding(8.0)
         .inner_margin(egui::Margin::symmetric(style.card_padding_x, style.card_padding_y))
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.columns(3, |cols| {
                 cols[0].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
@@ -840,14 +862,14 @@ fn render_3col_pace_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                     let last_str = if tel.last_lap > 0.0 { format_time(tel.last_lap) } else { "—".to_string() };
                     ui.label(egui::RichText::new(last_str).font(display_font(style.hero_font_size)).color(style.white));
                     let best_str = if tel.fast_lap > 0.0 { format!("BEST {}", format_time(tel.fast_lap)) } else { "BEST —".to_string() };
-                    render_sub_pill(ui, &best_str, style.green, egui::Color32::from_rgba_unmultiplied(16, 44, 28, 190), with_alpha(style.green, 70), style.sub_font_size);
+                    render_sub_pill(ui, &best_str, style.green, egui::Color32::from_rgba_unmultiplied(16, 44, 28, 190), with_alpha(style.green, 70), pace_sub_size);
                 });
                 cols[1].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
                     ui.label(egui::RichText::new(tel.comp_header).color(style.muted).size(style.hdr_font_size).extra_letter_spacing(0.8));
                     let comp_str = if tel.comp_last_lap > 0.0 { format_time(tel.comp_last_lap) } else { "—".to_string() };
                     ui.label(egui::RichText::new(comp_str).font(display_font(style.hero_font_size)).color(style.white));
-                    render_sub_pill(ui, tel.comp_sub, style.primary, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), style.sub_font_size);
+                    render_sub_pill(ui, tel.comp_sub, style.primary, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), pace_sub_size);
                 });
                 cols[2].vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = (2.0 * style.scale).max(1.0);
@@ -862,10 +884,10 @@ fn render_3col_pace_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                             ("±0.000s".to_string(), style.white, "■ EQUAL PACE")
                         };
                         ui.label(egui::RichText::new(delta_str).font(display_font(style.hero_font_size)).color(delta_color));
-                        render_sub_pill(ui, sub_text, delta_color, with_alpha(delta_color, 45), with_alpha(delta_color, 85), style.sub_font_size);
+                        render_sub_pill(ui, sub_text, delta_color, with_alpha(delta_color, 45), with_alpha(delta_color, 85), pace_sub_size);
                     } else {
                         ui.label(egui::RichText::new("—").font(display_font(style.hero_font_size)).color(style.muted));
-                        render_sub_pill(ui, "AWAITING LAPS", style.muted, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), style.sub_font_size);
+                        render_sub_pill(ui, "AWAITING LAPS", style.muted, egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), pace_sub_size);
                     }
                 });
             });
@@ -937,7 +959,7 @@ fn render_hud_top_beacon(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
     }
 
     if tel.show_fuel {
-        render_3col_fuel_card(ui, style, tel);
+        render_3col_fuel_card(ui, style, tel, false);
     }
 }
 
@@ -948,30 +970,30 @@ fn render_hud_left_pillar(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudT
         ui.spacing_mut().item_spacing.x = 6.0 * style.scale;
 
         // LEFT PILLAR POD
-        let pillar_w = 136.0 * style.scale;
+        let pillar_w = 124.0 * style.scale;
         egui::Frame::none()
             .fill(style.card_fill)
             .stroke(egui::Stroke::new(1.2, with_alpha(style.primary, 130)))
             .rounding(8.0)
-            .inner_margin(egui::Margin::symmetric(8.0 * style.scale, 8.0 * style.scale))
+            .inner_margin(egui::Margin::symmetric(8.0 * style.scale, 6.0 * style.scale))
             .show(ui, |ui| {
                 ui.set_width(pillar_w);
                 ui.vertical_centered(|ui| {
                     ui.label(egui::RichText::new("RACE LAP").color(style.primary).size(style.hdr_font_size).strong().extra_letter_spacing(0.8));
-                    ui.add_space(2.0 * style.scale);
+                    ui.add_space(1.0 * style.scale);
                     ui.label(egui::RichText::new(&lap_ratio_str).font(display_font(26.0 * style.scale)).color(style.white));
-                    ui.add_space(3.0 * style.scale);
+                    ui.add_space(2.0 * style.scale);
                     render_sub_pill(ui, &to_go_str, style.primary, with_alpha(style.primary, 45), with_alpha(style.primary, 90), style.sub_font_size);
 
-                    ui.add_space(10.0 * style.scale);
+                    ui.add_space(4.0 * style.scale);
                     ui.separator();
-                    ui.add_space(8.0 * style.scale);
+                    ui.add_space(3.0 * style.scale);
 
                     ui.label(egui::RichText::new("CURRENT RUN").color(style.muted).size(style.hdr_font_size * 0.95).extra_letter_spacing(0.5));
-                    ui.add_space(2.0 * style.scale);
+                    ui.add_space(1.0 * style.scale);
                     ui.label(egui::RichText::new(format!("S{} · L{}", tel.stint_num, tel.stint_lap_count)).font(display_font(17.0 * style.scale)).color(style.primary));
                     let avg_str = if tel.stint_avg > 0.0 { format!("AVG {}", format_time(tel.stint_avg)) } else { "AVG —".to_string() };
-                    ui.add_space(2.0 * style.scale);
+                    ui.add_space(1.0 * style.scale);
                     render_sub_pill(ui, &avg_str, egui::Color32::from_rgb(205, 212, 224), egui::Color32::from_rgba_unmultiplied(26, 32, 44, 190), egui::Color32::from_rgba_unmultiplied(255, 255, 255, 22), style.sub_font_size * 0.92);
                 });
             });
@@ -985,7 +1007,7 @@ fn render_hud_left_pillar(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudT
             }
 
             if tel.show_fuel {
-                render_3col_fuel_card(ui, style, tel);
+                render_3col_fuel_card(ui, style, tel, true);
             }
         });
     });
@@ -1039,7 +1061,7 @@ fn render_hud_top_hub(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTelem
     }
 
     if tel.show_fuel {
-        render_3col_fuel_card(ui, style, tel);
+        render_3col_fuel_card(ui, style, tel, false);
     }
 
     if tel.show_bottom_bar {
@@ -1105,7 +1127,7 @@ fn render_hud_center_pill(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudT
     }
 
     if tel.show_fuel {
-        render_3col_fuel_card(ui, style, tel);
+        render_3col_fuel_card(ui, style, tel, false);
     }
 }
 
@@ -1675,4 +1697,147 @@ pub(crate) fn render_overlay_tire_corner_card(
                 });
             });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_left_pillar_layout_rects() {
+        let ctx = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "Inter".to_owned(),
+            egui::FontData::from_static(include_bytes!("../../assets/fonts/Inter-Medium.ttf")),
+        );
+        fonts.font_data.insert(
+            "RacingSans".to_owned(),
+            egui::FontData::from_static(include_bytes!("../../assets/fonts/RacingSansOne-Regular.ttf")),
+        );
+        fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "Inter".to_owned());
+        fonts.families.insert(
+            egui::FontFamily::Name("Display".into()),
+            vec!["RacingSans".to_owned(), "Inter".to_owned()],
+        );
+        ctx.set_fonts(fonts);
+
+        let scale = 1.0_f32;
+        let target_width = 595.0;
+        let style = HudStyleContext {
+            scale,
+            card_fill: egui::Color32::from_rgb(19, 22, 29),
+            inner_card_stroke: egui::Stroke::new(1.0, egui::Color32::WHITE),
+            card_padding_x: 10.0,
+            card_padding_y: 6.0,
+            hdr_font_size: 11.5,
+            hero_font_size: 22.0,
+            sub_font_size: 15.5,
+            rc_font_size: 14.0,
+            primary: egui::Color32::from_rgb(245, 158, 11),
+            white: egui::Color32::WHITE,
+            muted: egui::Color32::GRAY,
+            green: egui::Color32::GREEN,
+            amber: egui::Color32::YELLOW,
+            red: egui::Color32::RED,
+        };
+
+        let tel = HudTelemetryContext {
+            stint_num: 1,
+            stint_lap_count: 3,
+            stint_avg: 29.784,
+            last_lap: 29.791,
+            fast_lap: 29.714,
+            comp_header: "P2 LAST",
+            comp_last_lap: 0.0,
+            comp_sub: "—",
+            delta_opt: None,
+            fuel_level_ltr: 20.0 / 0.264172,
+            laps_of_fuel: 58.1,
+            pit_target_lap: 61,
+            laps_remain: 0,
+            player_lap: 3,
+            session_laps_total: 0,
+            cur_race_lap: 3,
+            fuel_burn_rate_ltr: 0.344 / 0.264172,
+            fuel_to_add_display: 0.0,
+            has_fuel_calc: false,
+            inc_str: "Incidents: 0x",
+            inc_color: egui::Color32::WHITE,
+            caution_str: "Cautions: 0",
+            caution_color: egui::Color32::GRAY,
+            flag_text: "● Green",
+            flag_color: egui::Color32::GREEN,
+            player_pos: 1,
+            temp_display_str: "67/67",
+            temp_tooltip: "",
+            wind_spd_val: Some(5),
+            wind_spd_unit: "mph",
+            rel_wind_rad: Some(0.0),
+            wind_compass_str: "N",
+            fuel_conv: 0.264172,
+            fuel_unit_str: "gal",
+            safety_margin: 1.0,
+            fuel_hero_metric: FuelHeroMetric::LapsToEmpty,
+            show_pace: true,
+            show_fuel: true,
+            show_rc: true,
+            show_weather: true,
+            show_bottom_bar: true,
+            is_checkered_flag: false,
+        };
+
+        for hero_metric in [FuelHeroMetric::LapsToEmpty, FuelHeroMetric::FuelAmount] {
+            let mut baseline_size: Option<egui::Vec2> = None;
+            for &(fuel_gal, burn_gal, delta) in &[
+                (20.0_f32, 0.344_f32, None),
+                (19.1, 0.344, Some(-0.120)),
+                (11.1, 0.344, Some(0.120)),
+                (9.5, 0.344, Some(0.0)),
+                (1.1, 0.344, None),
+                (0.0, 0.0, None),
+            ] {
+                let tel_case = HudTelemetryContext {
+                    fuel_level_ltr: fuel_gal / 0.264172,
+                    laps_of_fuel: if burn_gal > 0.0 { fuel_gal / burn_gal } else { 0.0 },
+                    fuel_burn_rate_ltr: burn_gal / 0.264172,
+                    delta_opt: delta,
+                    fuel_hero_metric: hero_metric,
+                    ..tel
+                };
+                let mut raw_input = egui::RawInput::default();
+                raw_input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(target_width, 280.0)));
+                ctx.begin_frame(raw_input);
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().inner_margin(8.0 * scale))
+                    .show(&ctx, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0 * scale, 5.0 * scale);
+                        let resp = ui.vertical(|ui| {
+                            render_hud_left_pillar(ui, &style, &tel_case);
+                        });
+                        let rect = resp.response.rect;
+                        assert!(
+                            rect.max.x <= target_width - 7.5,
+                            "LeftPillar overflowed target_width: max.x={} (fuel={}, delta={:?})",
+                            rect.max.x,
+                            fuel_gal,
+                            delta
+                        );
+                        if let Some(base) = baseline_size {
+                            assert!(
+                                (rect.width() - base.x).abs() < 0.5 && (rect.height() - base.y).abs() < 0.5,
+                                "LeftPillar shifted size from {:?} to {:?} (fuel={}, delta={:?})",
+                                base,
+                                rect.size(),
+                                fuel_gal,
+                                delta
+                            );
+                        } else {
+                            baseline_size = Some(rect.size());
+                        }
+                    });
+                let _ = ctx.end_frame();
+            }
+        }
+    }
 }

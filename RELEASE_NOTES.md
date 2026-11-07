@@ -1,3 +1,13 @@
+# The Search For Speed Analyzer — v0.5.1
+
+### In-Car HUD Overlay (Option 1B `LeftPillar`) Display Fix:
+* **Static 2-Line Fuel Sub-Pills (Zero Swapping or Bouncing):**
+  * Restored the 2-line stacked sub-pill look in the Option 1B (`LeftPillar`) fuel card (`20.0 gal IN` / `TANK`, `BURN: 0.344` / `gal/lap`, `+1.0 LAP` / `MARGIN`) with explicit 2-line formatting so it stays permanently locked at 2 lines from full tank to empty and never flips between 1 and 2 lines.
+* **Fixed Column Spacing & Right-Edge Alignment:**
+  * Eliminated sub-pill overlap between `BURN` and `LAP MARGIN` and restored flush right-edge alignment across the Pace Card, Fuel Card, and Bottom Status Bar (`● Green`) inside the `595px` overlay.
+
+---
+
 # The Search For Speed Analyzer — v0.5.0
 
 ### Drag-to-Zoom on Stint Lap Graphs (Single & Compare):
