@@ -1,3 +1,17 @@
+# The Search For Speed Analyzer — v0.4.5
+
+### Static Single-Line In-Car HUD Overlay (Anti-Jitter Fix):
+* **Zero Line-Wrapping or Height Bounce While Driving:**
+  * Enforced strict single-line non-wrapping rendering across the entire in-car HUD overlay (`ui.style_mut().wrap = Some(false)` and `.wrap(false)` on all sub-pills) so text never wraps between 1 and 2 lines or causes the overlay box height to bounce while fuel numbers change.
+  * Widened the `LeftPillar` (Option 1B) HUD preset base width from `595px` to `635px` and streamlined the `FUEL IN TANK` sub-pill label (`LAPS LEFT`) so all 3 fuel columns maintain static single-line geometry without affecting main-window responsive toolbars.
+
+### Direct .sto Setup Save & Rename via Windows File Explorer:
+* **Save & Rename Stint Setups Directly to Disk:**
+  * Replaced the Discord clipboard copy/share `.sto` buttons with direct **`Save Setup (.sto)`** and **`[Save / Rename .sto...]`** actions in the Stint Analyzer and Saved Stints Database.
+  * Clicking Save Setup resolves the stint's `.sto` file (recursively scanning subdirectories up to 4 levels deep under `%USERPROFILE%\Documents\iRacing\setups\<car>\`) and opens the native Windows File Explorer **"Save / Rename iRacing Setup (.sto)"** dialog directly inside your car's setup folder with `<setup_name>.sto` pre-populated so setups can be renamed or saved directly to your files.
+
+---
+
 # The Search For Speed Analyzer — v0.4.4
 
 ### Multiple Selectable In-Car HUD Overlay Layouts:

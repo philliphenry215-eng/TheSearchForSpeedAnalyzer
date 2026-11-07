@@ -1607,7 +1607,7 @@ impl WarRoomApp {
                         }
 
                         let sto_btn = egui::Button::new(
-                            egui::RichText::new("⚙ Share .sto Setup")
+                            egui::RichText::new("💾 Save Setup (.sto)")
                                 .color(white)
                                 .size(ui_size(11.5)),
                         )
@@ -1615,48 +1615,35 @@ impl WarRoomApp {
                         .min_size(egui::vec2(0.0, btn_h));
                         if ui
                             .add(sto_btn)
-                            .on_hover_text("Locate the active iRacing .sto setup file and copy it to clipboard (press Ctrl+V in Discord to attach)")
+                            .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
                             .clicked()
                         {
-                            let candidate = crate::setup_file::resolve_sto_file(
-                                &drv_ref.raw_setup_path,
-                                single_setup_display,
-                                &drv_ref.car_path,
-                                &drv_ref.driver_name,
-                            ).or_else(|| {
-                                crate::setup_file::resolve_sto_file(
-                                    &s.player_raw_setup_path,
-                                    single_setup_display,
-                                    &s.player_car_path,
-                                    &s.car_name,
-                                )
-                            });
-
-                            if let Some(path) = candidate {
-                                match crate::setup_file::copy_sto_file_to_clipboard(&path) {
-                                    Ok(()) => {
-                                        this.toast_message = Some((
-                                            format!("⚙ Copied setup '{}' to clipboard — press Ctrl+V in Discord to attach!", path.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                    Err(err) => {
-                                        this.toast_message = Some((format!("⚠ Setup copy failed: {}", err), std::time::Instant::now()));
-                                    }
-                                }
+                            let raw_path = if !drv_ref.raw_setup_path.is_empty() {
+                                &drv_ref.raw_setup_path
                             } else {
-                                if let Some(picked) = crate::setup_file::pick_open_sto_file_dialog() {
-                                    if let Ok(()) = crate::setup_file::copy_sto_file_to_clipboard(&picked) {
-                                        this.toast_message = Some((
-                                            format!("⚙ Copied setup '{}' to clipboard!", picked.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                } else {
+                                &s.player_raw_setup_path
+                            };
+                            let car_path_str = if !drv_ref.car_path.is_empty() {
+                                &drv_ref.car_path
+                            } else {
+                                &s.player_car_path
+                            };
+                            match crate::setup_file::save_or_rename_stint_setup(
+                                raw_path,
+                                single_setup_display,
+                                car_path_str,
+                                &s.car_name,
+                            ) {
+                                Ok(dest) => {
                                     this.toast_message = Some((
-                                        format!("⚠ Setup file not found for '{}'", single_setup_display),
+                                        format!("💾 Saved setup as '{}'!", dest.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
                                         std::time::Instant::now(),
                                     ));
+                                }
+                                Err(err) => {
+                                    if err != "Export cancelled by user" {
+                                        this.toast_message = Some((format!("⚠ Save setup failed: {}", err), std::time::Instant::now()));
+                                    }
                                 }
                             }
                         }
@@ -1862,75 +1849,78 @@ impl WarRoomApp {
                             )
                         });
 
-                        if let Some(ref sto_p) = sto_file_path {
-                            ui.add_space(4.0);
-                            let copy_sto_btn = egui::Button::new(
-                                egui::RichText::new("📋 Copy .sto")
-                                    .color(primary)
-                                    .size(ui_size(10.5))
-                                    .strong(),
-                            )
-                            .fill(with_alpha(elevated, 180))
-                            .rounding(egui::Rounding::same(4.0));
-                            if ui
-                                .add(copy_sto_btn)
-                                .on_hover_text(format!("Copy '{}' to clipboard (Ctrl+V into Discord)", sto_p.display()))
-                                .clicked()
-                            {
-                                match crate::setup_file::copy_sto_file_to_clipboard(sto_p) {
-                                    Ok(()) => {
-                                        self.toast_message = Some((
-                                            format!("📋 Copied setup '{}' to clipboard!", sto_p.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                    Err(err) => {
-                                        self.toast_message = Some((format!("⚠ Copy failed: {}", err), std::time::Instant::now()));
+                        ui.add_space(4.0);
+                        let save_sto_btn = egui::Button::new(
+                            egui::RichText::new("💾 Save / Rename .sto...")
+                                .color(primary)
+                                .size(ui_size(10.5))
+                                .strong(),
+                        )
+                        .fill(with_alpha(elevated, 180))
+                        .rounding(egui::Rounding::same(4.0));
+                        if ui
+                            .add(save_sto_btn)
+                            .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
+                            .clicked()
+                        {
+                            let raw_path = if !drv_ref.raw_setup_path.is_empty() {
+                                &drv_ref.raw_setup_path
+                            } else {
+                                &s.player_raw_setup_path
+                            };
+                            let car_path_str = if !drv_ref.car_path.is_empty() {
+                                &drv_ref.car_path
+                            } else {
+                                &s.player_car_path
+                            };
+                            match crate::setup_file::save_or_rename_stint_setup(
+                                raw_path,
+                                setup_display,
+                                car_path_str,
+                                &s.car_name,
+                            ) {
+                                Ok(dest) => {
+                                    self.toast_message = Some((
+                                        format!("💾 Saved setup as '{}'!", dest.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                                Err(e) => {
+                                    if e != "Export cancelled by user" {
+                                        self.toast_message = Some((format!("⚠ Save failed: {}", e), std::time::Instant::now()));
                                     }
                                 }
                             }
+                        }
 
-                            let save_sto_btn = egui::Button::new(
-                                egui::RichText::new("💾 Save As...")
-                                    .color(white)
-                                    .size(ui_size(10.5)),
-                            )
-                            .fill(with_alpha(elevated, 180))
-                            .rounding(egui::Rounding::same(4.0));
-                            if ui
-                                .add(save_sto_btn)
-                                .on_hover_text("Export a copy of this .sto setup file")
-                                .clicked()
-                            {
-                                let def_name = sto_p.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto");
-                                match crate::setup_file::export_sto_file(sto_p, def_name) {
-                                    Ok(dest) => {
-                                        self.toast_message = Some((
-                                            format!("💾 Exported setup to '{}'", dest.file_name().and_then(|f| f.to_str()).unwrap_or("")),
-                                            std::time::Instant::now(),
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        if e != "Export cancelled by user" {
-                                            self.toast_message = Some((format!("⚠ Export failed: {}", e), std::time::Instant::now()));
-                                        }
-                                    }
-                                }
-                            }
-
-                            let show_sto_btn = egui::Button::new(
-                                egui::RichText::new("📂 Show")
-                                    .color(muted)
-                                    .size(ui_size(10.5)),
-                            )
-                            .fill(with_alpha(elevated, 180))
-                            .rounding(egui::Rounding::same(4.0));
-                            if ui
-                                .add(show_sto_btn)
-                                .on_hover_text("Show setup file in Windows Explorer")
-                                .clicked()
-                            {
+                        let show_sto_btn = egui::Button::new(
+                            egui::RichText::new("📂 Show in Explorer")
+                                .color(muted)
+                                .size(ui_size(10.5)),
+                        )
+                        .fill(with_alpha(elevated, 180))
+                        .rounding(egui::Rounding::same(4.0));
+                        if ui
+                            .add(show_sto_btn)
+                            .on_hover_text("Open and highlight this setup in Windows File Explorer")
+                            .clicked()
+                        {
+                            if let Some(ref sto_p) = sto_file_path {
                                 crate::stint_db::reveal_file_in_explorer(sto_p);
+                            } else {
+                                let raw_path = if !drv_ref.raw_setup_path.is_empty() {
+                                    &drv_ref.raw_setup_path
+                                } else {
+                                    &s.player_raw_setup_path
+                                };
+                                let car_path_str = if !drv_ref.car_path.is_empty() {
+                                    &drv_ref.car_path
+                                } else {
+                                    &s.player_car_path
+                                };
+                                if let Some(car_dir) = crate::setup_file::resolve_car_setups_dir(raw_path, car_path_str, &s.car_name) {
+                                    crate::stint_db::open_folder_in_explorer(&car_dir);
+                                }
                             }
                         }
                         

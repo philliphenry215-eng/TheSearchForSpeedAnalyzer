@@ -5,6 +5,18 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.4.5] — 2026-11-06
+
+### Improved & Fixed
+* **Static Single-Line In-Car HUD Overlay (Anti-Jitter Fix):**
+  * Enforced strict single-line non-wrapping rendering across the entire in-car HUD overlay (`ui.style_mut().wrap = Some(false)` and `.wrap(false)` on all sub-pills) so text never wraps between 1 and 2 lines or causes the overlay box height to bounce while driving.
+  * Widened the `LeftPillar` (Option 1B) HUD preset base width from `595px` to `635px` and streamlined the `FUEL IN TANK` sub-pill label (`LAPS LEFT`) so all 3 fuel columns maintain static single-line geometry without affecting main-window responsive toolbars.
+* **Direct `.sto` Setup Save & Rename via Windows File Explorer:**
+  * Replaced the Discord clipboard copy/share `.sto` buttons with direct **`💾 Save Setup (.sto)`** and **`[💾 Save / Rename .sto...]`** actions in the Stint Analyzer and Saved Stints Database.
+  * Clicking Save Setup now resolves the stint's `.sto` file (recursively scanning subdirectories up to 4 levels deep under `%USERPROFILE%\Documents\iRacing\setups\<car>\`) and opens the native Windows File Explorer **"Save / Rename iRacing Setup (.sto)"** dialog directly inside the car's setup folder with `<setup_name>.sto` pre-populated so setups can be renamed or saved directly to disk.
+
+---
+
 ## [0.4.4] — 2026-11-04
 
 ### Added

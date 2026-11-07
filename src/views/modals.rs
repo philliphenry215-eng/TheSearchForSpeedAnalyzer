@@ -1368,7 +1368,6 @@ impl WarRoomApp {
         let mut action_export_as: Option<stint_db::SavedStintRecord> = None;
         let mut action_import_file: Option<std::path::PathBuf> = None;
         let mut action_delete_id: Option<String> = None;
-        let mut action_share_sto: Option<std::path::PathBuf> = None;
         let mut action_export_sto: Option<std::path::PathBuf> = None;
 
         egui::Window::new("📂 Saved Stints Database · Track Re-Import & Share")
@@ -1901,22 +1900,11 @@ impl WarRoomApp {
                                                                     ui.spacing_mut().item_spacing.x = 2.0;
                                                                     if ui
                                                                         .add(
-                                                                            egui::Button::new(egui::RichText::new("📋 .sto").color(white).size(ui_size(9.5)))
+                                                                            egui::Button::new(egui::RichText::new("💾 Save .sto").color(white).size(ui_size(9.5)))
                                                                                 .fill(with_alpha(elevated, 180))
                                                                                 .rounding(egui::Rounding::same(3.0)),
                                                                         )
-                                                                        .on_hover_text(format!("Copy '{}' to clipboard (Ctrl+V into Discord)", sto_p.display()))
-                                                                        .clicked()
-                                                                    {
-                                                                        action_share_sto = Some(sto_p.clone());
-                                                                    }
-                                                                    if ui
-                                                                        .add(
-                                                                            egui::Button::new(egui::RichText::new("💾").color(white).size(ui_size(9.5)))
-                                                                                .fill(with_alpha(elevated, 180))
-                                                                                .rounding(egui::Rounding::same(3.0)),
-                                                                        )
-                                                                        .on_hover_text("Export this .sto setup file")
+                                                                        .on_hover_text("Open Windows File Explorer to save or rename this .sto setup file directly to your files")
                                                                         .clicked()
                                                                     {
                                                                         action_export_sto = Some(sto_p.clone());
@@ -1927,7 +1915,7 @@ impl WarRoomApp {
                                                                                 .fill(with_alpha(elevated, 180))
                                                                                 .rounding(egui::Rounding::same(3.0)),
                                                                         )
-                                                                        .on_hover_text("Highlight setup file in Windows Explorer")
+                                                                        .on_hover_text("Highlight setup file in Windows File Explorer")
                                                                         .clicked()
                                                                     {
                                                                         crate::stint_db::reveal_file_in_explorer(&sto_p);
@@ -2203,20 +2191,6 @@ impl WarRoomApp {
         if let Some(del_id) = action_delete_id {
             if self.stint_db.delete_stint(&del_id) {
                 self.toast_message = Some(("🗑 Removed stint from local database".to_string(), std::time::Instant::now()));
-            }
-        }
-
-        if let Some(path) = action_share_sto {
-            match crate::setup_file::copy_sto_file_to_clipboard(&path) {
-                Ok(()) => {
-                    self.toast_message = Some((
-                        format!("⚙ Copied setup '{}' to clipboard — press Ctrl+V in Discord to attach!", path.file_name().and_then(|f| f.to_str()).unwrap_or("setup.sto")),
-                        std::time::Instant::now(),
-                    ));
-                }
-                Err(e) => {
-                    self.toast_message = Some((format!("⚠ Copy setup failed: {}", e), std::time::Instant::now()));
-                }
             }
         }
 

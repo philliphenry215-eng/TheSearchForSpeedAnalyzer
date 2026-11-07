@@ -358,7 +358,11 @@ impl WarRoomApp {
         };
 
         let target_height = (base_h * scale).round();
-        let target_width = (595.0 * scale).round();
+        let base_w = match self.settings.overlay.hud_layout {
+            HudLayoutPreset::LeftPillar => 635.0,
+            _ => 595.0,
+        };
+        let target_width = (base_w * scale).round();
 
         let hdr_font_size = (11.5 * scale).round();
         let hero_font_size = (22.0 * scale).round();
@@ -493,6 +497,8 @@ impl WarRoomApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().fill(bg_color).rounding(12.0).inner_margin(8.0 * scale).stroke(outer_stroke))
                 .show(ctx, |ui| {
+                    // Enforce single-line static rendering across the entire in-car HUD so text never wraps or shifts card height while driving
+                    ui.style_mut().wrap = Some(false);
                     ui.spacing_mut().item_spacing = egui::vec2(6.0 * scale, (5.0 * scale).max(3.0));
 
                     match hud_preset {
@@ -624,11 +630,14 @@ fn render_sub_pill(
         .rounding(egui::Rounding::same(4.0))
         .inner_margin(egui::Margin::symmetric(5.0, 1.5))
         .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(text)
-                    .color(text_color)
-                    .size(font_size)
-                    .strong(),
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(text)
+                        .color(text_color)
+                        .size(font_size)
+                        .strong(),
+                )
+                .wrap(false),
             );
         });
 }
@@ -694,9 +703,9 @@ fn render_3col_fuel_card(ui: &mut egui::Ui, style: &HudStyleContext, tel: &HudTe
                             };
                             ui.label(egui::RichText::new(tank_str).font(display_font(style.hero_font_size)).color(style.primary));
                             let laps_sub = if tel.laps_of_fuel > 0.05 && tel.fuel_burn_rate_ltr > 0.001 {
-                                format!("{:.1} LAPS REMAINING", tel.laps_of_fuel)
+                                format!("{:.1} LAPS LEFT", tel.laps_of_fuel)
                             } else {
-                                "— LAPS REMAINING".to_string()
+                                "— LAPS LEFT".to_string()
                             };
                             render_sub_pill(ui, &laps_sub, style.primary, with_alpha(style.primary, 45), with_alpha(style.primary, 85), style.sub_font_size);
                         }
