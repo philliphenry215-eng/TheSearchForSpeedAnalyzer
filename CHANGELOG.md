@@ -5,6 +5,18 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.5.4] — 2026-11-07
+
+### Added
+* **MoTeC & Cosworth Pi Live Min, Max, and Avg Telemetry Stats**:
+  * **Telemetry Reader Line Graphs**: Added persistent `Cur`, `Min`, `Max`, and `Avg` stats banners to all 60Hz synchronized trace lanes in the `.IBT Telemetry Lab` (`Speed`, `Driver Pedal Inputs`, `Steering Wheel Angle`, `Engine RPM`, `Ride Heights`, `Pitch Rake`, `Side Rake & Roll Angle`, `Split & Heave`, and `Tire Pressures & Temperatures`).
+  * **Console Format**: Rendered in clean MoTeC/Pi format (`Cur: 165.2 mph   |   Min: 45.1   Max: 178.6   Avg: 138.4 mph`).
+  * **Persistent Context**: Even when the cursor is off the graph, `Min`, `Max`, and `Avg` remain rock-solid and visible (`Cur: —   |   Min: ...   Max: ...   Avg: ...`), updating live as soon as the mouse enters the canvas.
+  * **Adaptive Layout**: Single-channel lanes right-align stats directly on the header row to maximize graph canvas height, while multi-channel lanes and cross-lap comparisons wrap cleanly with color-coded badges and `Δ (B - A)` delta calculations without text clipping or collisions.
+  * **Precision Formatting & Zero-Jitter Monospace**: Tailored decimal precision for each physical unit (`in`, `mm`, `°`, `%`, `s`, `rpm`) with monospace typography for all telemetry numbers to prevent jitter as the cursor moves across the track.
+
+---
+
 ## [0.5.3] — 2026-11-07
 
 ### Fixed

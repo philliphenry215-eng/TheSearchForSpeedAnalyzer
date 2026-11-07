@@ -1411,7 +1411,7 @@ impl IbtTelemetryLabState {
             }
         });
         if let Some(sa) = spd_a {
-            let a_label = format!("Lap {} [A] Speed", norm_a.lap_number);
+            let a_label = format!("Lap {} [A]", norm_a.lap_number);
             let mut series = vec![TraceSeries {
                 label: &a_label,
                 data: sa,
@@ -1420,7 +1420,7 @@ impl IbtTelemetryLabState {
                 is_dashed: false,
             }];
             let b_label = comparison
-                .map(|c| format!("Lap {} [B] Speed", c.lap_b.lap_number))
+                .map(|c| format!("Lap {} [B]", c.lap_b.lap_number))
                 .unwrap_or_default();
             if let Some(sb) = spd_b {
                 series.push(TraceSeries {
@@ -1515,7 +1515,7 @@ impl IbtTelemetryLabState {
         // Lane 3: Steering Wheel Angle (deg)
         if let Some(ref steer_a) = norm_a.steering_deg {
             let mut series = vec![TraceSeries {
-                label: "Steering Angle [A]",
+                label: "Steering [A]",
                 data: steer_a,
                 color: colors.steer_a(),
                 stroke_width: base_sw,
@@ -1528,7 +1528,7 @@ impl IbtTelemetryLabState {
                         _ => colors.steer_b(),
                     };
                     series.push(TraceSeries {
-                        label: "Steering Angle [B]",
+                        label: "Steering [B]",
                         data: steer_b,
                         color: steer_b_col,
                         stroke_width: if is_dashed { base_sw } else { base_sw * 0.9 },
@@ -1746,9 +1746,10 @@ impl IbtTelemetryLabState {
         let cfsr_b_s = comparison.and_then(|c| scale_vec(&c.lap_b.cfsr_rh_mm));
 
         let mut front_rh_series = Vec::new();
+        let is_comp = comparison.is_some();
         if let Some(ref v) = lf_a_s {
             front_rh_series.push(TraceSeries {
-                label: "LF Ride Height [A]",
+                label: if is_comp { "LF [A]" } else { "LF" },
                 data: v,
                 color: egui::Color32::from_rgb(34, 211, 238),
                 stroke_width: base_sw + 0.1,
@@ -1757,7 +1758,7 @@ impl IbtTelemetryLabState {
         }
         if let Some(ref v) = rf_a_s {
             front_rh_series.push(TraceSeries {
-                label: "RF Ride Height [A]",
+                label: if is_comp { "RF [A]" } else { "RF" },
                 data: v,
                 color: primary,
                 stroke_width: base_sw + 0.1,
@@ -1766,7 +1767,7 @@ impl IbtTelemetryLabState {
         }
         if let Some(ref v) = cfsr_a_s {
             front_rh_series.push(TraceSeries {
-                label: "Center Splitter (CFSR) [A]",
+                label: if is_comp { "CFSR [A]" } else { "CFSR" },
                 data: v,
                 color: purple,
                 stroke_width: base_sw,
@@ -1839,7 +1840,7 @@ impl IbtTelemetryLabState {
         let mut rear_rh_series = Vec::new();
         if let Some(ref v) = lr_a_s {
             rear_rh_series.push(TraceSeries {
-                label: "LR Ride Height [A]",
+                label: if is_comp { "LR [A]" } else { "LR" },
                 data: v,
                 color: green,
                 stroke_width: base_sw + 0.1,
@@ -1848,7 +1849,7 @@ impl IbtTelemetryLabState {
         }
         if let Some(ref v) = rr_a_s {
             rear_rh_series.push(TraceSeries {
-                label: "RR Ride Height [A]",
+                label: if is_comp { "RR [A]" } else { "RR" },
                 data: v,
                 color: egui::Color32::from_rgb(255, 115, 145),
                 stroke_width: base_sw + 0.1,
@@ -1908,11 +1909,7 @@ impl IbtTelemetryLabState {
         let rake_a_s = scale_vec(&norm_a.rake_mm);
         let rake_b_s = comparison.and_then(|c| scale_vec(&c.lap_b.rake_mm));
         if let Some(ref ra) = rake_a_s {
-            let trace_label_a = if norm_a.cfsr_rh_mm.is_some() {
-                "Longitudinal Rake [A] (Rear - Splitter)"
-            } else {
-                "Longitudinal Rake [A] (Rear - Front)"
-            };
+            let trace_label_a = if is_comp { "Pitch Rake [A]" } else { "Pitch Rake" };
             let mut series = vec![TraceSeries {
                 label: trace_label_a,
                 data: ra,
@@ -1921,11 +1918,7 @@ impl IbtTelemetryLabState {
                 is_dashed: false,
             }];
             if let Some(ref rb) = rake_b_s {
-                let trace_label_b = if comparison.as_ref().and_then(|c| c.lap_b.cfsr_rh_mm.as_ref()).is_some() {
-                    "Longitudinal Rake [B] (Rear - Splitter)"
-                } else {
-                    "Longitudinal Rake [B] (Rear - Front)"
-                };
+                let trace_label_b = "Pitch Rake [B]";
                 let rake_b_col = match compare_style {
                     CompareLineStyle::ShadedAlpha => with_alpha(primary, 120),
                     _ => secondary,
@@ -1962,7 +1955,7 @@ impl IbtTelemetryLabState {
         let side_b_s = comparison.and_then(|c| scale_vec(&c.lap_b.side_rake_mm));
         if let Some(ref sa) = side_a_s {
             let mut side_series = vec![TraceSeries {
-                label: "Side Rake [A] (Left - Right)",
+                label: if is_comp { "Side Rake [A]" } else { "Side Rake" },
                 data: sa,
                 color: amber,
                 stroke_width: base_sw + 0.2,
@@ -2312,16 +2305,16 @@ impl IbtTelemetryLabState {
             TireChartMode::Pressures => {
                 let mut list = Vec::new();
                 if let Some(ref v) = norm_a.lf_press_psi {
-                    list.push(TraceSeries::solid("LF Pressure", v, egui::Color32::from_rgb(56, 189, 248), 1.8));
+                    list.push(TraceSeries::solid("LF", v, egui::Color32::from_rgb(56, 189, 248), 1.8));
                 }
                 if let Some(ref v) = norm_a.rf_press_psi {
-                    list.push(TraceSeries::solid("RF Pressure", v, egui::Color32::from_rgb(251, 191, 36), 2.2));
+                    list.push(TraceSeries::solid("RF", v, egui::Color32::from_rgb(251, 191, 36), 2.2));
                 }
                 if let Some(ref v) = norm_a.lr_press_psi {
-                    list.push(TraceSeries::solid("LR Pressure", v, egui::Color32::from_rgb(74, 222, 128), 1.8));
+                    list.push(TraceSeries::solid("LR", v, egui::Color32::from_rgb(74, 222, 128), 1.8));
                 }
                 if let Some(ref v) = norm_a.rr_press_psi {
-                    list.push(TraceSeries::solid("RR Pressure", v, egui::Color32::from_rgb(248, 113, 113), 2.0));
+                    list.push(TraceSeries::solid("RR", v, egui::Color32::from_rgb(248, 113, 113), 2.0));
                 }
                 ("DYNAMIC TIRE PRESSURES ACROSS LAP (LF, RF, LR, RR)", if use_metric { "kPa" } else { "psi" }, list)
             }
@@ -2708,11 +2701,25 @@ fn draw_kpi_card(
 }
 
 fn draw_legend_pill(ui: &mut egui::Ui, color: egui::Color32, text: &str, text_col: egui::Color32) {
+    draw_legend_pill_styled(ui, color, text, text_col, false);
+}
+
+fn draw_legend_pill_styled(
+    ui: &mut egui::Ui,
+    color: egui::Color32,
+    text: &str,
+    text_col: egui::Color32,
+    monospace: bool,
+) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 2.0, color);
-        ui.label(egui::RichText::new(text).color(text_col).size(ui_size(11.0)));
+        let mut rich = egui::RichText::new(text).color(text_col).size(ui_size(11.0));
+        if monospace {
+            rich = rich.monospace();
+        }
+        ui.label(rich);
     });
 }
 
@@ -2843,6 +2850,74 @@ fn downsample_min_max(data: &[f32], target_count: usize) -> (Vec<f32>, Vec<usize
     (out_vals, out_indices)
 }
 
+fn format_trace_val(val: f32, unit: &str) -> String {
+    if !val.is_finite() {
+        "—".to_string()
+    } else if unit == "rpm" {
+        format!("{:.0}", val)
+    } else if unit == "s" {
+        format!("{:+.3}", val)
+    } else if unit == "in" {
+        format!("{:.2}", val)
+    } else {
+        format!("{:.1}", val)
+    }
+}
+
+fn format_series_stats(
+    s: &TraceSeries<'_>,
+    hover_idx: Option<usize>,
+    unit: &str,
+    include_label: bool,
+) -> String {
+    if s.data.is_empty() {
+        return s.label.to_string();
+    }
+    let st = crate::ibt::ChannelStats::from_slice(s.data);
+    let cur_str = hover_idx
+        .and_then(|idx| s.data.get(idx))
+        .map(|&v| format_trace_val(v, unit))
+        .unwrap_or_else(|| "—".to_string());
+    let min_str = format_trace_val(st.min, unit);
+    let max_str = format_trace_val(st.max, unit);
+    let avg_str = format_trace_val(st.avg, unit);
+
+    let prefix = if include_label && !s.label.is_empty() {
+        format!("{}: ", s.label)
+    } else {
+        String::new()
+    };
+
+    if unit.is_empty() {
+        format!(
+            "{}Cur: {}   |   Min: {}   Max: {}   Avg: {}",
+            prefix, cur_str, min_str, max_str, avg_str
+        )
+    } else if unit == "%" || unit == "°" {
+        if cur_str == "—" {
+            format!(
+                "{}Cur: —   |   Min: {}   Max: {}   Avg: {}{}",
+                prefix, min_str, max_str, avg_str, unit
+            )
+        } else {
+            format!(
+                "{}Cur: {}{}   |   Min: {}   Max: {}   Avg: {}{}",
+                prefix, cur_str, unit, min_str, max_str, avg_str, unit
+            )
+        }
+    } else if cur_str == "—" {
+        format!(
+            "{}Cur: —   |   Min: {}   Max: {}   Avg: {} {}",
+            prefix, min_str, max_str, avg_str, unit
+        )
+    } else {
+        format!(
+            "{}Cur: {} {}   |   Min: {}   Max: {}   Avg: {} {}",
+            prefix, cur_str, unit, min_str, max_str, avg_str, unit
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_synchronized_trace_lane(
     ui: &mut egui::Ui,
@@ -2894,45 +2969,48 @@ fn draw_synchronized_trace_lane(
                     ui.label(egui::RichText::new(dist_str).color(muted).monospace().size(ui_size(11.0)));
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if series.len() == 1 {
+                    let s = &series[0];
+                    let val_txt = format_series_stats(s, hover_idx, unit, false);
+                    if ui.available_width() >= 420.0 {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            draw_legend_pill_styled(ui, s.color, &val_txt, white, true);
+                        });
+                    } else {
+                        draw_legend_pill_styled(ui, s.color, &val_txt, white, true);
+                    }
+                } else if series.len() == 2 && series[0].label.contains("[A]") && series[1].label.contains("[B]") {
                     if let Some(idx) = hover_idx {
-                        if series.len() == 2 {
-                            let val_a = series[0].data.get(idx).copied();
-                            let val_b = series[1].data.get(idx).copied();
-                            if let (Some(va), Some(vb)) = (val_a, val_b) {
-                                let delta = vb - va;
-                                let delta_col = if delta.abs() < 1e-4 {
-                                    muted
-                                } else if delta > 0.0 {
-                                    settings.telemetry.trace_colors.d_ahead()
-                                } else {
-                                    settings.telemetry.trace_colors.d_behind()
-                                };
+                        let val_a = series[0].data.get(idx).copied();
+                        let val_b = series[1].data.get(idx).copied();
+                        if let (Some(va), Some(vb)) = (val_a, val_b) {
+                            let delta = vb - va;
+                            let delta_col = if delta.abs() < 1e-4 {
+                                muted
+                            } else if delta > 0.0 {
+                                settings.telemetry.trace_colors.d_ahead()
+                            } else {
+                                settings.telemetry.trace_colors.d_behind()
+                            };
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let delta_txt = format!("Δ (B - A): {:+.2} {}", delta, unit);
-                                draw_legend_pill(ui, delta_col, &delta_txt, white);
-                                ui.add_space(6.0);
-                            }
+                                draw_legend_pill_styled(ui, delta_col, &delta_txt, white, true);
+                            });
                         }
                     }
+                }
+            });
 
-                    for s in series.iter().rev() {
-                        let val_txt = if let Some(idx) = hover_idx {
-                            if let Some(&v) = s.data.get(idx) {
-                                format!("{}: {:.2} {}", s.label, v, unit)
-                            } else {
-                                s.label.to_string()
-                            }
-                        } else if !s.data.is_empty() {
-                            let st = crate::ibt::ChannelStats::from_slice(s.data);
-                            format!("{}: [{:.1} .. {:.1} {}]", s.label, st.min, st.max, unit)
-                        } else {
-                            s.label.to_string()
-                        };
-                        draw_legend_pill(ui, s.color, &val_txt, white);
-                        ui.add_space(6.0);
+            if series.len() > 1 {
+                ui.add_space(2.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    for s in series {
+                        let val_txt = format_series_stats(s, hover_idx, unit, true);
+                        draw_legend_pill_styled(ui, s.color, &val_txt, white, true);
                     }
                 });
-            });
+            }
 
             ui.add_space(4.0);
 
@@ -3652,4 +3730,69 @@ pub fn format_ibt_engineering_report_tsv(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_series_stats_single_lane_hovering_matches_motec_spec() {
+        let data = vec![45.1, 138.4, 165.2, 178.6];
+        let series = TraceSeries::solid("Lap 1 [A]", &data, egui::Color32::WHITE, 2.0);
+        // Hovering on index 2 (165.2)
+        let formatted = format_series_stats(&series, Some(2), "mph", false);
+        assert_eq!(
+            formatted,
+            "Cur: 165.2 mph   |   Min: 45.1   Max: 178.6   Avg: 131.8 mph"
+        );
+    }
+
+    #[test]
+    fn test_format_series_stats_single_lane_not_hovering_persists_min_max_avg() {
+        let data = vec![45.1, 138.4, 165.2, 178.6];
+        let series = TraceSeries::solid("Lap 1 [A]", &data, egui::Color32::WHITE, 2.0);
+        // No hover cursor
+        let formatted = format_series_stats(&series, None, "mph", false);
+        assert_eq!(
+            formatted,
+            "Cur: —   |   Min: 45.1   Max: 178.6   Avg: 131.8 mph"
+        );
+    }
+
+    #[test]
+    fn test_format_series_stats_multi_lane_includes_label_and_percent() {
+        let data = vec![0.0, 50.0, 100.0];
+        let series = TraceSeries::solid("Throttle [A]", &data, egui::Color32::GREEN, 2.0);
+        let formatted_hover = format_series_stats(&series, Some(2), "%", true);
+        assert_eq!(
+            formatted_hover,
+            "Throttle [A]: Cur: 100.0%   |   Min: 0.0   Max: 100.0   Avg: 50.0%"
+        );
+
+        let formatted_no_hover = format_series_stats(&series, None, "%", true);
+        assert_eq!(
+            formatted_no_hover,
+            "Throttle [A]: Cur: —   |   Min: 0.0   Max: 100.0   Avg: 50.0%"
+        );
+    }
+
+    #[test]
+    fn test_format_series_stats_rpm_and_time_delta_precision() {
+        let rpm_data = vec![6200.0, 7820.0, 8900.0];
+        let rpm_series = TraceSeries::solid("RPM", &rpm_data, egui::Color32::YELLOW, 2.0);
+        let rpm_fmt = format_series_stats(&rpm_series, Some(1), "rpm", false);
+        assert_eq!(
+            rpm_fmt,
+            "Cur: 7820 rpm   |   Min: 6200   Max: 8900   Avg: 7640 rpm"
+        );
+
+        let delta_data = vec![-0.050, 0.085, 0.280];
+        let delta_series = TraceSeries::solid("Delta", &delta_data, egui::Color32::RED, 2.0);
+        let delta_fmt = format_series_stats(&delta_series, Some(1), "s", false);
+        assert_eq!(
+            delta_fmt,
+            "Cur: +0.085 s   |   Min: -0.050   Max: +0.280   Avg: +0.105 s"
+        );
+    }
 }
