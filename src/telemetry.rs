@@ -649,20 +649,23 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     }
 
     // 3. Extract definitive garage tire measurements from CarSetup (exact match to iRacing garage screen)
-    // iRacing typically refreshes these only when the player returns to the garage, so they are recorded on the closed
-    // stint but no longer fire the post-pit popup (that is fired on pit-road exit in `process_telemetry_frame`).
+    // iRacing refreshes CarSetup when the player returns to the garage. If CarSetup contains real wear,
+    // it is the authoritative ground truth matching the iRacing garage page bit-for-bit (wear, temps, and pressures).
+    // If it contains fresh unworn 100% tires (from setup swaps or tire resets in the garage), preserve the completed stint's wear!
     if let Some(car_setup) = root.get("CarSetup") {
         if let Some(garage_tires) = parse_car_setup_tires(car_setup) {
             if garage_tires.is_valid() {
-                if garage_tires.has_real_wear() || !s.latest_tire_data.has_real_wear() {
-                    s.latest_tire_data.merge_with(&garage_tires);
-                }
-                if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                    if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
-                        if garage_tires.has_real_wear() {
-                            target_stint.tires.merge_with(&garage_tires);
+                if garage_tires.has_real_wear() {
+                    s.latest_tire_data = garage_tires.clone();
+                    s.latest_tire_data.has_data = true;
+                    if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+                        if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
+                            target_stint.tires = garage_tires.clone();
+                            target_stint.tires.has_data = true;
                         }
                     }
+                } else if !s.latest_tire_data.has_real_wear() {
+                    s.latest_tire_data = garage_tires.clone();
                 }
             }
         }

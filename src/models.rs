@@ -1825,16 +1825,15 @@ impl WarRoomState {
             self.had_caution_since_last_green = false;
         }
 
-        // Continuous Pit Stall / Pit Road / Garage Tire Capture for Player (only after completed laps)
-        // Latch tire wear & temperatures when the car is stationary in the pit stall, rolling out of pits after service,
-        // or in the garage. This records the data on the closed stint; the popup itself is fired on pit exit (see below).
-        let is_in_stall_or_garage = frame.surfaces.get(player_idx).map_or(false, |&s| s == TRK_LOC_IN_PIT_STALL)
-            || (self.debug_on_pit_road && self.player_stopped_in_pit_stall)
-            || (self.debug_on_pit_road && self.debug_speed < 2.0)
-            || !self.debug_is_on_track
-            || !self.player_is_in_car;
+        // Continuous Pit Stall Tire Capture for Player (only during active on-track pit service)
+        // Latch tire wear & temperatures when the car is stationary in the pit stall during a live pit stop.
+        // Garage measurements are definitively sourced from CarSetup YAML in `parse_iracing_session_yaml`.
+        let is_in_pit_stall = self.player_is_in_car && (
+            frame.surfaces.get(player_idx).map_or(false, |&s| s == TRK_LOC_IN_PIT_STALL)
+            || (self.debug_on_pit_road && (self.player_stopped_in_pit_stall || self.debug_speed < 2.0))
+        );
 
-        if is_in_stall_or_garage {
+        if is_in_pit_stall {
             if let Some(live) = live_sample {
                 let player_drv_opt = self.drivers.get(&player_idx);
                 let closed_stint_opt = player_drv_opt.and_then(|d| {
@@ -1848,14 +1847,11 @@ impl WarRoomState {
                         let target_idx = player_drv.stints.iter().rposition(|st| !st.is_imported && !st.is_active && st.laps_completed > 0);
                         if let Some(t_idx) = target_idx {
                             let target_stint = &mut player_drv.stints[t_idx];
-                            // Intelligently merge pit tires into target stint:
-                            // merge_with ensures real wear (< 99.5%) is never overwritten by fresh 100% tires,
-                            // and peak hot temperatures / pressures are preserved.
+                            // Latch pit stall tire readings only if target stint does not already have real wear
+                            // or incoming pit sample has genuine wear. Never let unworn 100% tires overwrite completed wear.
                             if pit_tires.has_real_wear() || (!target_stint.tires.has_real_wear() && !pit_tires.is_unworn()) {
                                 target_stint.tires.merge_with(&pit_tires);
                                 state_changed = true;
-                            } else if target_stint.tires.has_real_wear() || target_stint.tires.has_wear_or_temps() {
-                                target_stint.tires.merge_with(&pit_tires);
                             }
                         }
                     }

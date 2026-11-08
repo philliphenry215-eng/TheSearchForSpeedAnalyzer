@@ -480,8 +480,8 @@ impl StintDatabase {
             // be downgraded or overwritten by a record that has lost wear!
             if existing.stint.tires.has_real_wear() && !record.stint.tires.has_real_wear() {
                 record.stint.tires = existing.stint.tires.clone();
-            } else if existing.stint.tires.has_data {
-                record.stint.tires.merge_with(&existing.stint.tires);
+            } else if existing.stint.tires.has_wear_or_temps() && !record.stint.tires.has_wear_or_temps() {
+                record.stint.tires = existing.stint.tires.clone();
             }
 
             *existing = record.clone();
@@ -641,8 +641,8 @@ impl StintDatabase {
                 // preserve the existing record's tire data!
                 if existing.stint.tires.has_real_wear() && !rec.stint.tires.has_real_wear() {
                     rec.stint.tires = existing.stint.tires.clone();
-                } else if existing.stint.tires.has_data {
-                    rec.stint.tires.merge_with(&existing.stint.tires);
+                } else if existing.stint.tires.has_wear_or_temps() && !rec.stint.tires.has_wear_or_temps() {
+                    rec.stint.tires = existing.stint.tires.clone();
                 }
             }
             if rec.stint.laps_completed > 0 {

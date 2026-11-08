@@ -3663,6 +3663,185 @@ CarSetup:
             missing_chars
         );
     }
+
+    #[test]
+    fn test_garage_setup_wear_and_hot_temps_exact_match_iracing_garage_screen() {
+        use crate::stint_db::{current_unix_millis, StintDatabase};
+        let temp_dir = std::env::temp_dir().join(format!("s4s_garage_match_test_{}", current_unix_millis()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let mut db = StintDatabase::load_from_dir(temp_dir.clone());
+
+        let mut state = WarRoomState::default();
+        state.track_name = "Homestead Miami Speedway".to_string();
+        state.car_name = "NASCAR Chevrolet Camaro ZL1".to_string();
+        state.player_car_idx = 0;
+
+        let mut player = DriverState::default();
+        player.car_idx = 0;
+        player.driver_name = "PB Henry".to_string();
+        player.car_num = "95".to_string();
+        player.setup_name = "S326_HBSpeedLab_HOMESTEAD_R2.2".to_string();
+
+        // Stint S2 finishes 30 laps on track with dynamic on-track readings:
+        // Due to wheelspin and dynamic aerodynamics, live on-track telemetry had:
+        // RR wear: 59% 58% 64%
+        // LF pressure: 26.0 psi, LR pressure: 26.8 psi, RR pressure: 47.7 psi
+        // Elevated dynamic peak temps: LF 196F, RR 221F
+        let mut s2 = StintData::default();
+        s2.stint_number = 2;
+        s2.laps_completed = 30;
+        s2.is_active = false;
+        s2.setup_name = "S326_HBSpeedLab_HOMESTEAD_R2.2".to_string();
+
+        s2.tires.lf.pressure = 26.0 / 0.14503774;
+        s2.tires.lf.temp_l = (196.0 - 32.0) / 1.8;
+        s2.tires.lf.temp_m = (185.0 - 32.0) / 1.8;
+        s2.tires.lf.temp_r = (169.0 - 32.0) / 1.8;
+        s2.tires.lf.wear_l = 73.0; s2.tires.lf.wear_m = 73.0; s2.tires.lf.wear_r = 100.0;
+
+        s2.tires.rf.pressure = 46.3 / 0.14503774;
+        s2.tires.rf.temp_l = (216.0 - 32.0) / 1.8;
+        s2.tires.rf.temp_m = (210.0 - 32.0) / 1.8;
+        s2.tires.rf.temp_r = (198.0 - 32.0) / 1.8;
+        s2.tires.rf.wear_l = 66.0; s2.tires.rf.wear_m = 66.0; s2.tires.rf.wear_r = 96.0;
+
+        s2.tires.lr.pressure = 26.8 / 0.14503774;
+        s2.tires.lr.temp_l = (205.0 - 32.0) / 1.8;
+        s2.tires.lr.temp_m = (199.0 - 32.0) / 1.8;
+        s2.tires.lr.temp_r = (196.0 - 32.0) / 1.8;
+        s2.tires.lr.wear_l = 71.0; s2.tires.lr.wear_m = 70.0; s2.tires.lr.wear_r = 80.0;
+
+        s2.tires.rr.pressure = 47.7 / 0.14503774;
+        s2.tires.rr.temp_l = (225.0 - 32.0) / 1.8;
+        s2.tires.rr.temp_m = (219.0 - 32.0) / 1.8;
+        s2.tires.rr.temp_r = (221.0 - 32.0) / 1.8;
+        s2.tires.rr.wear_l = 59.0; s2.tires.rr.wear_m = 58.0; s2.tires.rr.wear_r = 64.0;
+        s2.tires.has_data = true;
+
+        player.stints.push(s2);
+        state.drivers.insert(0, player);
+
+        // Pre-sync into DB with the contaminated dynamic numbers
+        db.sync_player_stints_from_state(&state);
+
+        // Player returns to the garage. iRacing generates CarSetup with the official garage numbers:
+        let garage_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Homestead Miami Speedway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Practice"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "PB Henry"
+CarSetup:
+  UpdateCount: 2
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "24.7 psi"
+      LastTempsOMI: "190F, 181F, 161F"
+      TreadRemaining: "73%, 73%, 100%"
+    RightFront:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "46.3 psi"
+      LastTempsIMO: "215F, 210F, 197F"
+      TreadRemaining: "66%, 66%, 96%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "25.7 psi"
+      LastTempsOMI: "205F, 199F, 195F"
+      TreadRemaining: "71%, 70%, 80%"
+    RightRear:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "47.0 psi"
+      LastTempsIMO: "225F, 219F, 218F"
+      TreadRemaining: "63%, 63%, 68%"
+"#;
+        assert!(parse_iracing_session_yaml(garage_yaml, &mut state));
+
+        // Verify state's completed Stint S2 now matches iRacing garage screen 100% bit-for-bit
+        let p = state.drivers.get(&0).unwrap();
+        let st = &p.stints[0];
+        // RR Wear must be 63% 63% 68% (NOT 59% 58% 64%)
+        assert_eq!(st.tires.rr.wear_l, 63.0, "RR wear_l must match garage 63%");
+        assert_eq!(st.tires.rr.wear_m, 63.0, "RR wear_m must match garage 63%");
+        assert_eq!(st.tires.rr.wear_r, 68.0, "RR wear_r must match garage 68%");
+
+        // Hot pressures must match garage screen
+        assert!((st.tires.lf.pressure * 0.145038 - 24.7).abs() < 0.15, "LF pressure must match garage 24.7 psi (was 26.0)");
+        assert!((st.tires.lr.pressure * 0.145038 - 25.7).abs() < 0.15, "LR pressure must match garage 25.7 psi (was 26.8)");
+        assert!((st.tires.rr.pressure * 0.145038 - 47.0).abs() < 0.15, "RR pressure must match garage 47.0 psi (was 47.7)");
+
+        // Hot temps must match garage screen
+        assert!((st.tires.lf.temp_l * 1.8 + 32.0 - 190.0).abs() < 0.5, "LF Outer temp must match garage 190 F");
+        assert!((st.tires.rr.temp_r * 1.8 + 32.0 - 218.0).abs() < 0.5, "RR Outer temp must match garage 218 F (was 221)");
+
+        // Sync into Stint Database and verify DB record is also updated to exact garage values
+        db.sync_player_stints_from_state(&state);
+        let rec = db.records.iter().find(|r| r.stint.stint_number == 2).expect("Stint 2 must exist in DB");
+        assert_eq!(rec.stint.tires.rr.wear_l, 63.0, "DB record RR wear_l must be 63%");
+        assert_eq!(rec.stint.tires.rr.wear_m, 63.0, "DB record RR wear_m must be 63%");
+        assert_eq!(rec.stint.tires.rr.wear_r, 68.0, "DB record RR wear_r must be 68%");
+        assert!((rec.stint.tires.rr.pressure * 0.145038 - 47.0).abs() < 0.15, "DB record RR pressure must be 47.0 psi");
+
+        // Now simulate loading a fresh/reset setup with 100% unworn tires while still in garage
+        let fresh_setup_yaml = r#"
+WeekendInfo:
+  TrackDisplayName: "Homestead Miami Speedway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 0
+      SessionType: "Practice"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "PB Henry"
+CarSetup:
+  UpdateCount: 3
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "22.0 psi"
+      LastTempsOMI: "100F, 100F, 100F"
+      TreadRemaining: "100%, 100%, 100%"
+    RightFront:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "40.0 psi"
+      LastTempsIMO: "100F, 100F, 100F"
+      TreadRemaining: "100%, 100%, 100%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "22.0 psi"
+      LastTempsOMI: "100F, 100F, 100F"
+      TreadRemaining: "100%, 100%, 100%"
+    RightRear:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "40.0 psi"
+      LastTempsIMO: "100F, 100F, 100F"
+      TreadRemaining: "100%, 100%, 100%"
+"#;
+        assert!(parse_iracing_session_yaml(fresh_setup_yaml, &mut state));
+
+        // Stint S2's wear, pressures, and temps MUST be protected from the 100% unworn setup
+        let p_after = state.drivers.get(&0).unwrap();
+        let st_after = &p_after.stints[0];
+        assert_eq!(st_after.tires.rr.wear_l, 63.0, "Stint S2 RR wear_l must remain 63% after fresh setup load");
+        assert_eq!(st_after.tires.rr.wear_m, 63.0, "Stint S2 RR wear_m must remain 63% after fresh setup load");
+        assert_eq!(st_after.tires.rr.wear_r, 68.0, "Stint S2 RR wear_r must remain 68% after fresh setup load");
+        assert!((st_after.tires.rr.pressure * 0.145038 - 47.0).abs() < 0.15, "Stint S2 RR pressure must remain 47.0 psi");
+        assert!((st_after.tires.rr.temp_r * 1.8 + 32.0 - 218.0).abs() < 0.5, "Stint S2 RR temp must remain 218 F");
+
+        db.sync_player_stints_from_state(&state);
+        let rec_after = db.records.iter().find(|r| r.stint.stint_number == 2).unwrap();
+        assert_eq!(rec_after.stint.tires.rr.wear_m, 63.0, "DB record must remain 63%");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }
 
 

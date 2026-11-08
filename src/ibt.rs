@@ -3019,6 +3019,13 @@ fn merge_garage_and_pit_tires(
 ) -> Option<crate::StintTireSet> {
     match (yaml_tires, pit_tires) {
         (Some(y), Some(p)) => {
+            // Authoritative ground truth: if YAML CarSetup has real post-stint wear, prefer it directly
+            if y.has_real_wear() {
+                return Some(y);
+            }
+            if p.has_real_wear() {
+                return Some(p);
+            }
             let merge_corner = |yc: &crate::TireCornerData, pc: &crate::TireCornerData| -> crate::TireCornerData {
                 let (temp_l, temp_m, temp_r) = if yc.temp_m >= pc.temp_m && yc.temp_m > 5.0 {
                     (yc.temp_l, yc.temp_m, yc.temp_r)

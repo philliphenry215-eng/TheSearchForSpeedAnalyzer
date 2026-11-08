@@ -5,6 +5,18 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [0.5.5] — 2026-11-08
+
+### Fixed
+* **Exact Bit-for-Bit iRacing Garage Tire Wear, Pressure, and Pyrometer Matching:**
+  * **Authoritative Garage Screen Synchronization:** Resolved discrepancy where post-stint tire wear, hot pressures, and hot temperatures on completed player stints did not exactly match what was displayed on the official iRacing Garage page.
+  * **Dynamic Telemetry Override Fix:** When returning to the garage, iRacing exports the official garage inspection measurements (`TreadRemaining`, `LastHotPressure`, and `LastTempsOMI/IMO`) inside `CarSetup`. Previously, an overly aggressive `merge_with` call retained higher dynamic on-track pressures, cornering peak temperatures, and lower wheelspin wear readings (`min()` on wear kept on-track tire spin numbers like 59% instead of the official garage depth gauge reading 63%). `CarSetup` now directly and authoritatively sets completed stint tires when real wear is present.
+  * **Garage Loop Isolation:** Confined the 60Hz live pit telemetry sampling strictly to active pit stops while the driver is in the car (`player_is_in_car`), preventing stale or transient live telemetry buffers from mutating completed stint tire data while sitting on the garage screen.
+  * **Stint Database Synchronization:** Removed secondary merging from `upsert_stint` and `sync_player_stints_from_state` when incoming stint records carry genuine wear, ensuring the database records reflect the official iRacing garage sheet 100% bit-for-bit while retaining full protection against 100% unworn setup swaps.
+  * **.IBT Telemetry Lab Parity:** Updated `merge_garage_and_pit_tires` in `.IBT` loader to prioritize YAML `CarSetup` wear and hot pyrometer readings over transient on-track pit latches.
+
+---
+
 ## [0.5.4] — 2026-11-07
 
 ### Added
