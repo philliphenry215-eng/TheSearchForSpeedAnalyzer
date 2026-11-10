@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::stint_db;
-use crate::telemetry::{is_real_track_name, read_player_tires};
+use crate::telemetry::{is_real_track_name, read_raw_sdk_tires};
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct TireCornerData {
@@ -34,49 +34,56 @@ impl TireCornerData {
         self.temp_l > 5.0 || self.temp_m > 5.0 || self.temp_r > 5.0
     }
 
+    /// Returns true if both wear and carcass temperature bands match within floating-point tolerance.
+    pub fn matches_wear_and_temps(&self, other: &TireCornerData) -> bool {
+        (self.wear_l - other.wear_l).abs() < 0.05
+            && (self.wear_m - other.wear_m).abs() < 0.05
+            && (self.wear_r - other.wear_r).abs() < 0.05
+            && (self.temp_l - other.temp_l).abs() < 0.05
+            && (self.temp_m - other.temp_m).abs() < 0.05
+            && (self.temp_r - other.temp_r).abs() < 0.05
+    }
+
     /// Intelligently merge `incoming` into `self`:
     /// - Wear: Never let brand-new / unworn (>= 99.5%) tires overwrite real wear (< 99.5%).
-    ///   If both have real wear, take the more worn reading (minimum remaining tread).
-    ///   If self has no wear and incoming has real wear, adopt incoming wear.
-    /// - Temps: Retain the highest peak hot temp (never overwrite hot temps with cooled down temps).
-    /// - Pressure: Retain the highest peak hot pressure.
+    ///   When `incoming` has genuine post-stint wear (< 99.5%), adopt `incoming` wear and carcass temps directly.
     pub fn merge_with(&mut self, incoming: &TireCornerData) {
         if incoming.has_real_wear() {
-            if !self.has_real_wear() {
+            if incoming.wear_l > 0.1 {
+                self.wear_l = incoming.wear_l;
+            }
+            if incoming.wear_m > 0.1 {
+                self.wear_m = incoming.wear_m;
+            }
+            if incoming.wear_r > 0.1 {
+                self.wear_r = incoming.wear_r;
+            }
+            if incoming.has_temps() {
+                self.temp_l = incoming.temp_l;
+                self.temp_m = incoming.temp_m;
+                self.temp_r = incoming.temp_r;
+            }
+            if self.pressure <= 1.0 && incoming.pressure > 1.0 {
+                self.pressure = incoming.pressure;
+            }
+        } else if !self.has_real_wear() {
+            if !self.has_wear() && incoming.has_wear() && !incoming.is_unworn() {
                 self.wear_l = incoming.wear_l;
                 self.wear_m = incoming.wear_m;
                 self.wear_r = incoming.wear_r;
-            } else {
-                if incoming.wear_l > 0.1 {
-                    self.wear_l = if self.wear_l > 0.1 { self.wear_l.min(incoming.wear_l) } else { incoming.wear_l };
-                }
-                if incoming.wear_m > 0.1 {
-                    self.wear_m = if self.wear_m > 0.1 { self.wear_m.min(incoming.wear_m) } else { incoming.wear_m };
-                }
-                if incoming.wear_r > 0.1 {
-                    self.wear_r = if self.wear_r > 0.1 { self.wear_r.min(incoming.wear_r) } else { incoming.wear_r };
-                }
             }
-        } else if !self.has_wear() && incoming.has_wear() && !incoming.is_unworn() {
-            self.wear_l = incoming.wear_l;
-            self.wear_m = incoming.wear_m;
-            self.wear_r = incoming.wear_r;
-        }
-
-        // Peak hot temp retention: keep highest temperature reached
-        if incoming.temp_l > self.temp_l {
-            self.temp_l = incoming.temp_l;
-        }
-        if incoming.temp_m > self.temp_m {
-            self.temp_m = incoming.temp_m;
-        }
-        if incoming.temp_r > self.temp_r {
-            self.temp_r = incoming.temp_r;
-        }
-
-        // Peak pressure retention
-        if incoming.pressure > self.pressure {
-            self.pressure = incoming.pressure;
+            if incoming.temp_l > self.temp_l {
+                self.temp_l = incoming.temp_l;
+            }
+            if incoming.temp_m > self.temp_m {
+                self.temp_m = incoming.temp_m;
+            }
+            if incoming.temp_r > self.temp_r {
+                self.temp_r = incoming.temp_r;
+            }
+            if incoming.pressure > self.pressure {
+                self.pressure = incoming.pressure;
+            }
         }
     }
 }
@@ -111,6 +118,14 @@ impl StintTireSet {
     /// Returns true if tire set has wear readings, but all corners are completely unworn (>= 99.5%).
     pub fn is_unworn(&self) -> bool {
         self.has_wear() && !self.has_real_wear()
+    }
+
+    /// Returns true if all 4 corners have matching wear and carcass temperature values.
+    pub fn matches_wear_and_temps(&self, other: &StintTireSet) -> bool {
+        self.lf.matches_wear_and_temps(&other.lf)
+            && self.rf.matches_wear_and_temps(&other.rf)
+            && self.lr.matches_wear_and_temps(&other.lr)
+            && self.rr.matches_wear_and_temps(&other.rr)
     }
 
     pub fn merge_with(&mut self, incoming: &StintTireSet) {
@@ -637,6 +652,12 @@ pub struct WarRoomState {
     pub player_gap_behind: f32,
     pub player_lap_distance_pct: f32,
     pub latest_tire_data: StintTireSet,
+    /// Last CarSetup tire set already consumed (or pre-existing while in car / from prior subsession like Qualifying).
+    /// Prevents a frozen Qualifying CarSetup YAML from overwriting Race pit stop tire readings every 2 seconds.
+    pub last_consumed_car_setup_tires: Option<StintTireSet>,
+    /// Snapshot of raw live SDK tire wear/temps prior to stopping in the pit stall.
+    /// Used to detect the exact moment the pit crew finishes changing tires in the pit box.
+    pub pit_entry_sdk_tires: Option<StintTireSet>,
     pub tire_popup_trigger_seq: u64,
     pub tire_popup_stint_num: i32,
     /// Stint number whose tires should be shown when the player next leaves pit road (0 = nothing pending).
@@ -719,6 +740,8 @@ impl Default for WarRoomState {
             player_gap_behind: 0.0,
             player_lap_distance_pct: 0.0,
             latest_tire_data: StintTireSet::default(),
+            last_consumed_car_setup_tires: None,
+            pit_entry_sdk_tires: None,
             tire_popup_trigger_seq: 0,
             tire_popup_stint_num: 1,
             tire_popup_armed_stint: 0,
@@ -919,6 +942,9 @@ impl WarRoomState {
         self.debug_lap_last_time = 0.0;
         self.debug_lap_best_time = 0.0;
         self.debug_lap_best_lap_num = 0;
+        if self.latest_tire_data.has_real_wear() {
+            self.last_consumed_car_setup_tires = Some(self.latest_tire_data.clone());
+        }
         self.latest_tire_data = StintTireSet::default();
         // NOTE: `tire_popup_trigger_seq` is intentionally NOT reset. The UI compares it against the last value it
         // has seen, so resetting it to 0 silently suppressed every popup after a session change.
@@ -937,6 +963,8 @@ impl WarRoomState {
 
     pub fn reset_for_new_session(&mut self) {
         self.reset_session_data(false);
+        self.last_consumed_car_setup_tires = None;
+        self.pit_entry_sdk_tires = None;
         self.drivers.clear();
         self.subsession_types.clear();
         self.subsession_rubber_states.clear();
@@ -1833,32 +1861,68 @@ impl WarRoomState {
             || (self.debug_on_pit_road && (self.player_stopped_in_pit_stall || self.debug_speed < 2.0))
         );
 
-        if is_in_pit_stall {
+        if self.player_is_in_car && !is_in_pit_stall {
             if let Some(live) = live_sample {
-                let player_drv_opt = self.drivers.get(&player_idx);
-                let closed_stint_opt = player_drv_opt.and_then(|d| {
-                    d.stints.iter().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0)
+                let raw_pre_pit = read_raw_sdk_tires(live);
+                if raw_pre_pit.has_wear() || raw_pre_pit.has_wear_or_temps() {
+                    self.pit_entry_sdk_tires = Some(raw_pre_pit);
+                }
+            }
+        } else if is_in_pit_stall {
+            if let Some(live) = live_sample {
+                let raw_tires = read_raw_sdk_tires(live);
+                let not_stale_yaml = self.last_consumed_car_setup_tires.as_ref().map_or(true, |stale| {
+                    !raw_tires.matches_wear_and_temps(stale)
                 });
 
-                let prev_hot = closed_stint_opt.map(|st| &st.tires);
-                let pit_tires = read_player_tires(live, prev_hot);
-                if pit_tires.is_valid() {
+                if raw_tires.is_valid() && not_stale_yaml {
+                    let lf_changed = self.pit_entry_sdk_tires.as_ref().map_or(true, |e| !raw_tires.lf.matches_wear_and_temps(&e.lf));
+                    let rf_changed = self.pit_entry_sdk_tires.as_ref().map_or(true, |e| !raw_tires.rf.matches_wear_and_temps(&e.rf));
+                    let lr_changed = self.pit_entry_sdk_tires.as_ref().map_or(true, |e| !raw_tires.lr.matches_wear_and_temps(&e.lr));
+                    let rr_changed = self.pit_entry_sdk_tires.as_ref().map_or(true, |e| !raw_tires.rr.matches_wear_and_temps(&e.rr));
+
+                    let apply_serviced_corner = |dst: &mut TireCornerData, src: &TireCornerData, changed: bool| -> bool {
+                        if changed && src.has_real_wear() {
+                            if src.wear_l > 0.1 { dst.wear_l = src.wear_l; }
+                            if src.wear_m > 0.1 { dst.wear_m = src.wear_m; }
+                            if src.wear_r > 0.1 { dst.wear_r = src.wear_r; }
+                            if src.has_temps() {
+                                dst.temp_l = src.temp_l;
+                                dst.temp_m = src.temp_m;
+                                dst.temp_r = src.temp_r;
+                            }
+                            if dst.pressure <= 1.0 && src.pressure > 1.0 {
+                                dst.pressure = src.pressure;
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    let mut latest_snapshot: Option<StintTireSet> = None;
                     if let Some(player_drv) = self.drivers.get_mut(&player_idx) {
                         let target_idx = player_drv.stints.iter().rposition(|st| !st.is_imported && !st.is_active && st.laps_completed > 0);
                         if let Some(t_idx) = target_idx {
                             let target_stint = &mut player_drv.stints[t_idx];
-                            // Latch pit stall tire readings only if target stint does not already have real wear
-                            // or incoming pit sample has genuine wear. Never let unworn 100% tires overwrite completed wear.
-                            if pit_tires.has_real_wear() || (!target_stint.tires.has_real_wear() && !pit_tires.is_unworn()) {
-                                target_stint.tires.merge_with(&pit_tires);
+                            let mut any_updated = false;
+                            any_updated |= apply_serviced_corner(&mut target_stint.tires.lf, &raw_tires.lf, lf_changed);
+                            any_updated |= apply_serviced_corner(&mut target_stint.tires.rf, &raw_tires.rf, rf_changed);
+                            any_updated |= apply_serviced_corner(&mut target_stint.tires.lr, &raw_tires.lr, lr_changed);
+                            any_updated |= apply_serviced_corner(&mut target_stint.tires.rr, &raw_tires.rr, rr_changed);
+                            if any_updated {
+                                target_stint.tires.has_data = true;
+                                latest_snapshot = Some(target_stint.tires.clone());
                                 state_changed = true;
                             }
                         }
                     }
 
-                    // Update latest_tire_data without erasing existing true wear
-                    if pit_tires.has_real_wear() || !self.latest_tire_data.has_real_wear() {
-                        self.latest_tire_data.merge_with(&pit_tires);
+                    if let Some(snap) = latest_snapshot {
+                        self.latest_tire_data = snap;
+                    } else if (lf_changed || rf_changed || lr_changed || rr_changed) && raw_tires.has_real_wear() {
+                        self.latest_tire_data = raw_tires;
+                        self.latest_tire_data.has_data = true;
                     }
                 }
             }

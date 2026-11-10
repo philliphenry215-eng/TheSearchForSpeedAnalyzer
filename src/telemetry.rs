@@ -649,19 +649,33 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
     }
 
     // 3. Extract definitive garage tire measurements from CarSetup (exact match to iRacing garage screen)
-    // iRacing refreshes CarSetup when the player returns to the garage. If CarSetup contains real wear,
-    // it is the authoritative ground truth matching the iRacing garage page bit-for-bit (wear, temps, and pressures).
-    // If it contains fresh unworn 100% tires (from setup swaps or tire resets in the garage), preserve the completed stint's wear!
+    // iRacing ONLY refreshes CarSetup when the player exits the car to the garage (`!s.player_is_in_car`).
+    // During a Race (or while driving in the car), CarSetup in the YAML remains frozen on whatever was last in the garage
+    // (such as a 2-lap Qualifying run). Never let a pre-existing or in-car CarSetup overwrite active/completed race stints!
     if let Some(car_setup) = root.get("CarSetup") {
         if let Some(garage_tires) = parse_car_setup_tires(car_setup) {
             if garage_tires.is_valid() {
-                if garage_tires.has_real_wear() {
-                    s.latest_tire_data = garage_tires.clone();
-                    s.latest_tire_data.has_data = true;
-                    if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                        if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
-                            target_stint.tires = garage_tires.clone();
-                            target_stint.tires.has_data = true;
+                if s.player_is_in_car {
+                    if garage_tires.has_real_wear() {
+                        s.last_consumed_car_setup_tires = Some(garage_tires);
+                    } else {
+                        s.last_consumed_car_setup_tires = None;
+                    }
+                } else if garage_tires.has_real_wear() {
+                    let is_already_consumed = s
+                        .last_consumed_car_setup_tires
+                        .as_ref()
+                        .map_or(false, |prev| prev.matches_wear_and_temps(&garage_tires));
+
+                    if !is_already_consumed {
+                        s.latest_tire_data = garage_tires.clone();
+                        s.latest_tire_data.has_data = true;
+                        if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+                            if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
+                                target_stint.tires = garage_tires.clone();
+                                target_stint.tires.has_data = true;
+                                s.last_consumed_car_setup_tires = Some(garage_tires);
+                            }
                         }
                     }
                 } else if !s.latest_tire_data.has_real_wear() {
@@ -911,6 +925,70 @@ pub fn get_sample_f32(live: &iracing::telemetry::Sample, key: &'static str) -> f
     }
 }
 
+pub fn read_raw_sdk_tires(live: &iracing::telemetry::Sample) -> StintTireSet {
+    let to_wear = |w: f32| -> f32 {
+        if w > 0.0 && w <= 1.0 { w * 100.0 } else { w.max(0.0) }
+    };
+
+    let read_temp = |cl: &'static str, l: &'static str| -> f32 {
+        let v_cl = get_sample_f32(live, cl);
+        if v_cl > 1.0 {
+            v_cl
+        } else {
+            get_sample_f32(live, l).max(0.0)
+        }
+    };
+
+    let lf = TireCornerData {
+        temp_l: read_temp("LFtempCL", "LFtempL"),
+        temp_m: read_temp("LFtempCM", "LFtempM"),
+        temp_r: read_temp("LFtempCR", "LFtempR"),
+        wear_l: to_wear(get_sample_f32(live, "LFwearL")),
+        wear_m: to_wear(get_sample_f32(live, "LFwearM")),
+        wear_r: to_wear(get_sample_f32(live, "LFwearR")),
+        pressure: get_sample_f32(live, "LFpressure").max(0.0),
+    };
+
+    let rf = TireCornerData {
+        temp_l: read_temp("RFtempCL", "RFtempL"),
+        temp_m: read_temp("RFtempCM", "RFtempM"),
+        temp_r: read_temp("RFtempCR", "RFtempR"),
+        wear_l: to_wear(get_sample_f32(live, "RFwearL")),
+        wear_m: to_wear(get_sample_f32(live, "RFwearM")),
+        wear_r: to_wear(get_sample_f32(live, "RFwearR")),
+        pressure: get_sample_f32(live, "RFpressure").max(0.0),
+    };
+
+    let lr = TireCornerData {
+        temp_l: read_temp("LRtempCL", "LRtempL"),
+        temp_m: read_temp("LRtempCM", "LRtempM"),
+        temp_r: read_temp("LRtempCR", "LRtempR"),
+        wear_l: to_wear(get_sample_f32(live, "LRwearL")),
+        wear_m: to_wear(get_sample_f32(live, "LRwearM")),
+        wear_r: to_wear(get_sample_f32(live, "LRwearR")),
+        pressure: get_sample_f32(live, "LRpressure").max(0.0),
+    };
+
+    let rr = TireCornerData {
+        temp_l: read_temp("RRtempCL", "RRtempL"),
+        temp_m: read_temp("RRtempCM", "RRtempM"),
+        temp_r: read_temp("RRtempCR", "RRtempR"),
+        wear_l: to_wear(get_sample_f32(live, "RRwearL")),
+        wear_m: to_wear(get_sample_f32(live, "RRwearM")),
+        wear_r: to_wear(get_sample_f32(live, "RRwearR")),
+        pressure: get_sample_f32(live, "RRpressure").max(0.0),
+    };
+
+    let has_data = lf.temp_m > 5.0 || rf.temp_m > 5.0 || lf.wear_m > 0.1 || rf.wear_m > 0.1 || lf.pressure > 1.0;
+    StintTireSet {
+        lf,
+        rf,
+        lr,
+        rr,
+        has_data,
+    }
+}
+
 pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option<&StintTireSet>) -> StintTireSet {
     let to_wear = |w: f32| -> f32 {
         if w > 0.0 && w <= 1.0 { w * 100.0 } else { w.max(0.0) }
@@ -919,12 +997,8 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
     let resolve_wear = |w_raw: f32, prev_w: f32| -> f32 {
         let live_w = to_wear(w_raw);
         if live_w > 0.1 && live_w < 99.5 {
-            // Live sample has real wear (< 99.5%)
-            if prev_w > 0.1 && prev_w < 99.5 {
-                live_w.min(prev_w)
-            } else {
-                live_w
-            }
+            // Live sample has real wear (< 99.5%): adopt it directly without .min(prev_w)
+            live_w
         } else if prev_w > 0.1 && prev_w < 99.5 {
             // Keep existing real wear; never let fresh 100% tires or 0% overwrite real wear
             prev_w
@@ -936,10 +1010,10 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
     };
 
     let resolve_pressure = |p_live: f32, prev_p: f32| -> f32 {
-        if p_live > 1.0 {
-            if prev_p > 1.0 { p_live.max(prev_p) } else { p_live }
-        } else if prev_p > 1.0 {
+        if prev_p > 1.0 {
             prev_p
+        } else if p_live > 1.0 {
+            p_live
         } else {
             0.0
         }
@@ -953,7 +1027,7 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
             get_sample_f32(live, l)
         };
         if live_t > 1.0 {
-            if prev_t > 1.0 { live_t.max(prev_t) } else { live_t }
+            live_t
         } else if prev_t > 1.0 {
             prev_t
         } else {

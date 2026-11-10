@@ -3842,6 +3842,144 @@ CarSetup:
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_qualifying_car_setup_never_overwrites_race_caution_pit_stops() {
+        use crate::models::{WarRoomState, DriverState, StintData, StintTireSet, TireCornerData};
+        use crate::telemetry::parse_iracing_session_yaml;
+
+        let mut state = WarRoomState::default();
+
+        // 1. Simulate end of 2-lap Qualifying session where player exited to garage (`!player_is_in_car`),
+        // populating CarSetup in YAML with the 98% / 98% / 99% Qualifying numbers from the screenshot.
+        state.player_is_in_car = false;
+        let qual_yaml = r#"
+WeekendInfo:
+  SessionID: 100
+  SubSessionID: 200
+  TrackDisplayName: "Charlotte Motor Speedway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 1
+      SessionType: "Lone Qualify"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "PB Henry"
+CarSetup:
+  UpdateCount: 2
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "23.5 psi"
+      LastTempsOMI: "172F, 163F, 135F"
+      TreadRemaining: "98%, 98%, 100%"
+    RightFront:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "43.9 psi"
+      LastTempsIMO: "198F, 190F, 165F"
+      TreadRemaining: "98%, 98%, 99%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "24.4 psi"
+      LastTempsOMI: "183F, 178F, 171F"
+      TreadRemaining: "98%, 98%, 99%"
+    RightRear:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "44.7 psi"
+      LastTempsIMO: "201F, 196F, 190F"
+      TreadRemaining: "98%, 98%, 99%"
+"#;
+        assert!(parse_iracing_session_yaml(qual_yaml, &mut state));
+        state.check_session_transition(1, 200, 4, 100.0, false);
+        assert_eq!(state.latest_tire_data.lf.wear_l, 98.0);
+
+        // 2. Transition from SessionNum 1 (Qualifying) to SessionNum 2 (Race)
+        assert!(state.check_session_transition(2, 200, 1, 10.0, false));
+        assert_eq!(state.latest_tire_data.lf.wear_l, 0.0, "Race transition must reset latest_tire_data");
+        assert!(state.last_consumed_car_setup_tires.is_some(), "Consumed Qualifying CarSetup must be remembered across sub-session transition");
+
+        // 3. During the Race, the driver enters the car and never exits (`player_is_in_car = true`).
+        // Meanwhile, iRacing's YAML still contains the exact same CarSetup from Qualifying!
+        state.player_is_in_car = true;
+        let race_yaml_with_stale_qual_setup = r#"
+WeekendInfo:
+  SessionID: 100
+  SubSessionID: 200
+  TrackDisplayName: "Charlotte Motor Speedway"
+SessionInfo:
+  Sessions:
+    - SessionNum: 1
+      SessionType: "Lone Qualify"
+    - SessionNum: 2
+      SessionType: "Race"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "PB Henry"
+CarSetup:
+  UpdateCount: 2
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "23.5 psi"
+      LastTempsOMI: "172F, 163F, 135F"
+      TreadRemaining: "98%, 98%, 100%"
+    RightFront:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "43.9 psi"
+      LastTempsIMO: "198F, 190F, 165F"
+      TreadRemaining: "98%, 98%, 99%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "24.4 psi"
+      LastTempsOMI: "183F, 178F, 171F"
+      TreadRemaining: "98%, 98%, 99%"
+    RightRear:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "44.7 psi"
+      LastTempsIMO: "201F, 196F, 190F"
+      TreadRemaining: "98%, 98%, 99%"
+"#;
+
+        // Simulate Stint 1 completed and pitted under caution (e.g. 25 laps -> 72% RF wear)
+        let mut s1_tires = StintTireSet::default();
+        s1_tires.lf = TireCornerData { wear_l: 84.0, wear_m: 85.0, wear_r: 99.0, temp_l: 90.0, temp_m: 85.0, temp_r: 75.0, pressure: 175.0 };
+        s1_tires.rf = TireCornerData { wear_l: 72.0, wear_m: 73.0, wear_r: 92.0, temp_l: 108.0, temp_m: 104.0, temp_r: 95.0, pressure: 320.0 };
+        s1_tires.lr = TireCornerData { wear_l: 82.0, wear_m: 81.0, wear_r: 88.0, temp_l: 95.0, temp_m: 91.0, temp_r: 88.0, pressure: 180.0 };
+        s1_tires.rr = TireCornerData { wear_l: 70.0, wear_m: 71.0, wear_r: 76.0, temp_l: 112.0, temp_m: 109.0, temp_r: 107.0, pressure: 325.0 };
+
+        let mut player = DriverState::default();
+        player.car_idx = 0;
+        player.driver_name = "PB Henry".to_string();
+        player.stints.push(StintData {
+            stint_number: 1,
+            lap_times: vec![30.1, 30.2, 30.3],
+            lap_numbers: vec![1, 2, 3],
+            tires: s1_tires.clone(),
+            ..Default::default()
+        });
+        state.drivers.insert(0, player);
+        state.latest_tire_data = s1_tires.clone();
+
+        // Now the 2-second YAML poll fires while rolling down pit road after the pit stop (`player_is_in_car == true`)
+        assert!(parse_iracing_session_yaml(race_yaml_with_stale_qual_setup, &mut state));
+
+        // Verify Stint 1 and `latest_tire_data` were NOT overwritten by the 98% Qualifying CarSetup!
+        assert_eq!(state.latest_tire_data.rf.wear_l, 72.0, "Cockpit latest_tire_data must remain 72%, not overwritten by 98% Q setup");
+        let p = state.drivers.get(&0).unwrap();
+        assert_eq!(p.stints[0].tires.rf.wear_l, 72.0, "Stint 1 RF wear must remain 72%, not overwritten by 98% Q setup");
+
+        // Now simulate a shorter caution Stint 2 (e.g. 10 laps -> 86% RF wear, cooler 100C temps)
+        // Verify that `merge_with` adopts the new 86% wear and 100C temp directly instead of staying stuck on Stint 1's 72% / 108C!
+        let mut s2_pit_sdk_tires = StintTireSet::default();
+        s2_pit_sdk_tires.rf = TireCornerData { wear_l: 86.0, wear_m: 87.0, wear_r: 96.0, temp_l: 100.0, temp_m: 96.0, temp_r: 89.0, pressure: 315.0 };
+        state.latest_tire_data.rf.merge_with(&s2_pit_sdk_tires.rf);
+        assert_eq!(state.latest_tire_data.rf.wear_l, 86.0, "Shorter caution stint must record its own 86% wear instead of clamping to earlier 72% min");
+        assert_eq!(state.latest_tire_data.rf.temp_l, 100.0, "Shorter caution stint must record its own 100C temp instead of clamping to earlier 108C max");
+    }
 }
 
 
