@@ -1982,10 +1982,12 @@ pub fn compute_track_map_from_lap(lap: &LapAnalysis, num_points: usize) -> Optio
 
             let omega = if let Some(ref lats) = lap.inputs.lat_accel_g {
                 let lat_mps2 = lats.get(i).copied().unwrap_or(0.0) * 9.80665;
-                lat_mps2 / spd
+                // In iRacing vehicle frame, turning left produces positive LatAccel (centrifugal reaction to vehicle right).
+                // In standard navigation heading (dx = sin(psi), dy = cos(psi)), turning left decreases heading (counter-clockwise).
+                -lat_mps2 / spd
             } else if let Some(ref steers) = lap.inputs.steering_rad {
                 let st = steers.get(i).copied().unwrap_or(0.0);
-                (spd / 2.7) * (st / 14.0).tan()
+                -(spd / 2.7) * (st / 14.0).tan()
             } else {
                 0.0
             };

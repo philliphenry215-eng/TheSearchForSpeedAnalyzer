@@ -1,3 +1,23 @@
+# The Search For Speed Analyzer — v0.5.8
+
+### Static Top Telemetry HUD: Aspect-Preserving 2D Track Map & Motorsport G-G Circle:
+* **Static Top Telemetry HUD:**
+  * Relocated the 2D Track Map and G-G Friction Circle from the bottom-left sidebar into a dedicated Static Top HUD pinned above all analysis tabs (`Inputs & Speed`, `Ride Height & Rake`, `Shock Histograms`, `Tires & Pressures`, `Channels & Export`).
+  * Always visible while scrolling trace lanes, with a convenient `[▲ Collapse HUD]` / `[▼ Expand Top HUD]` toggle for drivers on smaller screens.
+  * Cleans up the left sidebar, freeing it from map clutter.
+* **2D Circuit Map Resolution & Aspect Ratio:**
+  * Fixed non-uniform scaling distortion: 1:1 isometric bounding box fitting prevents ovals and road courses from flattening into pancakes.
+  * Heading integration fallback corrected for counter-clockwise turning in iRacing coordinates.
+  * Added instant `↺ 90°` rotation button and `Reset` button directly in the card header for custom track orientations (e.g. broadcast horizontal layout).
+  * Double-layered anti-aliased trace ribbon with S/F marker and click/drag interactive car scrubber.
+* **G-G Traction Friction Circle Orientation & Dynamics:**
+  * Aligned with motorsport data analysis conventions: Left cornering now correctly plots to the **LEFT** quadrant (`◀ Turn Left`), Right cornering to the **RIGHT** quadrant (`Turn Right ▶`).
+  * Driving phase color-coded scatter points: Red = Braking, Green = Throttle, Cyan = Pure Lateral Cornering, Gold = Transition.
+  * Dynamic 36-sector peak traction limit envelope (hull) visualizes vehicle grip boundary.
+  * Added concentric G reference rings (`1.0G`, `2.0G`), direction-aware live hover readouts, and peak G limits (`Peak: {:.2}G L · {:.2}G R · -{:.2}G Brake`).
+
+---
+
 # The Search For Speed Analyzer — v0.5.7
 
 ### .IBT Telemetry Lab: 2D Circuit Track Map & G-G Friction Circle:
