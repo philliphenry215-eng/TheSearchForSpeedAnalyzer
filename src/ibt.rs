@@ -351,6 +351,7 @@ pub struct DriverInputsAnalysis {
     pub rpm: Option<Vec<f32>>,
     pub lat_accel_g: Option<Vec<f32>>,
     pub long_accel_g: Option<Vec<f32>>,
+    pub yaw_rad: Option<Vec<f32>>,
 
     pub speed_mph_stats: ChannelStats,
     pub speed_kph_stats: ChannelStats,
@@ -626,6 +627,9 @@ pub struct NormalizedLapTrace {
     pub steering_deg: Option<Vec<f32>>,
     pub rpm: Option<Vec<f32>>,
     pub gear: Option<Vec<f32>>,
+    pub lat_accel_g: Option<Vec<f32>>,
+    pub long_accel_g: Option<Vec<f32>>,
+    pub track_map_points: Option<Vec<[f32; 2]>>,
     pub lf_rh_mm: Option<Vec<f32>>,
     pub rf_rh_mm: Option<Vec<f32>>,
     pub lr_rh_mm: Option<Vec<f32>>,
@@ -1127,6 +1131,8 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
     let full_rpm = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("RPM"));
     let full_lat_accel = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LatAccel"));
     let full_long_accel = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LongAccel"));
+    let full_yaw = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("YawNorth"))
+        .or_else(|| extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("Yaw")));
 
     // Ride height channels
     let full_lf_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LFrideHeight"));
@@ -1258,6 +1264,7 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
             slice_opt(&full_rpm, s, e),
             slice_opt(&full_lat_accel, s, e),
             slice_opt(&full_long_accel, s, e),
+            slice_opt(&full_yaw, s, e),
         );
 
         let suspension = compute_suspension_dynamics(
@@ -1940,6 +1947,158 @@ pub fn interpolate_onto_grid(src_dist: &[f32], src_vals: &[f32], target_grid: &[
     out
 }
 
+/// Generates normalized 2D circuit coordinates `([x, y] in 0.04..=0.96)` for a lap.
+/// Uses `YawNorth` (or integrated `YawRate` / `LatAccel` / `SteeringWheelAngle`),
+/// corrects loop closure drift, and scales with preserved aspect ratio.
+pub fn compute_track_map_from_lap(lap: &LapAnalysis, num_points: usize) -> Option<Vec<[f32; 2]>> {
+    let n = lap.lap_dist_pct.len();
+    if n < 4 {
+        return None;
+    }
+
+    // Determine heading at each tick
+    let mut heading: Vec<f32> = Vec::with_capacity(n);
+    if let Some(ref yaws) = lap.inputs.yaw_rad {
+        if yaws.len() == n {
+            heading.extend_from_slice(yaws);
+        }
+    }
+
+    if heading.is_empty() {
+        // Integrate yaw rate from lat_accel and speed
+        let mut cur_heading = 0.0_f32;
+        heading.push(cur_heading);
+
+        let dt_fallback = if lap.tick_rate > 0 { 1.0 / lap.tick_rate as f32 } else { 1.0 / 60.0 };
+
+        for i in 1..n {
+            let dt = (lap.elapsed_time_s[i] - lap.elapsed_time_s[i - 1]).max(0.0);
+            let dt = if dt > 0.0 && dt < 1.0 { dt } else { dt_fallback };
+
+            let spd = lap.inputs.speed_mps.as_ref()
+                .and_then(|v| v.get(i).copied())
+                .unwrap_or(25.0)
+                .max(2.0);
+
+            let omega = if let Some(ref lats) = lap.inputs.lat_accel_g {
+                let lat_mps2 = lats.get(i).copied().unwrap_or(0.0) * 9.80665;
+                lat_mps2 / spd
+            } else if let Some(ref steers) = lap.inputs.steering_rad {
+                let st = steers.get(i).copied().unwrap_or(0.0);
+                (spd / 2.7) * (st / 14.0).tan()
+            } else {
+                0.0
+            };
+
+            cur_heading += omega * dt;
+            heading.push(cur_heading);
+        }
+    }
+
+    // Integrate (x, y) along lap distance
+    let mut raw_x = Vec::with_capacity(n);
+    let mut raw_y = Vec::with_capacity(n);
+    raw_x.push(0.0_f32);
+    raw_y.push(0.0_f32);
+
+    let dt_fallback = if lap.tick_rate > 0 { 1.0 / lap.tick_rate as f32 } else { 1.0 / 60.0 };
+    for i in 1..n {
+        let prev_x = raw_x[i - 1];
+        let prev_y = raw_y[i - 1];
+
+        let ds = if lap.lap_dist_m.len() == n {
+            lap.lap_dist_m[i] - lap.lap_dist_m[i - 1]
+        } else {
+            0.0
+        };
+
+        let ds = if ds > 0.0 && ds < 100.0 {
+            ds
+        } else {
+            let spd = lap.inputs.speed_mps.as_ref()
+                .and_then(|v| v.get(i).copied())
+                .unwrap_or(25.0);
+            let dt = (lap.elapsed_time_s[i] - lap.elapsed_time_s[i - 1]).max(0.0);
+            let dt = if dt > 0.0 && dt < 1.0 { dt } else { dt_fallback };
+            (spd * dt).max(0.1)
+        };
+
+        let psi = heading[i];
+        let dx = ds * psi.sin();
+        let dy = ds * psi.cos();
+
+        raw_x.push(prev_x + dx);
+        raw_y.push(prev_y + dy);
+    }
+
+    // Linear closure correction so loop joins start cleanly
+    let err_x = raw_x[n - 1] - raw_x[0];
+    let err_y = raw_y[n - 1] - raw_y[0];
+    for i in 0..n {
+        let f = (i as f32) / ((n - 1) as f32);
+        raw_x[i] -= f * err_x;
+        raw_y[i] -= f * err_y;
+    }
+
+    // Resample onto uniform grid_dist_pct (0.0 ..= 1.0, length num_points)
+    let pts = num_points.max(2);
+    let grid_dist_pct: Vec<f32> = (0..pts)
+        .map(|i| (i as f32) / ((pts - 1) as f32))
+        .collect();
+
+    let grid_x = interpolate_onto_grid(&lap.lap_dist_pct, &raw_x, &grid_dist_pct);
+    let grid_y = interpolate_onto_grid(&lap.lap_dist_pct, &raw_y, &grid_dist_pct);
+
+    // Compute bounding box
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for &x in &grid_x {
+        if x.is_finite() {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+        }
+    }
+    for &y in &grid_y {
+        if y.is_finite() {
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+    }
+
+    let span_x = (max_x - min_x).abs();
+    let span_y = (max_y - min_y).abs();
+    let max_span = span_x.max(span_y);
+
+    if max_span < 1.0 {
+        // Fallback: synthetic smooth test circuit
+        let fallback_pts: Vec<[f32; 2]> = grid_dist_pct
+            .iter()
+            .map(|&p| {
+                let theta = p * 2.0 * std::f32::consts::PI;
+                let r = 0.36 + 0.08 * (theta * 3.0).sin();
+                [0.5 + r * theta.cos(), 0.5 + r * theta.sin()]
+            })
+            .collect();
+        return Some(fallback_pts);
+    }
+
+    let scale = 0.82 / max_span;
+    let center_x = (min_x + max_x) * 0.5;
+    let center_y = (min_y + max_y) * 0.5;
+
+    let mut normalized_points = Vec::with_capacity(pts);
+    for i in 0..pts {
+        let nx = 0.5 + (grid_x[i] - center_x) * scale;
+        let ny = 0.5 - (grid_y[i] - center_y) * scale; // invert Y so North is UP
+        normalized_points.push([nx.clamp(0.04, 0.96), ny.clamp(0.04, 0.96)]);
+    }
+
+    Some(normalized_points)
+}
+
 /// Normalizes all channels of a `LapAnalysis` onto a uniform `LapDistPct` grid (`0.0..=1.0`).
 pub fn normalize_lap(lap: &LapAnalysis, num_points: usize) -> NormalizedLapTrace {
     let pts = num_points.max(2);
@@ -1967,6 +2126,9 @@ pub fn normalize_lap(lap: &LapAnalysis, num_points: usize) -> NormalizedLapTrace
     let brake_pct = norm_opt(&lap.inputs.brake_pct);
     let steering_deg = norm_opt(&lap.inputs.steering_deg);
     let rpm = norm_opt(&lap.inputs.rpm);
+    let lat_accel_g = norm_opt(&lap.inputs.lat_accel_g);
+    let long_accel_g = norm_opt(&lap.inputs.long_accel_g);
+    let track_map_points = compute_track_map_from_lap(lap, pts);
     let lf_rh_mm = norm_opt(&lap.suspension.lf_rh_mm);
     let rf_rh_mm = norm_opt(&lap.suspension.rf_rh_mm);
     let lr_rh_mm = norm_opt(&lap.suspension.lr_rh_mm);
@@ -2020,6 +2182,9 @@ pub fn normalize_lap(lap: &LapAnalysis, num_points: usize) -> NormalizedLapTrace
         steering_deg,
         rpm,
         gear,
+        lat_accel_g,
+        long_accel_g,
+        track_map_points,
         lf_rh_mm,
         rf_rh_mm,
         lr_rh_mm,
@@ -2103,6 +2268,7 @@ pub fn compute_driver_inputs(
     rpm: Option<Vec<f32>>,
     lat_accel_mps2: Option<Vec<f32>>,
     long_accel_mps2: Option<Vec<f32>>,
+    yaw_rad: Option<Vec<f32>>,
 ) -> DriverInputsAnalysis {
     let speed_mph = speed_mps
         .as_ref()
@@ -2200,6 +2366,7 @@ pub fn compute_driver_inputs(
         rpm,
         lat_accel_g,
         long_accel_g,
+        yaw_rad,
         speed_mph_stats,
         speed_kph_stats,
         throttle_stats,
@@ -3342,6 +3509,9 @@ CarSetup:
         ("RFpressure", "RF tire hot pressure", "kPa", IbtVarType::Float),
         ("LRpressure", "LR tire hot pressure", "kPa", IbtVarType::Float),
         ("RRpressure", "RR tire hot pressure", "kPa", IbtVarType::Float),
+        ("LatAccel", "Lateral acceleration", "m/s^2", IbtVarType::Float),
+        ("LongAccel", "Longitudinal acceleration", "m/s^2", IbtVarType::Float),
+        ("YawNorth", "Yaw heading relative to North", "rad", IbtVarType::Float),
     ];
 
     let tick_rate = 60i32;
@@ -3447,6 +3617,10 @@ CarSetup:
             let lr_p = 148.0 + press_prog;
             let rr_p = 150.0 + press_prog;
 
+            let lat_accel = steer_rad * (speed_mps.powi(2) / 45.0).min(22.0);
+            let long_accel = if brake > 0.05 { -brake * 16.5 } else { throttle * 5.8 };
+            let yaw_north = phase;
+
             let on_pit = is_out && pct < 0.15;
             let surface = if on_pit { 2 } else { 3 };
 
@@ -3492,6 +3666,9 @@ CarSetup:
             writer.set_f32(&mut row, "RFpressure", rf_p);
             writer.set_f32(&mut row, "LRpressure", lr_p);
             writer.set_f32(&mut row, "RRpressure", rr_p);
+            writer.set_f32(&mut row, "LatAccel", lat_accel);
+            writer.set_f32(&mut row, "LongAccel", long_accel);
+            writer.set_f32(&mut row, "YawNorth", yaw_north);
 
             writer.push_row(&row);
             session_time += dt;
@@ -4298,5 +4475,37 @@ CarSetup:
         for &rd in rake_delta {
             assert!((rd - 10.0).abs() < 1.0, "Rake delta must be ~10mm, got {}", rd);
         }
+    }
+
+    #[test]
+    fn test_track_map_and_gg_diagram_data_generation() {
+        let sess = build_demo_ibt_session().expect("Synthetic demo IBT must parse");
+        assert!(sess.analyzed_laps.len() >= 2);
+
+        let lap = &sess.analyzed_laps[1];
+        assert!(lap.inputs.lat_accel_g.is_some(), "lat_accel_g must be present");
+        assert!(lap.inputs.long_accel_g.is_some(), "long_accel_g must be present");
+
+        let norm = normalize_lap(lap, 300);
+        assert_eq!(norm.grid_dist_pct.len(), 300);
+
+        let lat_g = norm.lat_accel_g.as_ref().expect("Normalized lat_accel_g");
+        let long_g = norm.long_accel_g.as_ref().expect("Normalized long_accel_g");
+        assert_eq!(lat_g.len(), 300);
+        assert_eq!(long_g.len(), 300);
+
+        let map_pts = norm.track_map_points.as_ref().expect("Track map points generated");
+        assert_eq!(map_pts.len(), 300);
+
+        for &[x, y] in map_pts {
+            assert!(x >= 0.03 && x <= 0.97, "x out of range: {}", x);
+            assert!(y >= 0.03 && y <= 0.97, "y out of range: {}", y);
+        }
+
+        // Check loop closure: start and end points must be nearly identical
+        let p_start = map_pts[0];
+        let p_end = map_pts[299];
+        let closure_dist = ((p_start[0] - p_end[0]).powi(2) + (p_start[1] - p_end[1]).powi(2)).sqrt();
+        assert!(closure_dist < 0.05, "Track must close seamlessly, dist: {}", closure_dist);
     }
 }

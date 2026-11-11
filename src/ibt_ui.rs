@@ -73,6 +73,7 @@ pub struct IbtTelemetryLabState {
     pub status_error: Option<String>,
     pub tire_chart_mode: TireChartMode,
     pub include_subfolders: bool,
+    pub show_main_track_and_gg: bool,
     worker: LoadWorkerState,
     has_initialized_dir: bool,
 }
@@ -98,6 +99,7 @@ impl Default for IbtTelemetryLabState {
             status_error: None,
             tire_chart_mode: TireChartMode::AllCorners,
             include_subfolders: true,
+            show_main_track_and_gg: false,
             worker: LoadWorkerState::Idle,
             has_initialized_dir: false,
         }
@@ -1065,6 +1067,74 @@ impl IbtTelemetryLabState {
                                                 }
                                             });
                                     });
+
+                                if !sess.analyzed_laps.is_empty() {
+                                    let a_idx = self.selected_lap_a_idx.min(sess.analyzed_laps.len() - 1);
+                                    let la = &sess.analyzed_laps[a_idx];
+                                    let lb_opt = if let Some(ref ref_sess) = self.reference_session {
+                                        if self.compare_enabled && !ref_sess.analyzed_laps.is_empty() {
+                                            let b_idx = self.selected_lap_b_idx.min(ref_sess.analyzed_laps.len() - 1);
+                                            Some(&ref_sess.analyzed_laps[b_idx])
+                                        } else {
+                                            None
+                                        }
+                                    } else if self.compare_enabled && sess.analyzed_laps.len() >= 2 {
+                                        let b_idx = self.selected_lap_b_idx.min(sess.analyzed_laps.len() - 1);
+                                        Some(&sess.analyzed_laps[b_idx])
+                                    } else {
+                                        None
+                                    };
+
+                                    let norm_a = normalize_lap(la, 300);
+                                    let norm_b = lb_opt.map(|lb| normalize_lap(lb, 300));
+
+                                    // Card 4: 2D Circuit Track Map
+                                    if let Some(ref pts_a) = norm_a.track_map_points {
+                                        ui.add_space(8.0);
+                                        egui::Frame::none()
+                                            .fill(panel_bg)
+                                            .stroke(egui::Stroke::new(1.0, divider))
+                                            .rounding(egui::Rounding::same(10.0))
+                                            .inner_margin(10.0)
+                                            .show(ui, |ui| {
+                                                draw_2d_track_map(
+                                                    ui,
+                                                    settings,
+                                                    &sess.metadata.track_display_name,
+                                                    pts_a,
+                                                    norm_b.as_ref().and_then(|nb| nb.track_map_points.as_deref()),
+                                                    la.descriptor.lap_number,
+                                                    lb_opt.map(|lb| lb.descriptor.lap_number),
+                                                    &mut self.hover_dist_pct,
+                                                    175.0,
+                                                );
+                                            });
+                                    }
+
+                                    // Card 5: G-G Traction Friction Circle
+                                    if let (Some(ref lat_a), Some(ref lon_a)) = (&norm_a.lat_accel_g, &norm_a.long_accel_g) {
+                                        ui.add_space(8.0);
+                                        egui::Frame::none()
+                                            .fill(panel_bg)
+                                            .stroke(egui::Stroke::new(1.0, divider))
+                                            .rounding(egui::Rounding::same(10.0))
+                                            .inner_margin(10.0)
+                                            .show(ui, |ui| {
+                                                draw_gg_diagram(
+                                                    ui,
+                                                    settings,
+                                                    lat_a,
+                                                    lon_a,
+                                                    norm_b.as_ref().and_then(|nb| nb.lat_accel_g.as_deref()),
+                                                    norm_b.as_ref().and_then(|nb| nb.long_accel_g.as_deref()),
+                                                    la.descriptor.lap_number,
+                                                    lb_opt.map(|lb| lb.descriptor.lap_number),
+                                                    self.hover_dist_pct,
+                                                    200.0,
+                                                );
+                                            });
+                                    }
+                                }
                             }
                         });
                 },
@@ -1367,6 +1437,68 @@ impl IbtTelemetryLabState {
         });
 
         ui.add_space(8.0);
+
+        // Track Map & G-G Diagram In-Tab Expanded View
+        let has_track_or_gg = norm_a.track_map_points.is_some() || norm_a.lat_accel_g.is_some();
+        if has_track_or_gg {
+            let panel_bg = settings.panel_color();
+            let divider = settings.divider_color();
+
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut self.show_main_track_and_gg,
+                    "📍 2D Circuit Map & 🎯 G-G Diagram (Expanded In-Tab View)",
+                );
+            });
+
+            if self.show_main_track_and_gg {
+                ui.add_space(4.0);
+                ui.columns(2, |cols| {
+                    if let Some(ref pts_a) = norm_a.track_map_points {
+                        egui::Frame::none()
+                            .fill(panel_bg)
+                            .stroke(egui::Stroke::new(1.0, divider))
+                            .rounding(egui::Rounding::same(10.0))
+                            .inner_margin(10.0)
+                            .show(&mut cols[0], |ui| {
+                                draw_2d_track_map(
+                                    ui,
+                                    settings,
+                                    "",
+                                    pts_a,
+                                    comparison.and_then(|c| c.lap_b.track_map_points.as_deref()),
+                                    norm_a.lap_number,
+                                    comparison.map(|c| c.lap_b.lap_number),
+                                    &mut self.hover_dist_pct,
+                                    190.0,
+                                );
+                            });
+                    }
+                    if let (Some(ref lat_a), Some(ref lon_a)) = (&norm_a.lat_accel_g, &norm_a.long_accel_g) {
+                        egui::Frame::none()
+                            .fill(panel_bg)
+                            .stroke(egui::Stroke::new(1.0, divider))
+                            .rounding(egui::Rounding::same(10.0))
+                            .inner_margin(10.0)
+                            .show(&mut cols[1], |ui| {
+                                draw_gg_diagram(
+                                    ui,
+                                    settings,
+                                    lat_a,
+                                    lon_a,
+                                    comparison.and_then(|c| c.lap_b.lat_accel_g.as_deref()),
+                                    comparison.and_then(|c| c.lap_b.long_accel_g.as_deref()),
+                                    norm_a.lap_number,
+                                    comparison.map(|c| c.lap_b.lap_number),
+                                    self.hover_dist_pct,
+                                    190.0,
+                                );
+                            });
+                    }
+                });
+                ui.add_space(6.0);
+            }
+        }
 
         // If comparing two laps, show Time Delta (B - A) lane first
         if let Some(comp) = comparison {
@@ -3167,6 +3299,344 @@ fn draw_synchronized_trace_lane(
                 }
             }
         });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_2d_track_map(
+    ui: &mut egui::Ui,
+    settings: &AppSettings,
+    track_name: &str,
+    track_pts_a: &[[f32; 2]],
+    track_pts_b: Option<&[[f32; 2]]>,
+    _lap_a_num: i32,
+    _lap_b_num: Option<i32>,
+    hover_dist_pct: &mut Option<f32>,
+    canvas_h: f32,
+) {
+    let elevated = settings.card_elevated_color();
+    let divider = settings.divider_color();
+    let white = settings.text_color();
+    let muted = settings.text_muted();
+    let primary = settings.primary_accent();
+    let secondary = settings.secondary_accent();
+
+    let cur_pct_txt = hover_dist_pct
+        .map(|p| format!("{:.1}% Dist", p * 100.0))
+        .unwrap_or_else(|| "0.0% Dist".to_string());
+
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("📍 2D CIRCUIT MAP")
+                .color(primary)
+                .size(ui_size(11.5))
+                .strong(),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(&cur_pct_txt)
+                    .color(white)
+                    .monospace()
+                    .size(ui_size(11.0))
+                    .strong(),
+            );
+        });
+    });
+
+    if !track_name.is_empty() {
+        ui.label(
+            egui::RichText::new(track_name)
+                .color(muted)
+                .size(ui_size(10.5)),
+        );
+    }
+    ui.add_space(3.0);
+
+    let avail_w = ui.available_width().max(160.0);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(avail_w, canvas_h),
+        egui::Sense::click_and_drag(),
+    );
+    let painter = ui.painter_at(rect);
+
+    painter.rect_filled(rect, 8.0, elevated);
+    painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, divider));
+
+    if track_pts_a.len() < 2 {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "No Track Coordinates Available",
+            display_font(12.0),
+            muted,
+        );
+        return;
+    }
+
+    let map_pt = |p: [f32; 2]| -> egui::Pos2 {
+        egui::pos2(
+            rect.min.x + p[0] * rect.width(),
+            rect.min.y + p[1] * rect.height(),
+        )
+    };
+
+    // 1. Draw circuit path (underlay + main ribbon)
+    for i in 0..track_pts_a.len() - 1 {
+        let p0 = map_pt(track_pts_a[i]);
+        let p1 = map_pt(track_pts_a[i + 1]);
+        painter.line_segment([p0, p1], egui::Stroke::new(6.0, with_alpha(secondary, 45)));
+    }
+    if let (Some(&first), Some(&last)) = (track_pts_a.first(), track_pts_a.last()) {
+        painter.line_segment([map_pt(last), map_pt(first)], egui::Stroke::new(6.0, with_alpha(secondary, 45)));
+    }
+
+    for i in 0..track_pts_a.len() - 1 {
+        let p0 = map_pt(track_pts_a[i]);
+        let p1 = map_pt(track_pts_a[i + 1]);
+        painter.line_segment([p0, p1], egui::Stroke::new(2.4, with_alpha(white, 220)));
+    }
+    if let (Some(&first), Some(&last)) = (track_pts_a.first(), track_pts_a.last()) {
+        painter.line_segment([map_pt(last), map_pt(first)], egui::Stroke::new(2.4, with_alpha(white, 220)));
+    }
+
+    // 2. Draw Start/Finish marker
+    if let Some(&sf_pt) = track_pts_a.first() {
+        let sf_pos = map_pt(sf_pt);
+        painter.circle_filled(sf_pos, 3.5, egui::Color32::WHITE);
+        painter.text(
+            sf_pos + egui::vec2(6.0, -6.0),
+            egui::Align2::LEFT_BOTTOM,
+            "S/F",
+            display_font(10.0),
+            primary,
+        );
+    }
+
+    // 3. Interactive scrubbing on click or drag
+    if let Some(mouse_pos) = response.hover_pos() {
+        if rect.contains(mouse_pos) {
+            let mut closest_idx = 0;
+            let mut min_dist_sq = f32::MAX;
+            for (idx, &pt) in track_pts_a.iter().enumerate() {
+                let screen_p = map_pt(pt);
+                let d2 = screen_p.distance_sq(mouse_pos);
+                if d2 < min_dist_sq {
+                    min_dist_sq = d2;
+                    closest_idx = idx;
+                }
+            }
+
+            if response.clicked() || response.dragged() {
+                let pct = (closest_idx as f32 / ((track_pts_a.len() - 1).max(1) as f32)).clamp(0.0, 1.0);
+                *hover_dist_pct = Some(pct);
+            }
+        }
+    }
+
+    // 4. Draw active car scrubber dot
+    if let Some(pct) = *hover_dist_pct {
+        let idx = (pct.clamp(0.0, 1.0) * ((track_pts_a.len() - 1) as f32)).round() as usize;
+        if let Some(&pt) = track_pts_a.get(idx.min(track_pts_a.len() - 1)) {
+            let car_pos = map_pt(pt);
+            painter.circle_filled(car_pos, 5.0, primary);
+            painter.circle_stroke(car_pos, 7.5, egui::Stroke::new(1.5, egui::Color32::WHITE));
+        }
+
+        if let Some(pts_b) = track_pts_b {
+            let idx_b = (pct.clamp(0.0, 1.0) * ((pts_b.len() - 1) as f32)).round() as usize;
+            if let Some(&pt_b) = pts_b.get(idx_b.min(pts_b.len() - 1)) {
+                let car_pos_b = map_pt(pt_b);
+                painter.circle_filled(car_pos_b, 4.0, secondary);
+                painter.circle_stroke(car_pos_b, 6.0, egui::Stroke::new(1.2, egui::Color32::WHITE));
+            }
+        }
+    }
+
+    response.on_hover_text("Click or drag along circuit path to jump telemetry cursor to that corner");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_gg_diagram(
+    ui: &mut egui::Ui,
+    settings: &AppSettings,
+    lat_a: &[f32],
+    long_a: &[f32],
+    lat_b: Option<&[f32]>,
+    long_b: Option<&[f32]>,
+    lap_a_num: i32,
+    lap_b_num: Option<i32>,
+    hover_dist_pct: Option<f32>,
+    canvas_h: f32,
+) {
+    let elevated = settings.card_elevated_color();
+    let divider = settings.divider_color();
+    let white = settings.text_color();
+    let muted = settings.text_muted();
+    let primary = settings.primary_accent();
+    let secondary = settings.secondary_accent();
+
+    let n = lat_a.len().min(long_a.len());
+    let hover_idx = hover_dist_pct.map(|p| {
+        (p.clamp(0.0, 1.0) * (n.saturating_sub(1) as f32)).round() as usize
+    });
+
+    let cur_readout_a = hover_idx
+        .and_then(|idx| {
+            if idx < n {
+                Some(format!("L{:02}: {:+.2}G Lat  {:+.2}G Long", lap_a_num, lat_a[idx], long_a[idx]))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| format!("L{:02} Friction Cloud", lap_a_num));
+
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new("🎯 G-G TRACTION CIRCLE")
+                .color(primary)
+                .size(ui_size(11.5))
+                .strong(),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(&cur_readout_a)
+                    .color(primary)
+                    .monospace()
+                    .size(ui_size(10.5))
+                    .strong(),
+            );
+        });
+    });
+
+    if let (Some(lb_num), Some(lb_lat), Some(lb_long), Some(idx)) = (lap_b_num, lat_b, long_b, hover_idx) {
+        if idx < lb_lat.len().min(lb_long.len()) {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "L{:02}: {:+.2}G Lat  {:+.2}G Long",
+                        lb_num, lb_lat[idx], lb_long[idx]
+                    ))
+                    .color(secondary)
+                    .monospace()
+                    .size(ui_size(10.5))
+                    .strong(),
+                );
+            });
+        }
+    }
+    ui.add_space(3.0);
+
+    let avail_w = ui.available_width().max(160.0);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(avail_w, canvas_h),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(rect);
+
+    painter.rect_filled(rect, 8.0, elevated);
+    painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, divider));
+
+    if n < 2 {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "No Acceleration Data Available",
+            display_font(12.0),
+            muted,
+        );
+        return;
+    }
+
+    // Determine max G scale (clamp between 1.5G and 4.0G)
+    let mut peak_g = 1.5_f32;
+    for &g in lat_a.iter().chain(long_a.iter()) {
+        if g.is_finite() {
+            peak_g = peak_g.max(g.abs());
+        }
+    }
+    if let (Some(lb_lat), Some(lb_long)) = (lat_b, long_b) {
+        for &g in lb_lat.iter().chain(lb_long.iter()) {
+            if g.is_finite() {
+                peak_g = peak_g.max(g.abs());
+            }
+        }
+    }
+    let max_g = (peak_g * 1.15).clamp(1.5, 4.0);
+
+    let center = rect.center();
+    let radius = (rect.width().min(rect.height()) * 0.5 - 20.0).max(35.0);
+    let px_per_g = radius / max_g;
+
+    // Outer reference circles (1.0G and max_g)
+    painter.circle_stroke(center, 1.0 * px_per_g, egui::Stroke::new(1.0, with_alpha(divider, 180)));
+    if max_g >= 2.0 {
+        painter.circle_stroke(center, 2.0 * px_per_g, egui::Stroke::new(1.0, with_alpha(divider, 120)));
+    }
+    painter.circle_stroke(center, radius, egui::Stroke::new(1.2, with_alpha(divider, 220)));
+
+    // Crosshair axes
+    painter.line_segment(
+        [egui::pos2(center.x, rect.top() + 6.0), egui::pos2(center.x, rect.bottom() - 6.0)],
+        egui::Stroke::new(1.0, with_alpha(divider, 180)),
+    );
+    painter.line_segment(
+        [egui::pos2(rect.left() + 6.0, center.y), egui::pos2(rect.right() - 6.0, center.y)],
+        egui::Stroke::new(1.0, with_alpha(divider, 180)),
+    );
+
+    // Axis labels
+    painter.text(egui::pos2(center.x, rect.top() + 4.0), egui::Align2::CENTER_TOP, "▲ Accel", display_font(9.5), muted);
+    painter.text(egui::pos2(center.x, rect.bottom() - 4.0), egui::Align2::CENTER_BOTTOM, "▼ Brake", display_font(9.5), muted);
+    painter.text(egui::pos2(rect.left() + 4.0, center.y), egui::Align2::LEFT_CENTER, "◀ Lat L", display_font(9.5), muted);
+    painter.text(egui::pos2(rect.right() - 4.0, center.y), egui::Align2::RIGHT_CENTER, "▶ Lat R", display_font(9.5), muted);
+
+    let to_screen = |lat: f32, lon: f32| -> egui::Pos2 {
+        egui::pos2(
+            center.x + lat * px_per_g,
+            center.y - lon * px_per_g, // +lon is Accel (up), -lon is Brake (down)
+        )
+    };
+
+    // Draw scatter points (stride of 2 for silky smooth framerates)
+    let stride = 2usize;
+
+    // Lap B scatter (if comparison enabled)
+    if let (Some(lb_lat), Some(lb_long)) = (lat_b, long_b) {
+        let nb = lb_lat.len().min(lb_long.len());
+        for i in (0..nb).step_by(stride) {
+            let pos = to_screen(lb_lat[i], lb_long[i]);
+            if rect.contains(pos) {
+                painter.circle_filled(pos, 1.5, with_alpha(secondary, 70));
+            }
+        }
+    }
+
+    // Lap A scatter
+    for i in (0..n).step_by(stride) {
+        let pos = to_screen(lat_a[i], long_a[i]);
+        if rect.contains(pos) {
+            painter.circle_filled(pos, 1.5, with_alpha(primary, 80));
+        }
+    }
+
+    // Active cursor points
+    if let Some(idx) = hover_idx {
+        if idx < n {
+            let active_a = to_screen(lat_a[idx], long_a[idx]);
+            painter.circle_filled(active_a, 5.0, primary);
+            painter.circle_stroke(active_a, 7.5, egui::Stroke::new(1.5, egui::Color32::WHITE));
+
+            if let (Some(lb_lat), Some(lb_long)) = (lat_b, long_b) {
+                if idx < lb_lat.len().min(lb_long.len()) {
+                    let active_b = to_screen(lb_lat[idx], lb_long[idx]);
+                    painter.circle_filled(active_b, 4.0, secondary);
+                    painter.circle_stroke(active_b, 6.0, egui::Stroke::new(1.2, egui::Color32::WHITE));
+                    painter.line_segment([active_a, active_b], egui::Stroke::new(1.2, with_alpha(white, 160)));
+                }
+            }
+        }
+    }
+
+    response.on_hover_text("Traction friction circle: Outer perimeter = tire grip limit; Top diagonals = trail-braking transition");
 }
 
 fn draw_shock_corner_histogram_card(

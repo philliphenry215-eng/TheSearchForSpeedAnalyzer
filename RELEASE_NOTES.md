@@ -1,3 +1,20 @@
+# The Search For Speed Analyzer — v0.5.7
+
+### .IBT Telemetry Lab: 2D Circuit Track Map & G-G Friction Circle:
+* **Interactive 2D Circuit Track Map:**
+  * Reconstructs the circuit path directly from `.ibt` telemetry heading, lateral acceleration, and speed with seamless loop closure and aspect-ratio preservation.
+  * Real-time car position scrubber glides around the circuit as you scrub telemetry lanes, tracking both Lap A and Lap B in comparison mode.
+  * Bidirectional navigation: Click or drag anywhere along the track map to jump the cursor across all synchronized telemetry trace lanes.
+* **G-G Traction Friction Circle Diagram:**
+  * Displays lateral vs. longitudinal G-forces with 1.0G, 2.0G, and peak traction envelope rings.
+  * Full-lap scatter cloud of tire grip extraction (Lap A in gold, Lap B in cyan).
+  * White-rimmed active cursor dot tracks real-time grip utilization and trail-braking deltas with numerical readouts.
+* **Ergonomic Placement:**
+  * Docked in the Left Sidebar below Lap Slicing (visible across all analysis tabs).
+  * Optional in-tab expanded view checkbox in the Inputs & Speed tab.
+
+---
+
 # The Search For Speed Analyzer — v0.5.2
 
 ### Save / Rename `.sto` Setup & Graph Drag-to-Zoom Fixes:
