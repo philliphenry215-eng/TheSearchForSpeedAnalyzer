@@ -1,3 +1,21 @@
+# The Search For Speed Analyzer — v0.5.9
+
+### Post-Stint Tire Attachment, Cockpit Panel Lock & .IBT Lab G-G Readout Fixes:
+* **Post-Stint Tire Attachment & Pit Service Reliability:**
+  * Locked completed stint tires once the car exits pit road / begins a new run or receives a garage `CarSetup` readout, preventing aborted 0-lap stints or stale YAML polls from overwriting earlier stints' tire wear.
+  * Preserved fuel-only / damage-repair pit stop wear updates from the black box onto the completed stint while retaining pre-pit hot tire pressures (`dst.pressure > 1.0`).
+  * Guarded surface-temp fallback in the pit stall against false triggering during penalty holds when carcass temperature channels are unavailable.
+* **Cockpit `TIRES` Panel Fix:**
+  * Decoupled the Cockpit `TIRES` card from Stint Log table selection and excluded imported (`IMP`) or unworn cold garage setup tires (`100%`), keeping Cockpit blank (`TIRES · AWAITING PIT`) on fresh sessions until the first pit/garage update.
+* **4-Corner Wear, Corded Tire & Celsius Telemetry Fixes:**
+  * Fixed explicit Celsius `CarSetup` temperatures above `120C` being misconverted as Fahrenheit.
+  * Expanded 4-corner detection, UI cards, overlay popup, Discord cards, TSV exports, Saved Stints badge, and DB sync to cover `LR`/`RR` corners and `0%` corded tire bands.
+  * Gated `.sto` setup save/explorer buttons in Single Stint Analyzer to player/imported stints only.
+* **.IBT Telemetry Lab Comparison HUD Fix:**
+  * Fixed the right canvas `ScrollArea` height calculation (`ui.available_height()`) and moved the G-G Traction Circle Lap B cursor readout inline in the header so Lap B comparisons align cleanly without shifting layout height.
+
+---
+
 # The Search For Speed Analyzer — v0.5.8
 
 ### Static Top Telemetry HUD: Aspect-Preserving 2D Track Map & Motorsport G-G Circle:

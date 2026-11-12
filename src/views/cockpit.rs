@@ -28,7 +28,6 @@ impl WarRoomApp {
 
         let player = s.drivers.get(&s.player_car_idx);
         let active_stint = player.and_then(|p| p.stints.iter().rev().find(|st| st.is_active).or_else(|| p.stints.last()));
-        let last_completed_stint = player.and_then(|p| p.stints.iter().rev().find(|st| st.laps_completed > 0));
         
         let avg_fuel_burn_ltr = active_stint
             .map(|st| st.fuel_per_lap())
@@ -453,30 +452,13 @@ impl WarRoomApp {
                             ui.add_space(16.0);
 
                             // --- 4-CORNER POST-STINT TIRE REPORT ---
-                            let tire_stint = self.selected_stint_num
-                                .and_then(|num| player.and_then(|p| p.stints.iter().find(|st| st.stint_number == num)))
-                                .filter(|st| st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data)
-                                .or_else(|| {
-                                    player.and_then(|p| p.stints.iter().rev().find(|st| !st.is_active && (st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data)))
-                                })
-                                .or_else(|| {
-                                    player.and_then(|p| p.stints.iter().rev().find(|st| st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data))
-                                })
-                                .or(last_completed_stint);
+                            // Always reflects the player's latest completed live stint with post-stint tires
+                            // (independent of stint-log table selection, and blank until first pit/garage update).
+                            let tire_stint = s.cockpit_post_stint_tires();
 
                             let empty_tires = StintTireSet::default();
                             let (s_lbl, tires_to_show, stint_has_tires) = if let Some(st) = tire_stint {
-                                if st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data {
-                                    (st.short_label(), &st.tires, true)
-                                } else if s.latest_tire_data.has_wear() || s.latest_tire_data.has_wear_or_temps() || s.latest_tire_data.has_data {
-                                    let lbl = format!("S{}", s.tire_popup_stint_num.max(st.stint_number));
-                                    (lbl, &s.latest_tire_data, true)
-                                } else {
-                                    (st.short_label(), &empty_tires, false)
-                                }
-                            } else if s.latest_tire_data.has_wear() || s.latest_tire_data.has_wear_or_temps() || s.latest_tire_data.has_data {
-                                let lbl = format!("S{}", s.tire_popup_stint_num.max(1));
-                                (lbl, &s.latest_tire_data, true)
+                                (st.short_label(), &st.tires, true)
                             } else {
                                 ("S1".to_string(), &empty_tires, false)
                             };

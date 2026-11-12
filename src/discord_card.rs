@@ -688,7 +688,7 @@ fn draw_tire_card_on_image(
     border_subtle: Color,
     is_dark: bool,
 ) {
-    let avg_wear = if data.wear_m > 0.01 {
+    let avg_wear = if data.has_wear() {
         (data.wear_l + data.wear_m + data.wear_r) / 3.0
     } else {
         0.0
@@ -757,7 +757,7 @@ fn draw_tire_card_on_image(
     draw_text_right(img, font_bold, x + w - 10.0, y + 9.0, 11.5, text_muted, &press_str);
 
     // Temps
-    let temp_str = if data.temp_m > 1.0 {
+    let temp_str = if data.has_temps() {
         if use_metric {
             format!("{:.0}° · {:.0}° · {:.0}°C", data.temp_l, data.temp_m, data.temp_r)
         } else {
@@ -783,7 +783,7 @@ fn draw_tire_card_on_image(
     draw_text(img, font_bold, x + 10.0, y + 44.0, 13.5, text_white, &temp_str);
 
     // Wear
-    let wear_str = if data.wear_m > 0.01 {
+    let wear_str = if data.has_wear() {
         format!("{:.0}% · {:.0}% · {:.0}%", data.wear_l, data.wear_m, data.wear_r)
     } else {
         "—% · —% · —%".to_string()

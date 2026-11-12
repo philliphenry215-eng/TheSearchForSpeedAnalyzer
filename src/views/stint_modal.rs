@@ -14,7 +14,7 @@ pub(crate) fn render_tire_corner_card(
     use_metric: bool,
     settings: &crate::settings::AppSettings,
 ) {
-    let avg_wear = if data.wear_m > 0.01 {
+    let avg_wear = if data.has_wear() {
         (data.wear_l + data.wear_m + data.wear_r) / 3.0
     } else {
         0.0
@@ -55,7 +55,7 @@ pub(crate) fn render_tire_corner_card(
         "I·M·O"
     };
 
-    let temp_str = if data.temp_m > 1.0 {
+    let temp_str = if data.has_temps() {
         if use_metric {
             format!("{:.0}°\u{00A0}·\u{00A0}{:.0}°\u{00A0}·\u{00A0}{:.0}°C", data.temp_l, data.temp_m, data.temp_r)
         } else {
@@ -65,7 +65,7 @@ pub(crate) fn render_tire_corner_card(
         "—\u{00A0}·\u{00A0}—\u{00A0}·\u{00A0}—".to_string()
     };
 
-    let wear_str = if data.wear_m > 0.01 {
+    let wear_str = if data.has_wear() {
         format!("{:.0}%\u{00A0}·\u{00A0}{:.0}%\u{00A0}·\u{00A0}{:.0}%", data.wear_l, data.wear_m, data.wear_r)
     } else {
         "—%\u{00A0}·\u{00A0}—%\u{00A0}·\u{00A0}—%".to_string()
@@ -1975,42 +1975,44 @@ impl WarRoomApp {
                             }
                         }
 
-                        let sto_btn = egui::Button::new(
-                            egui::RichText::new("💾 Save Setup (.sto)")
-                                .color(white)
-                                .size(ui_size(11.5)),
-                        )
-                        .fill(elevated)
-                        .min_size(egui::vec2(0.0, btn_h));
-                        if ui
-                            .add(sto_btn)
-                            .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
-                            .clicked()
-                        {
-                            let raw_path = if !stint.raw_setup_path.is_empty() {
-                                &stint.raw_setup_path
-                            } else if !drv_ref.raw_setup_path.is_empty() {
-                                &drv_ref.raw_setup_path
-                            } else {
-                                &s.player_raw_setup_path
-                            };
-                            let car_path_str = if !drv_ref.car_path.is_empty() {
-                                &drv_ref.car_path
-                            } else {
-                                &s.player_car_path
-                            };
-                            match crate::setup_file::save_or_rename_stint_setup(
-                                raw_path,
-                                single_setup_display,
-                                car_path_str,
-                                &s.car_name,
-                            ) {
-                                Ok(dest) => {
-                                    updated_setup_path = Some((target_car_idx, stint.stint_number, dest));
-                                }
-                                Err(err) => {
-                                    if err != "Export cancelled by user" {
-                                        this.toast_message = Some((format!("⚠ Save setup failed: {}", err), std::time::Instant::now()));
+                        if target_car_idx == s.player_car_idx || stint.is_imported {
+                            let sto_btn = egui::Button::new(
+                                egui::RichText::new("💾 Save Setup (.sto)")
+                                    .color(white)
+                                    .size(ui_size(11.5)),
+                            )
+                            .fill(elevated)
+                            .min_size(egui::vec2(0.0, btn_h));
+                            if ui
+                                .add(sto_btn)
+                                .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
+                                .clicked()
+                            {
+                                let raw_path = if !stint.raw_setup_path.is_empty() {
+                                    &stint.raw_setup_path
+                                } else if !drv_ref.raw_setup_path.is_empty() {
+                                    &drv_ref.raw_setup_path
+                                } else {
+                                    &s.player_raw_setup_path
+                                };
+                                let car_path_str = if !drv_ref.car_path.is_empty() {
+                                    &drv_ref.car_path
+                                } else {
+                                    &s.player_car_path
+                                };
+                                match crate::setup_file::save_or_rename_stint_setup(
+                                    raw_path,
+                                    single_setup_display,
+                                    car_path_str,
+                                    &s.car_name,
+                                ) {
+                                    Ok(dest) => {
+                                        updated_setup_path = Some((target_car_idx, stint.stint_number, dest));
+                                    }
+                                    Err(err) => {
+                                        if err != "Export cancelled by user" {
+                                            this.toast_message = Some((format!("⚠ Save setup failed: {}", err), std::time::Instant::now()));
+                                        }
                                     }
                                 }
                             }
@@ -2203,85 +2205,87 @@ impl WarRoomApp {
                         };
                         ui.label(egui::RichText::new(setup_display).color(white).strong().size(ui_size(12.5)));
 
-                        let stint_raw_path = if !stint.raw_setup_path.is_empty() {
-                            &stint.raw_setup_path
-                        } else if !drv_ref.raw_setup_path.is_empty() {
-                            &drv_ref.raw_setup_path
-                        } else {
-                            &s.player_raw_setup_path
-                        };
-                        let sto_file_path = crate::setup_file::resolve_sto_file(
-                            stint_raw_path,
-                            setup_display,
-                            &drv_ref.car_path,
-                            &drv_ref.driver_name,
-                        ).or_else(|| {
-                            crate::setup_file::resolve_sto_file(
-                                stint_raw_path,
-                                setup_display,
-                                &s.player_car_path,
-                                &s.car_name,
-                            )
-                        });
-
-                        ui.add_space(4.0);
-                        let save_sto_btn = egui::Button::new(
-                            egui::RichText::new("💾 Save / Rename .sto...")
-                                .color(primary)
-                                .size(ui_size(10.5))
-                                .strong(),
-                        )
-                        .fill(with_alpha(elevated, 180))
-                        .rounding(egui::Rounding::same(4.0));
-                        if ui
-                            .add(save_sto_btn)
-                            .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
-                            .clicked()
-                        {
-                            let car_path_str = if !drv_ref.car_path.is_empty() {
-                                &drv_ref.car_path
+                        if target_car_idx == s.player_car_idx || stint.is_imported {
+                            let stint_raw_path = if !stint.raw_setup_path.is_empty() {
+                                &stint.raw_setup_path
+                            } else if !drv_ref.raw_setup_path.is_empty() {
+                                &drv_ref.raw_setup_path
                             } else {
-                                &s.player_car_path
+                                &s.player_raw_setup_path
                             };
-                            match crate::setup_file::save_or_rename_stint_setup(
+                            let sto_file_path = crate::setup_file::resolve_sto_file(
                                 stint_raw_path,
                                 setup_display,
-                                car_path_str,
-                                &s.car_name,
-                            ) {
-                                Ok(dest) => {
-                                    updated_setup_path = Some((target_car_idx, stint.stint_number, dest));
-                                }
-                                Err(e) => {
-                                    if e != "Export cancelled by user" {
-                                        self.toast_message = Some((format!("⚠ Save failed: {}", e), std::time::Instant::now()));
-                                    }
-                                }
-                            }
-                        }
+                                &drv_ref.car_path,
+                                &drv_ref.driver_name,
+                            ).or_else(|| {
+                                crate::setup_file::resolve_sto_file(
+                                    stint_raw_path,
+                                    setup_display,
+                                    &s.player_car_path,
+                                    &s.car_name,
+                                )
+                            });
 
-                        let show_sto_btn = egui::Button::new(
-                            egui::RichText::new("📂 Show in Explorer")
-                                .color(muted)
-                                .size(ui_size(10.5)),
-                        )
-                        .fill(with_alpha(elevated, 180))
-                        .rounding(egui::Rounding::same(4.0));
-                        if ui
-                            .add(show_sto_btn)
-                            .on_hover_text("Open and highlight this setup in Windows File Explorer")
-                            .clicked()
-                        {
-                            if let Some(ref sto_p) = sto_file_path {
-                                crate::stint_db::reveal_file_in_explorer(sto_p);
-                            } else {
+                            ui.add_space(4.0);
+                            let save_sto_btn = egui::Button::new(
+                                egui::RichText::new("💾 Save / Rename .sto...")
+                                    .color(primary)
+                                    .size(ui_size(10.5))
+                                    .strong(),
+                            )
+                            .fill(with_alpha(elevated, 180))
+                            .rounding(egui::Rounding::same(4.0));
+                            if ui
+                                .add(save_sto_btn)
+                                .on_hover_text("Open Windows File Explorer to save or rename this stint's .sto setup file directly to your files")
+                                .clicked()
+                            {
                                 let car_path_str = if !drv_ref.car_path.is_empty() {
                                     &drv_ref.car_path
                                 } else {
                                     &s.player_car_path
                                 };
-                                if let Some(car_dir) = crate::setup_file::resolve_car_setups_dir(stint_raw_path, car_path_str, &s.car_name) {
-                                    crate::stint_db::open_folder_in_explorer(&car_dir);
+                                match crate::setup_file::save_or_rename_stint_setup(
+                                    stint_raw_path,
+                                    setup_display,
+                                    car_path_str,
+                                    &s.car_name,
+                                ) {
+                                    Ok(dest) => {
+                                        updated_setup_path = Some((target_car_idx, stint.stint_number, dest));
+                                    }
+                                    Err(e) => {
+                                        if e != "Export cancelled by user" {
+                                            self.toast_message = Some((format!("⚠ Save failed: {}", e), std::time::Instant::now()));
+                                        }
+                                    }
+                                }
+                            }
+
+                            let show_sto_btn = egui::Button::new(
+                                egui::RichText::new("📂 Show in Explorer")
+                                    .color(muted)
+                                    .size(ui_size(10.5)),
+                            )
+                            .fill(with_alpha(elevated, 180))
+                            .rounding(egui::Rounding::same(4.0));
+                            if ui
+                                .add(show_sto_btn)
+                                .on_hover_text("Open and highlight this setup in Windows File Explorer")
+                                .clicked()
+                            {
+                                if let Some(ref sto_p) = sto_file_path {
+                                    crate::stint_db::reveal_file_in_explorer(sto_p);
+                                } else {
+                                    let car_path_str = if !drv_ref.car_path.is_empty() {
+                                        &drv_ref.car_path
+                                    } else {
+                                        &s.player_car_path
+                                    };
+                                    if let Some(car_dir) = crate::setup_file::resolve_car_setups_dir(stint_raw_path, car_path_str, &s.car_name) {
+                                        crate::stint_db::open_folder_in_explorer(&car_dir);
+                                    }
                                 }
                             }
                         }

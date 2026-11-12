@@ -1964,15 +1964,26 @@ impl WarRoomApp {
 
                                                     // 8. Pit Tires
                                                     row.col(|ui| {
-                                                        if rec.stint.tires.has_data {
+                                                        let badge_txt = if rec.stint.tires.lf.has_wear() || rec.stint.tires.rf.has_wear() {
                                                             let lf_w = (rec.stint.tires.lf.wear_l + rec.stint.tires.lf.wear_m + rec.stint.tires.lf.wear_r) / 3.0;
                                                             let rf_w = (rec.stint.tires.rf.wear_l + rec.stint.tires.rf.wear_m + rec.stint.tires.rf.wear_r) / 3.0;
+                                                            Some(format!("✓ {:.0}/{:.0}%", lf_w, rf_w))
+                                                        } else if rec.stint.tires.has_wear() {
+                                                            let lr_w = (rec.stint.tires.lr.wear_l + rec.stint.tires.lr.wear_m + rec.stint.tires.lr.wear_r) / 3.0;
+                                                            let rr_w = (rec.stint.tires.rr.wear_l + rec.stint.tires.rr.wear_m + rec.stint.tires.rr.wear_r) / 3.0;
+                                                            Some(format!("✓ {:.0}/{:.0}% R", lr_w, rr_w))
+                                                        } else if rec.stint.tires.has_temps() {
+                                                            Some("✓ Temps".to_string())
+                                                        } else {
+                                                            None
+                                                        };
+                                                        if let Some(txt) = badge_txt {
                                                             egui::Frame::none()
                                                                 .fill(with_alpha(secondary, 36))
                                                                 .rounding(egui::Rounding::same(4.0))
                                                                 .inner_margin(egui::Margin::symmetric(5.0, 1.5))
                                                                 .show(ui, |ui| {
-                                                                    ui.label(egui::RichText::new(format!("✓ {:.0}/{:.0}%", lf_w, rf_w)).color(secondary).strong().size(ui_size(10.5)));
+                                                                    ui.label(egui::RichText::new(txt).color(secondary).strong().size(ui_size(10.5)));
                                                                 });
                                                         } else {
                                                             ui.label(egui::RichText::new("—").color(muted).size(ui_size(11.5)));

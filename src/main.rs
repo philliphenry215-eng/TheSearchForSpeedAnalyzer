@@ -2551,19 +2551,9 @@ DriverInfo:
         assert_eq!(s1_final.tires.rf.wear_m, 81.0);
         assert!(s1_final.tires.has_wear());
 
-        // Verify Cockpit window resolution logic when pulling out of pits:
-        let player = state.drivers.get(&0);
-        let last_completed_stint = player.and_then(|p| p.stints.iter().rev().find(|st| st.laps_completed > 0));
-
-        // Even if selected_stint_num points to active Stint S2 (which has 0 laps):
-        let app_selected_stint_num = Some(2);
-        let tire_stint = app_selected_stint_num
-            .and_then(|num| player.and_then(|p| p.stints.iter().find(|st| st.stint_number == num)))
-            .filter(|st| st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data)
-            .or_else(|| {
-                player.and_then(|p| p.stints.iter().rev().find(|st| !st.is_active && (st.tires.has_wear() || st.tires.has_wear_or_temps() || st.tires.has_data)))
-            })
-            .or(last_completed_stint);
+        // Verify Cockpit window resolution logic when pulling out of pits
+        // (independent of any selected stint in the stint log):
+        let tire_stint = state.cockpit_post_stint_tires();
 
         assert!(tire_stint.is_some());
         let st = tire_stint.unwrap();
@@ -3979,6 +3969,383 @@ CarSetup:
         state.latest_tire_data.rf.merge_with(&s2_pit_sdk_tires.rf);
         assert_eq!(state.latest_tire_data.rf.wear_l, 86.0, "Shorter caution stint must record its own 86% wear instead of clamping to earlier 72% min");
         assert_eq!(state.latest_tire_data.rf.temp_l, 100.0, "Shorter caution stint must record its own 100C temp instead of clamping to earlier 108C max");
+    }
+
+    #[test]
+    fn test_aborted_zero_lap_stint_does_not_overwrite_earlier_stint_tires() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+        state.session_type = "PRACTICE".to_string();
+
+        let mut pit_road = vec![false; 2];
+        let mut laps_comp = vec![0i32; 2];
+        let mut last_laps = vec![0.0f32; 2];
+        let fast_laps = vec![0.0f32; 2];
+        let positions = vec![1i32; 2];
+        let mut surfaces = vec![TRK_LOC_ON_TRACK; 2];
+        let lap_dist_pcts = vec![0.5f32; 2];
+
+        // S1 completes 2 laps on track
+        let mut drv = DriverState::default();
+        drv.car_idx = 0;
+        drv.is_initialized = true;
+        drv.is_on_pit_road = false;
+        drv.is_in_world = true;
+        drv.last_processed_lap = 1;
+        drv.total_laps_completed = 1;
+        drv.stints.push(StintData {
+            stint_number: 1,
+            start_lap: 0,
+            end_lap: 2,
+            laps_completed: 2,
+            lap_times: vec![31.2, 31.3],
+            lap_numbers: vec![1, 2],
+            is_active: true,
+            ..Default::default()
+        });
+        state.drivers.insert(0, drv);
+        state.player_is_in_car = true;
+
+        // Player enters pits -> S1 closes with 82% wear attached
+        pit_road[0] = true;
+        surfaces[0] = TRK_LOC_IN_PIT_STALL;
+        laps_comp[0] = 2;
+        last_laps[0] = 31.3;
+        {
+            let frame_pit = TelemetryFrame {
+                cur_session_state: STATE_RACING,
+                flags: Some(FLAG_GREEN),
+                cur_session_time: 100.0,
+                current_fuel_sample: 50.0,
+                player_live_pressures: [0.0; 4],
+                is_on_track: true,
+                is_replay: false,
+                pit_road: &pit_road,
+                laps_comp: &laps_comp,
+                last_laps: &last_laps,
+                fast_laps: &fast_laps,
+                positions: &positions,
+                surfaces: &surfaces,
+                lap_dist_pcts: &lap_dist_pcts,
+            };
+            state.process_telemetry_frame(&frame_pit, None, false);
+        }
+        state.drivers.get_mut(&0).unwrap().stints[0].tires = StintTireSet {
+            lf: TireCornerData { wear_l: 82.0, wear_m: 82.0, wear_r: 90.0, temp_l: 90.0, temp_m: 88.0, temp_r: 85.0, pressure: 170.0 },
+            has_data: true,
+            ..Default::default()
+        };
+
+        // Player exits pits onto track (starts S2 with 0 completed laps -> locks S1)
+        pit_road[0] = false;
+        surfaces[0] = TRK_LOC_ON_TRACK;
+        {
+            let frame_exit = TelemetryFrame {
+                cur_session_state: STATE_RACING,
+                flags: Some(FLAG_GREEN),
+                cur_session_time: 110.0,
+                current_fuel_sample: 50.0,
+                player_live_pressures: [0.0; 4],
+                is_on_track: true,
+                is_replay: false,
+                pit_road: &pit_road,
+                laps_comp: &laps_comp,
+                last_laps: &last_laps,
+                fast_laps: &fast_laps,
+                positions: &positions,
+                surfaces: &surfaces,
+                lap_dist_pcts: &lap_dist_pcts,
+            };
+            state.process_telemetry_frame(&frame_exit, None, false);
+        }
+        assert!(state.drivers.get(&0).unwrap().stints[0].tires_locked, "S1 tires must lock when starting a new run");
+
+        // Player aborts S2 at 0 completed laps by escaping to garage (!in_world)
+        surfaces[0] = TRK_LOC_NOT_IN_WORLD;
+        state.player_is_in_car = false;
+        {
+            let frame_esc = TelemetryFrame {
+                cur_session_state: STATE_RACING,
+                flags: Some(FLAG_GREEN),
+                cur_session_time: 120.0,
+                current_fuel_sample: 50.0,
+                player_live_pressures: [0.0; 4],
+                is_on_track: false,
+                is_replay: false,
+                pit_road: &pit_road,
+                laps_comp: &laps_comp,
+                last_laps: &last_laps,
+                fast_laps: &fast_laps,
+                positions: &positions,
+                surfaces: &surfaces,
+                lap_dist_pcts: &lap_dist_pcts,
+            };
+            state.process_telemetry_frame(&frame_esc, None, false);
+        }
+        assert_eq!(state.drivers.get(&0).unwrap().stints.len(), 1, "Aborted 0-lap S2 must be discarded");
+
+        // Garage YAML reports 95% wear from aborted run
+        let garage_yaml = r#"
+CarSetup:
+  UpdateCount: 5
+  Tires:
+    LeftFront:
+      LastHotPressure: "25.0 psi"
+      LastTempsOMI: "180F, 175F, 170F"
+      TreadRemaining: "95%, 95%, 97%"
+    RightFront:
+      LastHotPressure: "44.0 psi"
+      LastTempsIMO: "190F, 185F, 180F"
+      TreadRemaining: "94%, 94%, 96%"
+    LeftRear:
+      LastHotPressure: "25.0 psi"
+      LastTempsOMI: "180F, 175F, 170F"
+      TreadRemaining: "95%, 95%, 97%"
+    RightRear:
+      LastHotPressure: "44.0 psi"
+      LastTempsIMO: "190F, 185F, 180F"
+      TreadRemaining: "94%, 94%, 96%"
+"#;
+        parse_iracing_session_yaml(garage_yaml, &mut state);
+        assert_eq!(state.drivers.get(&0).unwrap().stints[0].tires.lf.wear_m, 82.0, "Locked S1 must NEVER be overwritten by aborted S2 garage tires");
+    }
+
+    #[test]
+    fn test_celsius_carsetup_temps_above_120c_not_misconverted() {
+        let yaml = r#"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "Test Driver"
+CarSetup:
+  UpdateCount: 1
+  Tires:
+    LeftFront:
+      ColdPressure: "150 kPa"
+      LastHotPressure: "195 kPa"
+      LastTempsOMI: "126C, 121C, 118C"
+      TreadRemaining: "72%, 70%, 75%"
+    RightFront:
+      ColdPressure: "150 kPa"
+      LastHotPressure: "210 kPa"
+      LastTempsIMO: "132C, 128C, 124C"
+      TreadRemaining: "68%, 65%, 71%"
+    LeftRear:
+      ColdPressure: "150 kPa"
+      LastHotPressure: "190 kPa"
+      LastTempsOMI: "110C, 108C, 105C"
+      TreadRemaining: "80%, 79%, 82%"
+    RightRear:
+      ColdPressure: "150 kPa"
+      LastHotPressure: "205 kPa"
+      LastTempsIMO: "115C, 112C, 109C"
+      TreadRemaining: "76%, 75%, 78%"
+"#;
+        let mut state = WarRoomState::default();
+        assert!(parse_iracing_session_yaml(yaml, &mut state));
+        assert!((state.latest_tire_data.lf.temp_l - 126.0).abs() < 0.1, "126C must stay 126C, got {}", state.latest_tire_data.lf.temp_l);
+        assert!((state.latest_tire_data.rf.temp_l - 132.0).abs() < 0.1, "132C must stay 132C, got {}", state.latest_tire_data.rf.temp_l);
+    }
+
+    #[test]
+    fn test_rear_only_corded_wear_and_db_sync_all_corners() {
+        use crate::stint_db::{current_unix_millis, StintDatabase};
+
+        // 1. Rear-only tire set must satisfy is_valid() & has_wear_or_temps()
+        let rear_only = StintTireSet {
+            rr: TireCornerData { wear_l: 62.0, wear_m: 0.0, wear_r: 48.0, temp_l: 95.0, temp_m: 102.0, temp_r: 91.0, pressure: 240.0 },
+            has_data: true,
+            ..Default::default()
+        };
+        assert!(rear_only.is_valid(), "Rear-only tire set must be considered valid");
+        assert!(rear_only.has_wear_or_temps(), "Rear-only tire set must report has_wear_or_temps");
+
+        // 2. Corded 0.0% middle band must overwrite prior 14.0% via merge_with
+        let mut corner = TireCornerData { wear_l: 20.0, wear_m: 14.0, wear_r: 18.0, ..Default::default() };
+        let corded = TireCornerData { wear_l: 10.0, wear_m: 0.0, wear_r: 9.0, temp_l: 90.0, temp_m: 98.0, temp_r: 89.0, pressure: 190.0 };
+        corner.merge_with(&corded);
+        assert_eq!(corner.wear_m, 0.0, "Corded 0% middle band must update instead of staying on 14%");
+
+        // 3. StintDatabase sync must re-write when ONLY RR wear or RR pressure updates
+        let temp_dir = std::env::temp_dir().join(format!("s4s_rr_sync_test_{}", current_unix_millis()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let mut db = StintDatabase::load_from_dir(temp_dir.clone());
+
+        let mut state = WarRoomState::default();
+        state.track_name = "Daytona International Speedway".to_string();
+        state.car_name = "Ford Mustang GT3".to_string();
+        state.player_car_idx = 0;
+
+        let mut player = DriverState::default();
+        player.car_idx = 0;
+        player.driver_name = "Test Driver".to_string();
+        player.car_num = "12".to_string();
+        player.stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 10,
+            is_active: false,
+            tires: StintTireSet {
+                lf: TireCornerData { wear_l: 90.0, wear_m: 90.0, wear_r: 90.0, temp_l: 80.0, temp_m: 80.0, temp_r: 80.0, pressure: 180.0 },
+                rr: TireCornerData { wear_l: 85.0, wear_m: 84.0, wear_r: 86.0, temp_l: 95.0, temp_m: 94.0, temp_r: 93.0, pressure: 185.0 },
+                has_data: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        state.drivers.insert(0, player);
+
+        db.sync_player_stints_from_state(&state);
+        assert_eq!(db.records.len(), 1);
+        assert_eq!(db.records[0].stint.tires.rr.wear_m, 84.0);
+
+        // Mutate ONLY RR wear_m & pressure while LF/RF stay identical
+        state.drivers.get_mut(&0).unwrap().stints[0].tires.rr.wear_m = 72.0;
+        state.drivers.get_mut(&0).unwrap().stints[0].tires.rr.pressure = 201.0;
+        db.sync_player_stints_from_state(&state);
+        assert_eq!(db.records[0].stint.tires.rr.wear_m, 72.0, "DB sync must detect RR-only wear updates");
+        assert_eq!(db.records[0].stint.tires.rr.pressure, 201.0, "DB sync must detect RR-only pressure updates");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_cockpit_post_stint_tires_blank_on_new_session_and_ignores_cold_setup() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+
+        // Cold 100% garage CarSetup in a new session must stay invisible on Cockpit
+        let cold_yaml = r#"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "Driver"
+CarSetup:
+  UpdateCount: 1
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "22.0 psi"
+      TreadRemaining: "100%, 100%, 100%"
+    RightFront:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "40.0 psi"
+      TreadRemaining: "100%, 100%, 100%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "22.0 psi"
+      TreadRemaining: "100%, 100%, 100%"
+    RightRear:
+      ColdPressure: "40.0 psi"
+      LastHotPressure: "40.0 psi"
+      TreadRemaining: "100%, 100%, 100%"
+"#;
+        parse_iracing_session_yaml(cold_yaml, &mut state);
+        assert!(!state.latest_tire_data.has_wear_or_temps(), "Unworn 100% CarSetup must not populate latest_tire_data");
+        assert!(state.cockpit_post_stint_tires().is_none(), "Cockpit must be blank on a new session");
+
+        // Importing a saved reference stint must also NOT leak onto the Cockpit live tire panel
+        state.drivers.get_mut(&0).unwrap().stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 25,
+            is_active: false,
+            is_imported: true,
+            tires: StintTireSet {
+                lf: TireCornerData { wear_l: 65.0, wear_m: 65.0, wear_r: 65.0, ..Default::default() },
+                has_data: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert!(state.cockpit_post_stint_tires().is_none(), "Imported reference stints must not populate Cockpit TIRES panel");
+
+        // Completing a live stint with real tires DOES appear, and clears cleanly on session reset
+        state.drivers.get_mut(&0).unwrap().stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 12,
+            is_active: false,
+            is_imported: false,
+            tires: StintTireSet {
+                lf: TireCornerData { wear_l: 84.0, wear_m: 84.0, wear_r: 91.0, temp_l: 90.0, temp_m: 88.0, temp_r: 82.0, pressure: 175.0 },
+                has_data: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        assert_eq!(state.cockpit_post_stint_tires().unwrap().tires.lf.wear_m, 84.0);
+
+        state.reset_session_data(false);
+        assert!(state.cockpit_post_stint_tires().is_none(), "Cockpit TIRES panel must return to blank on new session reset");
+    }
+
+    #[test]
+    fn test_fuel_only_pit_stop_wear_sequence_and_hot_pressure_preservation() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+
+        // S1 closes cleanly with hot on-track LF pressure = 192 kPa
+        let mut s1 = StintData::default();
+        s1.stint_number = 1;
+        s1.laps_completed = 20;
+        s1.is_active = false;
+        s1.tires.lf.pressure = 192.0;
+
+        let mut player = DriverState::default();
+        player.car_idx = 0;
+        player.stints.push(s1);
+        state.drivers.insert(0, player);
+
+        // Pit Stop 1 (fuel/damage only, no tire change -> black box updates to 88%, SDK pressure resets to cold 151 kPa)
+        state.pit_entry_sdk_tires = Some(StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 60.0, temp_m: 60.0, temp_r: 60.0, pressure: 192.0 },
+            has_data: true,
+            ..Default::default()
+        });
+        let stop1_sdk = StintTireSet {
+            lf: TireCornerData { wear_l: 88.0, wear_m: 88.0, wear_r: 92.0, temp_l: 95.0, temp_m: 93.0, temp_r: 89.0, pressure: 151.0 },
+            has_data: true,
+            ..Default::default()
+        };
+        assert!(state.capture_pit_stall_sdk_tires(&stop1_sdk, true));
+        {
+            let s1_ref = &state.drivers.get(&0).unwrap().stints[0];
+            assert_eq!(s1_ref.tires.lf.wear_m, 88.0, "S1 must receive updated black-box wear even on fuel-only stop");
+            assert_eq!(s1_ref.tires.lf.pressure, 192.0, "S1 must preserve last hot pre-pit pressure instead of cold pit-stall pressure");
+        }
+
+        // Player goes back out for S2 (S1 locks) and completes 10 more laps on same tires
+        state.drivers.get_mut(&0).unwrap().stints[0].tires_locked = true;
+        let mut s2 = StintData::default();
+        s2.stint_number = 2;
+        s2.laps_completed = 10;
+        s2.is_active = false;
+        s2.tires.lf.pressure = 195.0;
+        state.drivers.get_mut(&0).unwrap().stints.push(s2);
+
+        // Entry SDK wear carries S1's 88% into Stop 2; without carcass temps, surface cooling alone must NOT attach stale 88% to S2
+        state.pit_entry_sdk_tires = Some(StintTireSet {
+            lf: TireCornerData { wear_l: 88.0, wear_m: 88.0, wear_r: 92.0, temp_l: 82.0, temp_m: 80.0, temp_r: 78.0, pressure: 195.0 },
+            has_data: true,
+            ..Default::default()
+        });
+        let cooled_surface_same_wear = StintTireSet {
+            lf: TireCornerData { wear_l: 88.0, wear_m: 88.0, wear_r: 92.0, temp_l: 70.0, temp_m: 68.0, temp_r: 66.0, pressure: 190.0 },
+            has_data: true,
+            ..Default::default()
+        };
+        assert!(!state.capture_pit_stall_sdk_tires(&cooled_surface_same_wear, false), "Surface temp cooling without wear change must not attach stale Stop-1 wear to S2");
+
+        // Now Stop 2 black box updates wear to 74% -> attaches cleanly to S2 without touching S1!
+        let stop2_sdk = StintTireSet {
+            lf: TireCornerData { wear_l: 74.0, wear_m: 74.0, wear_r: 80.0, temp_l: 97.0, temp_m: 96.0, temp_r: 92.0, pressure: 151.0 },
+            has_data: true,
+            ..Default::default()
+        };
+        assert!(state.capture_pit_stall_sdk_tires(&stop2_sdk, true));
+        let p = state.drivers.get(&0).unwrap();
+        assert_eq!(p.stints[0].tires.lf.wear_m, 88.0, "S1 must stay locked at 88%");
+        assert_eq!(p.stints[1].tires.lf.wear_m, 74.0, "S2 must receive lower 74% wear after continuing on same tires");
+        assert_eq!(p.stints[1].tires.lf.pressure, 195.0, "S2 must preserve its hot 195 kPa pressure");
     }
 }
 

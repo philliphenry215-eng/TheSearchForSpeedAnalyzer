@@ -1182,7 +1182,7 @@ impl IbtTelemetryLabState {
 
                     egui::ScrollArea::vertical()
                         .id_source("ibt_right_canvas_scroll")
-                        .max_height(avail_h)
+                        .max_height(ui.available_height().max(150.0))
                         .show(ui, |ui| {
                             if let Some(ref warn) = compatibility_warning {
                                 egui::Frame::none()
@@ -3579,31 +3579,42 @@ fn draw_gg_diagram(
         (p.clamp(0.0, 1.0) * (n.saturating_sub(1) as f32)).round() as usize
     });
 
+    let format_gg_readout = |lap_num: i32, lat_val: f32, lon_val: f32| -> String {
+        let lat_str = if lat_val > 0.05 {
+            format!("{:.2}G L", lat_val)
+        } else if lat_val < -0.05 {
+            format!("{:.2}G R", lat_val.abs())
+        } else {
+            "0.00G".to_string()
+        };
+        let lon_str = if lon_val > 0.05 {
+            format!("+{:.2}G Accel", lon_val)
+        } else if lon_val < -0.05 {
+            format!("{:.2}G Brake", lon_val)
+        } else {
+            "0.00G".to_string()
+        };
+        format!("L{:02}: {} · {}", lap_num, lat_str, lon_str)
+    };
+
     let cur_readout_a = hover_idx
         .and_then(|idx| {
             if idx < n {
-                let lat_val = lat_a[idx];
-                let lon_val = long_a[idx];
-                let lat_str = if lat_val > 0.05 {
-                    format!("{:.2}G L", lat_val)
-                } else if lat_val < -0.05 {
-                    format!("{:.2}G R", lat_val.abs())
-                } else {
-                    "0.00G".to_string()
-                };
-                let lon_str = if lon_val > 0.05 {
-                    format!("+{:.2}G Accel", lon_val)
-                } else if lon_val < -0.05 {
-                    format!("{:.2}G Brake", lon_val)
-                } else {
-                    "0.00G".to_string()
-                };
-                Some(format!("L{:02}: {} · {}", lap_a_num, lat_str, lon_str))
+                Some(format_gg_readout(lap_a_num, lat_a[idx], long_a[idx]))
             } else {
                 None
             }
         })
         .unwrap_or_else(|| format!("L{:02} Friction Cloud", lap_a_num));
+
+    let cur_readout_b = match (lap_b_num, lat_b, long_b, hover_idx) {
+        (Some(lb_num), Some(lb_lat), Some(lb_long), Some(idx))
+            if idx < lb_lat.len().min(lb_long.len()) =>
+        {
+            Some(format_gg_readout(lb_num, lb_lat[idx], lb_long[idx]))
+        }
+        _ => None,
+    };
 
     ui.horizontal(|ui| {
         ui.label(
@@ -3613,6 +3624,16 @@ fn draw_gg_diagram(
                 .strong(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(ref readout_b) = cur_readout_b {
+                ui.label(
+                    egui::RichText::new(readout_b)
+                        .color(secondary)
+                        .monospace()
+                        .size(ui_size(10.5))
+                        .strong(),
+                );
+                ui.add_space(8.0);
+            }
             ui.label(
                 egui::RichText::new(&cur_readout_a)
                     .color(primary)
@@ -3622,36 +3643,6 @@ fn draw_gg_diagram(
             );
         });
     });
-
-    if let (Some(lb_num), Some(lb_lat), Some(lb_long), Some(idx)) = (lap_b_num, lat_b, long_b, hover_idx) {
-        if idx < lb_lat.len().min(lb_long.len()) {
-            let lat_val = lb_lat[idx];
-            let lon_val = lb_long[idx];
-            let lat_str = if lat_val > 0.05 {
-                format!("{:.2}G L", lat_val)
-            } else if lat_val < -0.05 {
-                format!("{:.2}G R", lat_val.abs())
-            } else {
-                "0.00G".to_string()
-            };
-            let lon_str = if lon_val > 0.05 {
-                format!("+{:.2}G Accel", lon_val)
-            } else if lon_val < -0.05 {
-                format!("{:.2}G Brake", lon_val)
-            } else {
-                "0.00G".to_string()
-            };
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(format!("L{:02}: {} · {}", lb_num, lat_str, lon_str))
-                        .color(secondary)
-                        .monospace()
-                        .size(ui_size(10.5))
-                        .strong(),
-                );
-            });
-        }
-    }
     ui.add_space(3.0);
 
     let avail_w = ui.available_width().max(160.0);

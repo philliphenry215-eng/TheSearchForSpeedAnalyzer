@@ -648,14 +648,18 @@ impl StintDatabase {
             if rec.stint.laps_completed > 0 {
                 rec.stint.tires.sanitize_for_completed_stint();
             }
+            let corners_differ = |a: &crate::models::TireCornerData, b: &crate::models::TireCornerData| -> bool {
+                !a.matches_wear_and_temps(b) || (a.pressure - b.pressure).abs() > 0.5
+            };
             let needs_write = match self.records.iter().find(|r| r.id == rec.id) {
                 None => true,
                 Some(existing) => {
                     existing.stint.laps_completed != rec.stint.laps_completed
                         || existing.stint.tires.has_data != rec.stint.tires.has_data
-                        || (existing.stint.tires.lf.wear_m - rec.stint.tires.lf.wear_m).abs() > 0.05
-                        || (existing.stint.tires.rf.wear_m - rec.stint.tires.rf.wear_m).abs() > 0.05
-                        || (existing.stint.tires.lf.temp_m - rec.stint.tires.lf.temp_m).abs() > 0.1
+                        || corners_differ(&existing.stint.tires.lf, &rec.stint.tires.lf)
+                        || corners_differ(&existing.stint.tires.rf, &rec.stint.tires.rf)
+                        || corners_differ(&existing.stint.tires.lr, &rec.stint.tires.lr)
+                        || corners_differ(&existing.stint.tires.rr, &rec.stint.tires.rr)
                         || existing.stint.notes != rec.stint.notes
                         || existing.setup_name != rec.setup_name
                         || (existing.stint.fuel_used - rec.stint.fuel_used).abs() > 0.01

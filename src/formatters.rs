@@ -439,7 +439,7 @@ pub fn format_single_tire_tsv(corner: &str, tire: &TireCornerData, use_metric: b
     } else {
         "—".to_string()
     };
-    let temp_str = if tire.temp_m > 1.0 {
+    let temp_str = if tire.has_temps() {
         if use_metric {
             format!("{:.0}°·{:.0}°·{:.0}°C", tire.temp_l, tire.temp_m, tire.temp_r)
         } else {
@@ -448,7 +448,7 @@ pub fn format_single_tire_tsv(corner: &str, tire: &TireCornerData, use_metric: b
     } else {
         "—".to_string()
     };
-    let wear_str = if tire.wear_m > 0.01 {
+    let wear_str = if tire.has_wear() {
         format!("{:.0}%·{:.0}%·{:.0}%", tire.wear_l, tire.wear_m, tire.wear_r)
     } else {
         "—".to_string()
@@ -458,7 +458,7 @@ pub fn format_single_tire_tsv(corner: &str, tire: &TireCornerData, use_metric: b
 }
 
 pub fn format_single_tire_temps_tsv(tire: &TireCornerData, use_metric: bool) -> String {
-    if tire.temp_m > 1.0 {
+    if tire.has_temps() {
         if use_metric {
             format!("{:.0}\t{:.0}\t{:.0}", tire.temp_l, tire.temp_m, tire.temp_r)
         } else {
@@ -470,7 +470,7 @@ pub fn format_single_tire_temps_tsv(tire: &TireCornerData, use_metric: bool) -> 
 }
 
 pub fn format_single_tire_wear_tsv(tire: &TireCornerData) -> String {
-    if tire.wear_m > 0.01 {
+    if tire.has_wear() {
         format!("{:.0}%\t{:.0}%\t{:.0}%", tire.wear_l, tire.wear_m, tire.wear_r)
     } else {
         "—\t—\t—".to_string()

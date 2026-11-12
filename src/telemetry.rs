@@ -665,21 +665,28 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
                     let is_already_consumed = s
                         .last_consumed_car_setup_tires
                         .as_ref()
-                        .map_or(false, |prev| prev.matches_wear_and_temps(&garage_tires));
+                        .is_some_and(|prev| prev.matches_wear_and_temps(&garage_tires));
 
                     if !is_already_consumed {
-                        s.latest_tire_data = garage_tires.clone();
-                        s.latest_tire_data.has_data = true;
+                        let has_live_stints = s
+                            .drivers
+                            .get(&player_idx)
+                            .is_some_and(|d| d.has_live_stints());
                         if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                            if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0) {
+                            if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0 && !st.tires_locked) {
+                                s.latest_tire_data = garage_tires.clone();
+                                s.latest_tire_data.has_data = true;
                                 target_stint.tires = garage_tires.clone();
                                 target_stint.tires.has_data = true;
-                                s.last_consumed_car_setup_tires = Some(garage_tires);
+                                target_stint.tires_locked = true;
+                                s.last_consumed_car_setup_tires = Some(garage_tires.clone());
                             }
                         }
+                        if !has_live_stints {
+                            s.latest_tire_data = garage_tires;
+                            s.latest_tire_data.has_data = true;
+                        }
                     }
-                } else if !s.latest_tire_data.has_real_wear() {
-                    s.latest_tire_data = garage_tires.clone();
                 }
             }
         }
@@ -832,11 +839,12 @@ fn parse_corner_yaml(corner_val: &serde_yaml::Value, is_left: bool) -> Option<Ti
             .or_else(|| corner_val.get("Temps").and_then(|v| v.as_str()))
     };
 
-    let is_fahrenheit = temps_str.map_or(false, |s| s.contains('F') || s.contains('f'));
+    let is_fahrenheit = temps_str.is_some_and(|s| s.contains('F') || s.contains('f'));
+    let is_celsius = temps_str.is_some_and(|s| s.contains('C') || s.contains('c'));
     let parsed_temps = temps_str.and_then(parse_three_floats);
 
     let (temp_l, temp_m, temp_r) = if let Some(mut t) = parsed_temps {
-        if is_fahrenheit || t[0] > 120.0 || t[1] > 120.0 || t[2] > 120.0 {
+        if is_fahrenheit || (!is_celsius && (t[0] > 120.0 || t[1] > 120.0 || t[2] > 120.0)) {
             t[0] = (t[0] - 32.0) / 1.8;
             t[1] = (t[1] - 32.0) / 1.8;
             t[2] = (t[2] - 32.0) / 1.8;
@@ -925,6 +933,15 @@ pub fn get_sample_f32(live: &iracing::telemetry::Sample, key: &'static str) -> f
     }
 }
 
+pub fn sdk_has_carcass_temps(live: &iracing::telemetry::Sample) -> bool {
+    get_sample_f32(live, "LFtempCM") > 1.0
+        || get_sample_f32(live, "RFtempCM") > 1.0
+        || get_sample_f32(live, "LRtempCM") > 1.0
+        || get_sample_f32(live, "RRtempCM") > 1.0
+        || get_sample_f32(live, "LFtempCL") > 1.0
+        || get_sample_f32(live, "RFtempCL") > 1.0
+}
+
 pub fn read_raw_sdk_tires(live: &iracing::telemetry::Sample) -> StintTireSet {
     let to_wear = |w: f32| -> f32 {
         if w > 0.0 && w <= 1.0 { w * 100.0 } else { w.max(0.0) }
@@ -979,14 +996,15 @@ pub fn read_raw_sdk_tires(live: &iracing::telemetry::Sample) -> StintTireSet {
         pressure: get_sample_f32(live, "RRpressure").max(0.0),
     };
 
-    let has_data = lf.temp_m > 5.0 || rf.temp_m > 5.0 || lf.wear_m > 0.1 || rf.wear_m > 0.1 || lf.pressure > 1.0;
-    StintTireSet {
+    let mut res = StintTireSet {
         lf,
         rf,
         lr,
         rr,
-        has_data,
-    }
+        has_data: false,
+    };
+    res.has_data = res.is_valid();
+    res
 }
 
 pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option<&StintTireSet>) -> StintTireSet {
@@ -1080,12 +1098,13 @@ pub fn read_player_tires(live: &iracing::telemetry::Sample, previous_hot: Option
         pressure: resolve_pressure(get_sample_f32(live, "RRpressure"), prev_rr.map_or(0.0, |p| p.pressure)),
     };
 
-    let has_data = lf.temp_m > 5.0 || rf.temp_m > 5.0 || lf.wear_m > 0.1 || rf.wear_m > 0.1 || lf.pressure > 1.0;
-    StintTireSet {
+    let mut res = StintTireSet {
         lf,
         rf,
         lr,
         rr,
-        has_data,
-    }
+        has_data: false,
+    };
+    res.has_data = res.is_valid();
+    res
 }

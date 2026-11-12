@@ -1606,7 +1606,7 @@ pub(crate) fn render_overlay_tire_corner_card(
     white: egui::Color32,
     muted: egui::Color32,
 ) {
-    let avg_wear = if data.wear_m > 0.01 {
+    let avg_wear = if data.has_wear() {
         (data.wear_l + data.wear_m + data.wear_r) / 3.0
     } else {
         0.0
@@ -1637,7 +1637,7 @@ pub(crate) fn render_overlay_tire_corner_card(
     let is_left = corner_title.starts_with("LF") || corner_title.starts_with("LR");
     let zone_label = if is_left { "O·M·I" } else { "I·M·O" };
 
-    let temp_str = if data.temp_m > 1.0 {
+    let temp_str = if data.has_temps() {
         if use_metric {
             format!("{:.0}° · {:.0}° · {:.0}°C", data.temp_l, data.temp_m, data.temp_r)
         } else {
@@ -1652,7 +1652,7 @@ pub(crate) fn render_overlay_tire_corner_card(
         "— · — · —".to_string()
     };
 
-    let wear_str = if data.wear_m > 0.01 {
+    let wear_str = if data.has_wear() {
         format!("{:.0}% · {:.0}% · {:.0}%", data.wear_l, data.wear_m, data.wear_r)
     } else {
         "—% · —% · —%".to_string()
