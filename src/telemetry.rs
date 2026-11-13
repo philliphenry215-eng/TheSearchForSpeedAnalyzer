@@ -280,9 +280,21 @@ pub fn is_real_track_name(name: &str) -> bool {
 }
 
 pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool {
+    parse_iracing_session_yaml_internal(yaml_str, s, true).0
+}
+
+pub fn parse_iracing_session_yaml_deferred_tires(yaml_str: &str, s: &mut WarRoomState) -> (bool, Option<StintTireSet>) {
+    parse_iracing_session_yaml_internal(yaml_str, s, false)
+}
+
+fn parse_iracing_session_yaml_internal(
+    yaml_str: &str,
+    s: &mut WarRoomState,
+    apply_tires_now: bool,
+) -> (bool, Option<StintTireSet>) {
     let root: serde_yaml::Value = match serde_yaml::from_str(yaml_str) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(_) => return (false, None),
     };
 
     let weekend = &root["WeekendInfo"];
@@ -648,51 +660,67 @@ pub fn parse_iracing_session_yaml(yaml_str: &str, s: &mut WarRoomState) -> bool 
         }
     }
 
-    // 3. Extract definitive garage tire measurements from CarSetup (exact match to iRacing garage screen)
-    // iRacing ONLY refreshes CarSetup when the player exits the car to the garage (`!s.player_is_in_car`).
-    // During a Race (or while driving in the car), CarSetup in the YAML remains frozen on whatever was last in the garage
-    // (such as a 2-lap Qualifying run). Never let a pre-existing or in-car CarSetup overwrite active/completed race stints!
-    if let Some(car_setup) = root.get("CarSetup") {
-        if let Some(garage_tires) = parse_car_setup_tires(car_setup) {
-            if garage_tires.is_valid() {
-                if s.player_is_in_car {
-                    if garage_tires.has_real_wear() {
-                        s.last_consumed_car_setup_tires = Some(garage_tires);
-                    } else {
-                        s.last_consumed_car_setup_tires = None;
-                    }
-                } else if garage_tires.has_real_wear() {
-                    let is_already_consumed = s
-                        .last_consumed_car_setup_tires
-                        .as_ref()
-                        .is_some_and(|prev| prev.matches_wear_and_temps(&garage_tires));
-
-                    if !is_already_consumed {
-                        let has_live_stints = s
-                            .drivers
-                            .get(&player_idx)
-                            .is_some_and(|d| d.has_live_stints());
-                        if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-                            if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0 && !st.tires_locked) {
-                                s.latest_tire_data = garage_tires.clone();
-                                s.latest_tire_data.has_data = true;
-                                target_stint.tires = garage_tires.clone();
-                                target_stint.tires.has_data = true;
-                                target_stint.tires_locked = true;
-                                s.last_consumed_car_setup_tires = Some(garage_tires.clone());
-                            }
-                        }
-                        if !has_live_stints {
-                            s.latest_tire_data = garage_tires;
-                            s.latest_tire_data.has_data = true;
-                        }
-                    }
-                }
-            }
+    let extracted_garage_tires = root.get("CarSetup").and_then(parse_car_setup_tires);
+    if apply_tires_now {
+        if let Some(ref garage_tires) = extracted_garage_tires {
+            apply_car_setup_tires(garage_tires, s);
         }
     }
 
-    true
+    (true, extracted_garage_tires)
+}
+
+/// Applies parsed `CarSetup` garage tire measurements to the player's latest unlocked completed stint
+/// and `latest_tire_data` once out of the car (`!s.player_is_in_car`).
+/// Running this after `process_telemetry_frame` prevents stale `player_is_in_car == true` state on
+/// the Esc/exit-car frame from prematurely consuming brand-new garage tires.
+pub fn apply_car_setup_tires(garage_tires: &StintTireSet, s: &mut WarRoomState) -> bool {
+    if !garage_tires.is_valid() {
+        return false;
+    }
+    let player_idx = s.player_car_idx;
+    if s.player_is_in_car {
+        if garage_tires.has_real_wear() {
+            s.last_consumed_car_setup_tires = Some(garage_tires.clone());
+        } else {
+            s.last_consumed_car_setup_tires = None;
+        }
+        return false;
+    }
+    if !garage_tires.has_real_wear() {
+        return false;
+    }
+
+    let is_already_consumed = s
+        .last_consumed_car_setup_tires
+        .as_ref()
+        .is_some_and(|prev| prev.matches_wear_and_temps(garage_tires));
+    if is_already_consumed {
+        return false;
+    }
+
+    let mut updated = false;
+    let has_live_stints = s
+        .drivers
+        .get(&player_idx)
+        .is_some_and(|d| d.has_live_stints());
+    if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
+        if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0 && !st.tires_locked) {
+            s.latest_tire_data = garage_tires.clone();
+            s.latest_tire_data.has_data = true;
+            target_stint.tires = garage_tires.clone();
+            target_stint.tires.has_data = true;
+            target_stint.tires_locked = true;
+            s.last_consumed_car_setup_tires = Some(garage_tires.clone());
+            updated = true;
+        }
+    }
+    if !has_live_stints {
+        s.latest_tire_data = garage_tires.clone();
+        s.latest_tire_data.has_data = true;
+        updated = true;
+    }
+    updated
 }
 
 pub fn parse_pressure_str_to_kpa(raw: &str) -> f32 {
@@ -887,14 +915,15 @@ pub fn parse_car_setup_tires(car_setup: &serde_yaml::Value) -> Option<StintTireS
     let lr = parse_corner_yaml(lr_node, true)?;
     let rr = parse_corner_yaml(rr_node, false)?;
 
-    let has_data = lf.temp_m > 5.0 || rf.temp_m > 5.0 || lf.wear_m > 0.1 || rf.wear_m > 0.1 || lf.pressure > 1.0;
-    Some(StintTireSet {
+    let mut res = StintTireSet {
         lf,
         rf,
         lr,
         rr,
-        has_data,
-    })
+        has_data: false,
+    };
+    res.has_data = res.is_valid();
+    Some(res)
 }
 
 pub fn parse_car_setup_cold_pressures_kpa(car_setup: &serde_yaml::Value) -> Option<[f32; 4]> {

@@ -392,22 +392,28 @@ impl WarRoomApp {
                         ctx_clone.request_repaint();
 
                         let mut last_session_parse_time = std::time::Instant::now();
+                        let mut force_yaml_poll = false;
                         let mut current_fuel_sample = 0.0f32;
 
                         // Real-time 60Hz Telemetry Loop (re-reads live Header every frame)
                         while let Some((header, live)) = conn.next_sample(33) {
                             let version_changed = header.session_info_version != conn.last_session_info_version;
-                            if version_changed || last_session_parse_time.elapsed().as_secs_f32() >= 2.0 {
+                            let mut pending_garage_tires: Option<StintTireSet> = None;
+                            if version_changed || force_yaml_poll || last_session_parse_time.elapsed().as_secs_f32() >= 2.0 {
                                 last_session_parse_time = std::time::Instant::now();
+                                force_yaml_poll = false;
                                 if let Some((ver, raw_yaml)) = conn.read_yaml() {
                                     let mut s = state_clone.lock().unwrap();
-                                    if parse_iracing_session_yaml(&raw_yaml, &mut s) {
+                                    let (ok, garage_tires) = parse_iracing_session_yaml_deferred_tires(&raw_yaml, &mut s);
+                                    if ok {
                                         conn.last_session_info_version = ver;
+                                        pending_garage_tires = garage_tires;
                                     }
                                 }
                             }
 
                             let mut s = state_clone.lock().unwrap();
+                            let was_in_car = s.player_is_in_car;
                             s.is_connected = true;
 
                             // Auto-detect player car index and update track label if pending
@@ -606,8 +612,15 @@ impl WarRoomApp {
                             };
 
                             let state_changed = s.process_telemetry_frame(&frame_input, Some(&live), transition_detected);
+                            let tires_updated = pending_garage_tires
+                                .as_ref()
+                                .is_some_and(|gt| apply_car_setup_tires(gt, &mut s));
+                            if was_in_car && !s.player_is_in_car && !tires_updated {
+                                // Player just exited the car: poll YAML on the very next frame so Garage CarSetup attaches immediately.
+                                force_yaml_poll = true;
+                            }
 
-                            if state_changed || version_changed {
+                            if state_changed || version_changed || tires_updated {
                                 ctx_clone.request_repaint();
                             }
                         }
@@ -4346,6 +4359,96 @@ CarSetup:
         assert_eq!(p.stints[0].tires.lf.wear_m, 88.0, "S1 must stay locked at 88%");
         assert_eq!(p.stints[1].tires.lf.wear_m, 74.0, "S2 must receive lower 74% wear after continuing on same tires");
         assert_eq!(p.stints[1].tires.lf.pressure, 195.0, "S2 must preserve its hot 195 kPa pressure");
+    }
+
+    #[test]
+    fn test_exit_car_same_frame_carsetup_does_not_poison_last_consumed_tires() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+        state.session_type = "PRACTICE".to_string();
+        state.player_is_in_car = true;
+
+        let mut drv = DriverState::default();
+        drv.car_idx = 0;
+        drv.is_initialized = true;
+        drv.is_on_pit_road = false;
+        drv.is_in_world = true;
+        drv.stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 3,
+            is_active: true,
+            ..Default::default()
+        });
+        state.drivers.insert(0, drv);
+
+        // Simulate same-frame CarSetup update + Esc / exit-car (`TRK_LOC_NOT_IN_WORLD`)
+        let yaml = r#"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "PB Henry"
+CarSetup:
+  UpdateCount: 2
+  Tires:
+    LeftFront:
+      ColdPressure: "10.0 psi"
+      LastHotPressure: "10.3 psi"
+      LastTempsOMI: "90F, 94F, 77F"
+      TreadRemaining: "100%, 99%, 100%"
+    RightFront:
+      ColdPressure: "18.0 psi"
+      LastHotPressure: "19.1 psi"
+      LastTempsIMO: "120F, 115F, 84F"
+      TreadRemaining: "98%, 98%, 100%"
+    LeftRear:
+      ColdPressure: "10.0 psi"
+      LastHotPressure: "10.8 psi"
+      LastTempsOMI: "112F, 114F, 108F"
+      TreadRemaining: "99%, 99%, 99%"
+    RightRear:
+      ColdPressure: "18.0 psi"
+      LastHotPressure: "19.3 psi"
+      LastTempsIMO: "116F, 119F, 119F"
+      TreadRemaining: "99%, 98%, 99%"
+"#;
+        let (ok, pending_garage_tires) = parse_iracing_session_yaml_deferred_tires(yaml, &mut state);
+        assert!(ok);
+
+        let pit_road = vec![false; 2];
+        let laps_comp = vec![3i32; 2];
+        let last_laps = vec![22.55f32; 2];
+        let fast_laps = vec![22.55f32; 2];
+        let positions = vec![1i32; 2];
+        let surfaces = vec![TRK_LOC_NOT_IN_WORLD; 2];
+        let lap_dist_pcts = vec![0.1f32; 2];
+        let frame_esc = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 120.0,
+            current_fuel_sample: 20.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: false,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&frame_esc, None, false);
+
+        let updated = pending_garage_tires
+            .as_ref()
+            .is_some_and(|gt| apply_car_setup_tires(gt, &mut state));
+        assert!(updated, "Deferred CarSetup application after process_telemetry_frame must immediately attach tires on Esc");
+
+        let s1 = &state.drivers.get(&0).unwrap().stints[0];
+        assert!(s1.tires.has_data);
+        assert_eq!(s1.tires.rf.wear_m, 98.0);
+        assert!((s1.tires.rf.pressure * 0.145038 - 19.1).abs() < 0.15);
     }
 }
 
