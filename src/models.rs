@@ -73,6 +73,11 @@ impl TireCornerData {
             && (self.temp_r - other.temp_r).abs() < 0.05
     }
 
+    /// Returns true if wear, carcass temperatures, and pressure all match within tolerance.
+    pub fn matches_wear_temps_and_pressure(&self, other: &TireCornerData) -> bool {
+        self.matches_wear_and_temps(other) && (self.pressure - other.pressure).abs() < 0.1
+    }
+
     /// Intelligently merge `incoming` into `self`:
     /// - Wear: Never let brand-new / unworn (>= 99.5%) tires overwrite real wear (< 99.5%).
     ///   When `incoming` has genuine post-stint wear (< 99.5%), adopt `incoming` wear and carcass temps directly.
@@ -148,6 +153,14 @@ impl StintTireSet {
             && self.rf.matches_wear_and_temps(&other.rf)
             && self.lr.matches_wear_and_temps(&other.lr)
             && self.rr.matches_wear_and_temps(&other.rr)
+    }
+
+    /// Returns true if all 4 corners have matching wear, temperatures, and pressures.
+    pub fn matches_wear_temps_and_pressure(&self, other: &StintTireSet) -> bool {
+        self.lf.matches_wear_temps_and_pressure(&other.lf)
+            && self.rf.matches_wear_temps_and_pressure(&other.rf)
+            && self.lr.matches_wear_temps_and_pressure(&other.lr)
+            && self.rr.matches_wear_temps_and_pressure(&other.rr)
     }
 
     pub fn merge_with(&mut self, incoming: &StintTireSet) {

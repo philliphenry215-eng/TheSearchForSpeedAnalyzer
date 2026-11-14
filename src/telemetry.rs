@@ -703,6 +703,22 @@ fn is_hotter_than_baseline(t: &StintTireSet, baseline: &StintTireSet) -> bool {
         || corner_rose(&t.rr, &baseline.rr)
 }
 
+fn is_cooler_than_existing(incoming: &StintTireSet, existing: &StintTireSet) -> bool {
+    if !existing.has_temps() || is_hotter_than_baseline(incoming, existing) {
+        return false;
+    }
+    let corner_cooled = |inc: &crate::models::TireCornerData, cur: &crate::models::TireCornerData| -> bool {
+        (cur.temp_l - inc.temp_l) > 1.0
+            || (cur.temp_m - inc.temp_m) > 1.0
+            || (cur.temp_r - inc.temp_r) > 1.0
+            || (inc.pressure > 1.0 && (cur.pressure - inc.pressure) > 0.5)
+    };
+    corner_cooled(&incoming.lf, &existing.lf)
+        || corner_cooled(&incoming.rf, &existing.rf)
+        || corner_cooled(&incoming.lr, &existing.lr)
+        || corner_cooled(&incoming.rr, &existing.rr)
+}
+
 /// Applies parsed `CarSetup` garage tire measurements to the player's latest unlocked completed stint
 /// and `latest_tire_data` once out of the car (`!s.player_is_in_car`).
 /// Running this after `process_telemetry_frame` prevents stale `player_is_in_car == true` state on
@@ -713,8 +729,15 @@ pub fn apply_car_setup_tires(garage_tires: &StintTireSet, s: &mut WarRoomState) 
     }
     let player_idx = s.player_car_idx;
     if s.player_is_in_car {
+        let has_run_with_laps = s.drivers.get(&player_idx).is_some_and(|d| {
+            d.stints.iter().any(|st| !st.is_imported && !st.tires_locked && st.laps_completed > 0)
+        });
         if garage_tires.has_real_wear() {
-            s.last_consumed_car_setup_tires = Some(garage_tires.clone());
+            // Only mark pre-existing worn CarSetup as consumed before any live laps exist on the run.
+            // If the player already completed laps, CarSetup may update just before IsOnTrack clears on Esc.
+            if !has_run_with_laps {
+                s.last_consumed_car_setup_tires = Some(garage_tires.clone());
+            }
         } else {
             s.last_consumed_car_setup_tires = None;
             s.baseline_car_setup_tires = Some(garage_tires.clone());
@@ -725,7 +748,7 @@ pub fn apply_car_setup_tires(garage_tires: &StintTireSet, s: &mut WarRoomState) 
     let is_already_consumed = s
         .last_consumed_car_setup_tires
         .as_ref()
-        .is_some_and(|prev| prev.matches_wear_and_temps(garage_tires));
+        .is_some_and(|prev| prev.matches_wear_temps_and_pressure(garage_tires));
     if is_already_consumed {
         return false;
     }
@@ -763,12 +786,26 @@ pub fn apply_car_setup_tires(garage_tires: &StintTireSet, s: &mut WarRoomState) 
         .get(&player_idx)
         .is_some_and(|d| d.has_live_stints());
     if let Some(player_drv) = s.drivers.get_mut(&player_idx) {
-        if let Some(target_stint) = player_drv.stints.iter_mut().rev().find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0 && !st.tires_locked) {
+        if let Some(target_stint) = player_drv
+            .stints
+            .iter_mut()
+            .rev()
+            .find(|st| !st.is_imported && !st.is_active && st.laps_completed > 0 && !st.tires_locked)
+        {
+            // Never downgrade real wear (< 99.5%) or hotter exit measurements to a cold/reset 100% setup.
+            let protect_existing_tires = !garage_tires.has_real_wear()
+                && (target_stint.tires.has_real_wear()
+                    || is_cooler_than_existing(garage_tires, &target_stint.tires));
+            if protect_existing_tires {
+                return false;
+            }
+
+            // Keep `target_stint.tires_locked` false until the driver starts the next on-track stint
+            // so provisional exit readings update cleanly when finalized Garage CarSetup arrives.
             s.latest_tire_data = garage_tires.clone();
             s.latest_tire_data.has_data = true;
             target_stint.tires = garage_tires.clone();
             target_stint.tires.has_data = true;
-            target_stint.tires_locked = true;
             s.last_consumed_car_setup_tires = Some(garage_tires.clone());
             updated = true;
         }
@@ -831,8 +868,8 @@ pub fn parse_three_floats(raw: &str) -> Option<[f32; 3]> {
     }
 }
 
-fn node_has_tire_fields(node: &serde_yaml::Value) -> bool {
-    let tire_keys = [
+fn corner_tire_match_rank(node: &serde_yaml::Value) -> u8 {
+    let measured_keys = [
         "LastHotPressure",
         "Last Hot Pressure",
         "LastPressure",
@@ -849,54 +886,81 @@ fn node_has_tire_fields(node: &serde_yaml::Value) -> bool {
         "TreadRemaining",
         "Tread Remaining",
         "Wear",
-        "StartingPressure",
-        "ColdPressure",
     ];
-    tire_keys.iter().any(|k| node.get(*k).is_some())
+    if measured_keys.iter().any(|k| node.get(*k).is_some()) {
+        return 3;
+    }
+    let cold_keys = [
+        "StartingPressure",
+        "Starting Pressure",
+        "ColdPressure",
+        "Cold Pressure",
+    ];
+    if cold_keys.iter().any(|k| node.get(*k).is_some()) {
+        return 2;
+    }
+    if node.is_mapping() { 1 } else { 0 }
+}
+
+fn find_corner_recursive<'a>(
+    node: &'a serde_yaml::Value,
+    corner_keys: &[&str],
+    depth: u8,
+) -> Option<(&'a serde_yaml::Value, u8)> {
+    let mut best: Option<(&'a serde_yaml::Value, u8)> = None;
+    let consider = |best: &mut Option<(&'a serde_yaml::Value, u8)>, cand: &'a serde_yaml::Value, rank: u8| {
+        if rank > best.map_or(0, |(_, r)| r) {
+            *best = Some((cand, rank));
+        }
+    };
+
+    for key in corner_keys {
+        if let Some(c) = node.get(*key) {
+            let rank = corner_tire_match_rank(c);
+            consider(&mut best, c, rank);
+            if rank == 3 {
+                return best;
+            }
+        }
+    }
+    if depth == 0 {
+        return best;
+    }
+    if let Some(map) = node.as_mapping() {
+        for (_k, v) in map {
+            if let Some((c, rank)) = find_corner_recursive(v, corner_keys, depth - 1) {
+                consider(&mut best, c, rank);
+                if rank == 3 {
+                    return best;
+                }
+            }
+        }
+    }
+    best
 }
 
 fn find_setup_corner<'a>(root: &'a serde_yaml::Value, corner_keys: &[&str]) -> Option<&'a serde_yaml::Value> {
-    let mut fallback: Option<&'a serde_yaml::Value> = None;
+    let mut best: Option<(&'a serde_yaml::Value, u8)> = None;
+    let consider = |best: &mut Option<(&'a serde_yaml::Value, u8)>, cand: &'a serde_yaml::Value, rank: u8| {
+        if rank > best.map_or(0, |(_, r)| r) {
+            *best = Some((cand, rank));
+        }
+    };
 
     for parent in &["Tires", "TiresAero", "Tire", "Chassis", "Suspension"] {
         if let Some(p) = root.get(*parent) {
-            for key in corner_keys {
-                if let Some(c) = p.get(*key) {
-                    if node_has_tire_fields(c) {
-                        return Some(c);
-                    }
-                    if fallback.is_none() {
-                        fallback = Some(c);
-                    }
+            if let Some((c, rank)) = find_corner_recursive(p, corner_keys, 3) {
+                consider(&mut best, c, rank);
+                if rank == 3 {
+                    return Some(c);
                 }
             }
         }
     }
-    for key in corner_keys {
-        if let Some(c) = root.get(*key) {
-            if node_has_tire_fields(c) {
-                return Some(c);
-            }
-            if fallback.is_none() {
-                fallback = Some(c);
-            }
-        }
+    if let Some((c, rank)) = find_corner_recursive(root, corner_keys, 2) {
+        consider(&mut best, c, rank);
     }
-    if let Some(map) = root.as_mapping() {
-        for (_k, v) in map {
-            for key in corner_keys {
-                if let Some(c) = v.get(*key) {
-                    if node_has_tire_fields(c) {
-                        return Some(c);
-                    }
-                    if fallback.is_none() {
-                        fallback = Some(c);
-                    }
-                }
-            }
-        }
-    }
-    fallback
+    best.map(|(c, _)| c)
 }
 
 fn parse_corner_yaml(corner_val: &serde_yaml::Value, is_left: bool) -> Option<TireCornerData> {

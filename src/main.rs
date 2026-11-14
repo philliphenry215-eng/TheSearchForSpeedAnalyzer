@@ -623,7 +623,11 @@ impl WarRoomApp {
                             let tires_updated = pending_garage_tires
                                 .as_ref()
                                 .is_some_and(|gt| apply_car_setup_tires(gt, &mut s));
-                            if s.player_is_in_car || tires_updated {
+                            let garage_has_real_wear = tires_updated
+                                && pending_garage_tires
+                                    .as_ref()
+                                    .is_some_and(|gt| gt.has_real_wear());
+                            if s.player_is_in_car || garage_has_real_wear {
                                 post_exit_poll_deadline = None;
                             } else if was_in_car && !s.player_is_in_car {
                                 // Player just exited the car: burst-poll YAML every ~200ms for up to 6s so
@@ -4639,6 +4643,134 @@ CarSetup:
         }
         state.process_telemetry_frame(&exit_frame, None, false);
         assert_eq!(state.tire_popup_trigger_seq, 0, "Esc inside pit stall without pit exit must NOT trigger pit-exit popup");
+    }
+
+    #[test]
+    fn test_qualifying_exit_provisional_100pct_updates_when_final_garage_car_setup_arrives() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+        state.session_type = "LONE QUALIFY".to_string();
+        state.player_is_in_car = true;
+
+        // Pre-run cold baseline
+        let psi_to_kpa = 1.0 / 0.145038;
+        let f_to_c = |f: f32| (f - 32.0) / 1.8;
+        let cold_baseline = StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(80.0), temp_m: f_to_c(80.0), temp_r: f_to_c(80.0), pressure: 22.0 * psi_to_kpa },
+            rf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(80.0), temp_m: f_to_c(80.0), temp_r: f_to_c(80.0), pressure: 45.0 * psi_to_kpa },
+            lr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(80.0), temp_m: f_to_c(80.0), temp_r: f_to_c(80.0), pressure: 22.0 * psi_to_kpa },
+            rr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(80.0), temp_m: f_to_c(80.0), temp_r: f_to_c(80.0), pressure: 45.0 * psi_to_kpa },
+            has_data: true,
+        };
+        assert!(!apply_car_setup_tires(&cold_baseline, &mut state));
+
+        // Player completes 2 qualifying laps (S1)
+        let mut drv = DriverState::default();
+        drv.car_idx = 0;
+        drv.is_initialized = true;
+        drv.is_in_world = true;
+        drv.stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 2,
+            is_active: true,
+            tires: StintTireSet {
+                lf: TireCornerData { pressure: 23.6 * psi_to_kpa, ..Default::default() },
+                rf: TireCornerData { pressure: 46.7 * psi_to_kpa, ..Default::default() },
+                lr: TireCornerData { pressure: 24.1 * psi_to_kpa, ..Default::default() },
+                rr: TireCornerData { pressure: 46.7 * psi_to_kpa, ..Default::default() },
+                has_data: true,
+            },
+            ..Default::default()
+        });
+        state.drivers.insert(0, drv);
+
+        // Player hits Esc (`player_is_in_car = false`, `S1.is_active = false`)
+        state.player_is_in_car = false;
+        state.drivers.get_mut(&0).unwrap().stints[0].is_active = false;
+
+        // First, provisional cooler 100% readout arrives (like live SDK / intermediate update on Esc)
+        let provisional_100pct = StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(106.0), temp_m: f_to_c(100.0), temp_r: f_to_c(88.0), pressure: 23.6 * psi_to_kpa },
+            rf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(122.0), temp_m: f_to_c(117.0), temp_r: f_to_c(104.0), pressure: 46.7 * psi_to_kpa },
+            lr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(115.0), temp_m: f_to_c(113.0), temp_r: f_to_c(111.0), pressure: 24.1 * psi_to_kpa },
+            rr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: f_to_c(117.0), temp_m: f_to_c(117.0), temp_r: f_to_c(113.0), pressure: 46.7 * psi_to_kpa },
+            has_data: true,
+        };
+        assert!(apply_car_setup_tires(&provisional_100pct, &mut state));
+        assert!(!state.drivers.get(&0).unwrap().stints[0].tires_locked, "Completed S1 must remain unlocked until next run so finalized Garage data can replace provisional exit snapshot");
+
+        // Now finalized iRacing Garage CarSetup arrives (`99%`, `25.0 / 49.2 / 25.9 / 49.2 psi`, `148F / 176F / 163F / 164F`)
+        let final_garage_yaml = r#"
+DriverInfo:
+  DriverCarIdx: 0
+  Drivers:
+    - CarIdx: 0
+      UserName: "PB Henry"
+CarSetup:
+  UpdateCount: 3
+  Chassis:
+    LeftFront:
+      RideHeight: "4.00 in"
+  Tires:
+    LeftFront:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "25.0 psi"
+      LastTempsOMI: "148F, 140F, 113F"
+      TreadRemaining: "99%, 99%, 100%"
+    RightFront:
+      ColdPressure: "45.0 psi"
+      LastHotPressure: "49.2 psi"
+      LastTempsIMO: "176F, 165F, 145F"
+      TreadRemaining: "99%, 99%, 99%"
+    LeftRear:
+      ColdPressure: "22.0 psi"
+      LastHotPressure: "25.9 psi"
+      LastTempsOMI: "163F, 162F, 159F"
+      TreadRemaining: "99%, 99%, 99%"
+    RightRear:
+      ColdPressure: "45.0 psi"
+      LastHotPressure: "49.2 psi"
+      LastTempsIMO: "164F, 163F, 161F"
+      TreadRemaining: "99%, 99%, 99%"
+"#;
+        assert!(parse_iracing_session_yaml(final_garage_yaml, &mut state));
+
+        let cockpit_s1 = state.cockpit_post_stint_tires().expect("Cockpit S1 must exist");
+        assert_eq!(cockpit_s1.tires.lf.wear_l, 99.0);
+        assert_eq!(cockpit_s1.tires.lf.wear_m, 99.0);
+        assert_eq!(cockpit_s1.tires.lf.wear_r, 100.0);
+        assert_eq!(cockpit_s1.tires.rf.wear_m, 99.0);
+        assert!((cockpit_s1.tires.lf.pressure * 0.145038 - 25.0).abs() < 0.15);
+        assert!((cockpit_s1.tires.rf.pressure * 0.145038 - 49.2).abs() < 0.15);
+        assert!((cockpit_s1.tires.lf.temp_l * 1.8 + 32.0 - 148.0).abs() < 0.5);
+        assert!((cockpit_s1.tires.rf.temp_l * 1.8 + 32.0 - 176.0).abs() < 0.5);
+
+        // Fresh 100% cold setup load must NOT overwrite the finalized 99% Garage readings
+        assert!(!apply_car_setup_tires(&cold_baseline, &mut state));
+        let s1_after_cold = &state.drivers.get(&0).unwrap().stints[0];
+        assert_eq!(s1_after_cold.tires.lf.wear_m, 99.0);
+        assert!((s1_after_cold.tires.lf.pressure * 0.145038 - 25.0).abs() < 0.15);
+
+        // Pre-exit frame race guard: new CarSetup arriving 1 frame while still in car after completing laps
+        // must NOT poison `last_consumed_car_setup_tires` before `IsOnTrack` clears on Esc.
+        let mut s2_state = WarRoomState::default();
+        s2_state.player_car_idx = 0;
+        s2_state.player_is_in_car = true;
+        let mut d2 = DriverState::default();
+        d2.car_idx = 0;
+        d2.is_initialized = true;
+        d2.stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 2,
+            is_active: true,
+            ..Default::default()
+        });
+        s2_state.drivers.insert(0, d2);
+        assert!(!parse_iracing_session_yaml(final_garage_yaml, &mut s2_state) || s2_state.last_consumed_car_setup_tires.is_none());
+        s2_state.player_is_in_car = false;
+        s2_state.drivers.get_mut(&0).unwrap().stints[0].is_active = false;
+        assert!(parse_iracing_session_yaml(final_garage_yaml, &mut s2_state));
+        assert_eq!(s2_state.drivers.get(&0).unwrap().stints[0].tires.rf.wear_m, 99.0);
     }
 }
 
