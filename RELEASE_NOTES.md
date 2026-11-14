@@ -1,3 +1,13 @@
+# The Search For Speed Analyzer — v0.5.12
+
+### Immediate Post-Exit Tire Checks & Pit-Exit Popup Focus:
+* **Faster Post-Exit Tire Capture (`Esc`):**
+  * Cockpit `TIRES` and Stint Log tires now continue checking live SDK wear/temperatures immediately after exiting the car (with upward carcass-temp validation so cold resets never overwrite real data), paired with a 200 ms / 6-second post-exit `CarSetup` YAML burst poll so measurements latch as soon as iRacing publishes them.
+* **Pit-Exit-Only Floating Tire Popup:**
+  * Kept the floating post-pit Tire Popup strictly tied to **Pit Exit** (driving back out onto the track) so it never pops up uninvited when exiting the car or opening the Garage.
+
+---
+
 # The Search For Speed Analyzer — v0.5.11
 
 ### Seamless 100% Corner & Short-Stint Tire Capture:
@@ -17,20 +27,3 @@
   * Exiting the car now forces an immediate YAML check and UI refresh so wear, hot pressures, and pyrometer temperatures attach right away.
 * **4-Corner Garage Tire Validity & Doc Cleanup:**
   * Ensured garage tire detection checks all 4 corners consistently, and streamlined `RELEASE_NOTES.md` and `CHANGELOG.md` into clean driver-focused highlights.
-
----
-
-# The Search For Speed Analyzer — v0.5.9
-
-### Tire Accuracy, Cockpit Display & .IBT Comparison Polish:
-* **Post-Stint Tire Tracking:**
-  * Completed stint tire wear is now locked in as soon as you head back out on track or check the garage, so aborted out-laps never overwrite an earlier stint's tire numbers.
-  * Fuel-only and damage-repair pit stops now attach your updated black-box tire wear to the stint that just ended while keeping your final hot on-track tire pressures.
-* **Cockpit Tires Panel:**
-  * Always stays locked on your own latest post-stint pit or garage tire readout—clicking around in the Stint Log or importing reference stints no longer changes the Cockpit panel.
-  * Starts clean (`TIRES · AWAITING PIT`) at the start of every new session until you complete laps and pit or return to the garage.
-* **4-Corner Wear, Corded Tires & Setup Exports:**
-  * Full 4-corner detection and display across UI cards, overlay popups, Discord share cards, Excel exports, and Saved Stints (`LR`/`RR` corners and `0%` corded bands now display properly).
-  * Fixed Celsius garage tire temperatures above 120°C being misconverted, and hid local `.sto` setup buttons when inspecting competitor stints.
-* **.IBT Telemetry Lab:**
-  * Fixed the analysis scroll area height and moved the Lap B G-G readout inline in the header so Lap A vs. Lap B comparisons stay aligned without shifting the layout.

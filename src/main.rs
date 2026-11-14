@@ -393,14 +393,22 @@ impl WarRoomApp {
 
                         let mut last_session_parse_time = std::time::Instant::now();
                         let mut force_yaml_poll = false;
+                        let mut post_exit_poll_deadline: Option<std::time::Instant> = None;
+                        let mut last_post_exit_poll = std::time::Instant::now();
                         let mut current_fuel_sample = 0.0f32;
 
                         // Real-time 60Hz Telemetry Loop (re-reads live Header every frame)
                         while let Some((header, live)) = conn.next_sample(33) {
                             let version_changed = header.session_info_version != conn.last_session_info_version;
+                            let post_exit_due = post_exit_poll_deadline.is_some_and(|dl| {
+                                std::time::Instant::now() <= dl && last_post_exit_poll.elapsed().as_secs_f32() >= 0.20
+                            });
                             let mut pending_garage_tires: Option<StintTireSet> = None;
-                            if version_changed || force_yaml_poll || last_session_parse_time.elapsed().as_secs_f32() >= 2.0 {
+                            if version_changed || force_yaml_poll || post_exit_due || last_session_parse_time.elapsed().as_secs_f32() >= 2.0 {
                                 last_session_parse_time = std::time::Instant::now();
+                                if post_exit_due {
+                                    last_post_exit_poll = std::time::Instant::now();
+                                }
                                 force_yaml_poll = false;
                                 if let Some((ver, raw_yaml)) = conn.read_yaml() {
                                     let mut s = state_clone.lock().unwrap();
@@ -615,9 +623,16 @@ impl WarRoomApp {
                             let tires_updated = pending_garage_tires
                                 .as_ref()
                                 .is_some_and(|gt| apply_car_setup_tires(gt, &mut s));
-                            if was_in_car && !s.player_is_in_car && !tires_updated {
-                                // Player just exited the car: poll YAML on the very next frame so Garage CarSetup attaches immediately.
+                            if s.player_is_in_car || tires_updated {
+                                post_exit_poll_deadline = None;
+                            } else if was_in_car && !s.player_is_in_car {
+                                // Player just exited the car: burst-poll YAML every ~200ms for up to 6s so
+                                // CarSetup wear/temps attach as soon as iRacing publishes them.
                                 force_yaml_poll = true;
+                                last_post_exit_poll = std::time::Instant::now();
+                                post_exit_poll_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(6));
+                            } else if post_exit_poll_deadline.is_some_and(|dl| std::time::Instant::now() > dl) {
+                                post_exit_poll_deadline = None;
                             }
 
                             if state_changed || version_changed || tires_updated {
@@ -4548,6 +4563,82 @@ CarSetup:
         // 4. Subsequent cold setup load must NOT overwrite the locked 100%-hot stint
         assert!(!apply_car_setup_tires(&cold_baseline, &mut state));
         assert!((state.drivers.get(&0).unwrap().stints[0].tires.rr.temp_m - 63.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn test_tire_popup_fires_only_on_pit_exit_not_on_exit_car_or_garage() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+        state.session_type = "PRACTICE".to_string();
+        state.player_is_in_car = true;
+
+        let mut drv = DriverState::default();
+        drv.car_idx = 0;
+        drv.is_initialized = true;
+        drv.is_on_pit_road = false;
+        drv.is_in_world = true;
+        drv.stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 4,
+            is_active: true,
+            ..Default::default()
+        });
+        state.drivers.insert(0, drv);
+
+        // Scenario A: Driver completes 4 laps on track and exits the car (`Esc`).
+        // Cockpit & Stint Tires must update immediately when tires arrive, WITHOUT triggering the floating pit-exit popup.
+        let pit_road = vec![false; 1];
+        let laps_comp = vec![4; 1];
+        let last_laps = vec![24.0; 1];
+        let fast_laps = vec![24.0; 1];
+        let positions = vec![1; 1];
+        let surfaces = vec![TRK_LOC_NOT_IN_WORLD; 1];
+        let lap_dist_pcts = vec![0.10; 1];
+        let exit_frame = TelemetryFrame {
+            cur_session_state: STATE_RACING,
+            flags: Some(FLAG_GREEN),
+            cur_session_time: 100.0,
+            current_fuel_sample: 20.0,
+            player_live_pressures: [0.0; 4],
+            is_on_track: false,
+            is_replay: false,
+            pit_road: &pit_road,
+            laps_comp: &laps_comp,
+            last_laps: &last_laps,
+            fast_laps: &fast_laps,
+            positions: &positions,
+            surfaces: &surfaces,
+            lap_dist_pcts: &lap_dist_pcts,
+        };
+        state.process_telemetry_frame(&exit_frame, None, false);
+
+        let s1_tires = StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 30.0, temp_m: 34.0, temp_r: 28.0, pressure: 56.0 },
+            rf: TireCornerData { wear_l: 98.0, wear_m: 98.0, wear_r: 99.0, temp_l: 58.0, temp_m: 56.0, temp_r: 51.0, pressure: 79.0 },
+            lr: TireCornerData { wear_l: 99.0, wear_m: 99.0, wear_r: 99.0, temp_l: 62.0, temp_m: 62.0, temp_r: 60.0, pressure: 68.0 },
+            rr: TireCornerData { wear_l: 96.0, wear_m: 96.0, wear_r: 97.0, temp_l: 74.0, temp_m: 74.0, temp_r: 72.0, pressure: 101.0 },
+            has_data: true,
+        };
+        assert!(apply_car_setup_tires(&s1_tires, &mut state));
+        assert!(state.cockpit_post_stint_tires().is_some(), "Cockpit TIRES must update after exit");
+        assert_eq!(state.tire_popup_trigger_seq, 0, "Exit car / Garage must NOT trigger the pit-exit tire popup");
+
+        // Scenario B: Pit-stall capture followed by Esc in pit stall (no pit exit) also does NOT trigger pit-exit popup.
+        state.player_is_in_car = true;
+        {
+            let drv = state.drivers.get_mut(&0).unwrap();
+            drv.is_in_world = true;
+            drv.is_on_pit_road = true;
+            drv.stints.push(StintData {
+                stint_number: 2,
+                laps_completed: 5,
+                is_active: false,
+                tires: s1_tires.clone(),
+                ..Default::default()
+            });
+        }
+        state.process_telemetry_frame(&exit_frame, None, false);
+        assert_eq!(state.tire_popup_trigger_seq, 0, "Esc inside pit stall without pit exit must NOT trigger pit-exit popup");
     }
 }
 

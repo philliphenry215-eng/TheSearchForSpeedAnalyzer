@@ -1932,9 +1932,25 @@ impl WarRoomState {
                     state_changed = true;
                 }
             }
+        } else if !self.player_is_in_car {
+            let needs_exit_tires = self.drivers.get(&player_idx).is_some_and(|d| {
+                d.stints
+                    .iter()
+                    .rev()
+                    .any(|st| !st.is_imported && !st.is_active && st.laps_completed > 0 && !st.tires_locked && !st.tires.has_wear_or_temps())
+            });
+            if needs_exit_tires {
+                if let Some(live) = live_sample {
+                    let raw_tires = read_raw_sdk_tires(live);
+                    let has_carcass = sdk_has_carcass_temps(live);
+                    if self.capture_pit_stall_sdk_tires(&raw_tires, has_carcass) {
+                        state_changed = true;
+                    }
+                }
+            }
         }
 
-        // Post-pit tire popup: show the tires of the stint that just ended as the player drives off pit road.
+        // Post-pit tire popup: ONLY fires when the player drives off pit road back onto the track.
         if disarm_tire_popup {
             self.tire_popup_armed_stint = 0;
         }
@@ -1950,7 +1966,7 @@ impl WarRoomState {
                 }).unwrap_or(1)
             };
             self.tire_popup_armed_stint = 0;
-            let has_real_tire_data = self.drivers.get(&player_idx).map_or(false, |d| {
+            let has_real_tire_data = self.drivers.get(&player_idx).is_some_and(|d| {
                 d.stints.iter().any(|st| !st.is_imported && st.stint_number == stint_num && (st.tires.has_wear() || st.tires.has_wear_or_temps()))
             });
             if has_real_tire_data {
@@ -1996,8 +2012,8 @@ impl WarRoomState {
         self.clone()
     }
 
-    /// Attaches post-stint pit-stall SDK wear and carcass temperatures to the player's
-    /// unlocked completed stint that just pitted, preserving pre-pit hot pressures.
+    /// Attaches post-stint pit-stall / post-exit SDK wear and carcass temperatures to the player's
+    /// unlocked completed stint, preserving pre-pit hot pressures.
     pub fn capture_pit_stall_sdk_tires(&mut self, raw_tires: &StintTireSet, has_carcass: bool) -> bool {
         let not_stale_yaml = self.last_consumed_car_setup_tires.as_ref().is_none_or(|stale| {
             !raw_tires.matches_wear_and_temps(stale)
@@ -2028,9 +2044,10 @@ impl WarRoomState {
         let corner_carcass_jumped = |raw_c: &TireCornerData, entry_c: Option<&TireCornerData>| -> bool {
             match entry_c {
                 Some(e) => {
-                    (raw_c.temp_l - e.temp_l).abs() >= 1.0
-                        || (raw_c.temp_m - e.temp_m).abs() >= 1.0
-                        || (raw_c.temp_r - e.temp_r).abs() >= 1.0
+                    // Require upward carcass heating rather than cooling back down to ambient cold resets.
+                    raw_c.temp_l > e.temp_l + 1.0
+                        || raw_c.temp_m > e.temp_m + 1.0
+                        || raw_c.temp_r > e.temp_r + 1.0
                 }
                 None => raw_c.temp_l > 35.0 || raw_c.temp_m > 35.0 || raw_c.temp_r > 35.0,
             }
