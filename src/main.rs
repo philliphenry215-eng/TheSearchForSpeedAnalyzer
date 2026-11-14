@@ -4450,6 +4450,105 @@ CarSetup:
         assert_eq!(s1.tires.rf.wear_m, 98.0);
         assert!((s1.tires.rf.pressure * 0.145038 - 19.1).abs() < 0.15);
     }
+
+    #[test]
+    fn test_dirt_late_model_lf_100_percent_attaches_in_pit_stall_without_garage() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+        state.session_type = "PRACTICE".to_string();
+
+        let mut drv = DriverState::default();
+        drv.car_idx = 0;
+        drv.is_initialized = true;
+        drv.stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 6,
+            is_active: false,
+            tires_locked: false,
+            ..Default::default()
+        });
+        state.drivers.insert(0, drv);
+
+        // Pre-stall entry reading before pit crew updates black box / SDK channels
+        state.pit_entry_sdk_tires = Some(StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 55.8 },
+            rf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 77.9 },
+            lr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 66.9 },
+            rr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 100.0 },
+            has_data: true,
+        });
+
+        // Pit stall readout matches Dirt Late Model screenshot: LF 100%, RF 99%, LR 98%, RR 95%
+        let pit_stall_sdk = StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 25.0, temp_m: 31.1, temp_r: 23.9, pressure: 55.8 },
+            rf: TireCornerData { wear_l: 99.0, wear_m: 99.0, wear_r: 99.0, temp_l: 56.1, temp_m: 56.1, temp_r: 52.2, pressure: 77.9 },
+            lr: TireCornerData { wear_l: 98.0, wear_m: 98.0, wear_r: 98.0, temp_l: 67.2, temp_m: 67.2, temp_r: 67.2, pressure: 66.9 },
+            rr: TireCornerData { wear_l: 95.0, wear_m: 95.0, wear_r: 95.0, temp_l: 77.2, temp_m: 77.2, temp_r: 76.1, pressure: 100.0 },
+            has_data: true,
+        };
+        assert!(state.capture_pit_stall_sdk_tires(&pit_stall_sdk, true));
+
+        let s1 = &state.drivers.get(&0).unwrap().stints[0];
+        assert!(s1.tires.has_data);
+        assert_eq!(s1.tires.lf.wear_m, 100.0, "LF 100% must populate immediately in pit stall alongside worn corners");
+        assert!((s1.tires.lf.temp_m - 31.1).abs() < 0.05, "LF carcass temp must populate immediately in pit stall");
+        assert!((s1.tires.lf.pressure - 55.8).abs() < 0.1, "LF pressure must populate immediately in pit stall");
+        assert_eq!(s1.tires.rf.wear_m, 99.0);
+        assert_eq!(s1.tires.lr.wear_m, 98.0);
+        assert_eq!(s1.tires.rr.wear_m, 95.0);
+    }
+
+    #[test]
+    fn test_all_corners_100_percent_with_hot_temps_attaches_on_short_run_and_survives_db_sync() {
+        let mut state = WarRoomState::default();
+        state.player_car_idx = 0;
+        state.session_type = "PRACTICE".to_string();
+
+        // 1. Pre-run cold baseline in garage / while getting in car
+        let cold_baseline = StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 55.0 },
+            rf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 75.0 },
+            lr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 65.0 },
+            rr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 22.0, temp_m: 22.0, temp_r: 22.0, pressure: 95.0 },
+            has_data: true,
+        };
+        assert!(!apply_car_setup_tires(&cold_baseline, &mut state), "Cold setup with no stints must not attach");
+
+        // 2. Short 2-lap run completed, all 4 corners still 100%, carcass temps heated up in pit stall
+        let mut drv = DriverState::default();
+        drv.car_idx = 0;
+        drv.is_initialized = true;
+        drv.stints.push(StintData {
+            stint_number: 1,
+            laps_completed: 2,
+            is_active: false,
+            tires_locked: false,
+            ..Default::default()
+        });
+        state.drivers.insert(0, drv);
+        state.pit_entry_sdk_tires = Some(cold_baseline.clone());
+
+        let hot_100pct_pit = StintTireSet {
+            lf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 26.0, temp_m: 32.0, temp_r: 25.0, pressure: 58.0 },
+            rf: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 50.0, temp_m: 48.0, temp_r: 44.0, pressure: 80.0 },
+            lr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 54.0, temp_m: 55.0, temp_r: 53.0, pressure: 69.0 },
+            rr: TireCornerData { wear_l: 100.0, wear_m: 100.0, wear_r: 100.0, temp_l: 62.0, temp_m: 63.0, temp_r: 60.0, pressure: 102.0 },
+            has_data: true,
+        };
+        assert!(state.capture_pit_stall_sdk_tires(&hot_100pct_pit, true), "All-100% stint with jumped carcass temps must attach in pit stall");
+
+        // 3. Returning to garage with 100% hot temps must also lock cleanly when unlocked, without resetting to bogus 0%
+        state.player_is_in_car = false;
+        assert!(apply_car_setup_tires(&hot_100pct_pit, &mut state));
+        let mut synced = state.drivers.get(&0).unwrap().stints[0].tires.clone();
+        synced.sanitize_for_completed_stint();
+        assert_eq!(synced.lf.wear_m, 100.0, "DB sanitization must retain 100% wear when real temps exist");
+        assert!((synced.rr.temp_m - 63.0).abs() < 0.05);
+
+        // 4. Subsequent cold setup load must NOT overwrite the locked 100%-hot stint
+        assert!(!apply_car_setup_tires(&cold_baseline, &mut state));
+        assert!((state.drivers.get(&0).unwrap().stints[0].tires.rr.temp_m - 63.0).abs() < 0.05);
+    }
 }
 
 

@@ -5,9 +5,9 @@ For detailed notes on the latest builds, see [RELEASE_NOTES.md](RELEASE_NOTES.md
 
 ---
 
-## [0.5.x] — Tire Telemetry Precision, Interactive .IBT Lab HUD & Zoom Controls *(v0.5.0 – v0.5.10)*
+## [0.5.x] — Tire Telemetry Precision, Interactive .IBT Lab HUD & Zoom Controls *(v0.5.0 – v0.5.11)*
 
-* **Exact iRacing Garage & Black-Box Tire Matching:** Locked post-stint tire wear, hot pressures, and carcass/pyrometer temperatures cleanly to the stint that just finished—including fuel-only pit stops—while protecting saved stints from 100% cold setup resets or aborted out-laps.
+* **Exact iRacing Garage & Black-Box Tire Matching:** Locked post-stint tire wear, hot pressures, and carcass/pyrometer temperatures cleanly to the stint that just finished—including fuel-only pit stops, unworn `100%` corners (such as LF on Dirt Late Models), and short runs with real hot temperatures—while protecting saved stints from cold setup resets or aborted out-laps.
 * **Locked Cockpit Tire Panel:** Fixed Cockpit `TIRES` to always show your latest live post-pit or garage tire readout cleanly (and stay blank on fresh sessions before your first stop).
 * **Pinned Top Telemetry HUD in `.IBT Lab`:** Added an interactive, aspect-preserving 2D Circuit Track Map (with `↺ 90°` rotation and click/drag cursor scrubbing) paired with a motorsport-standard G-G Traction Friction Circle.
 * **MoTeC / Pi Persistent Channel Stats:** Added live `Cur`, `Min`, `Max`, `Avg`, and Lap B `Δ` delta banners across all synchronized 60Hz `.ibt` trace lanes with jitter-free monospace formatting.

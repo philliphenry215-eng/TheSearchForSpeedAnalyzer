@@ -1,3 +1,14 @@
+# The Search For Speed Analyzer — v0.5.11
+
+### Seamless 100% Corner & Short-Stint Tire Capture:
+* **Unworn `100%` Corners Now Update Immediately on Pit Stops:**
+  * Fixed an issue (notably on Dirt Late Models where `LF` often stays at `100%` while `RF`/`LR`/`RR` wear to `99%`–`95%`) where individual `100%` corners waited until you opened the Garage before appearing.
+  * Pit-stall detection now evaluates service across all 4 corners as one set, attaching `100%` wear, temperatures, and pressures right alongside worn corners immediately in the pit stall.
+* **Short-Run `100%` Stints with Hot Temperatures:**
+  * Short runs where all 4 corners remain at `100%` tread—whether captured in the pit stall via carcass temperature jump or in the Garage with real thermal spread—now attach cleanly and survive local Stint DB sync, while uniform cold setup resets continue to be ignored.
+
+---
+
 # The Search For Speed Analyzer — v0.5.10
 
 ### Instant Garage & Pit-Exit Tire Latching + Clean Release History:
@@ -23,15 +34,3 @@
   * Fixed Celsius garage tire temperatures above 120°C being misconverted, and hid local `.sto` setup buttons when inspecting competitor stints.
 * **.IBT Telemetry Lab:**
   * Fixed the analysis scroll area height and moved the Lap B G-G readout inline in the header so Lap A vs. Lap B comparisons stay aligned without shifting the layout.
-
----
-
-# The Search For Speed Analyzer — v0.5.8
-
-### Static Top Telemetry HUD: 2D Track Map & Motorsport G-G Circle:
-* **Pinned Top Telemetry HUD:**
-  * Moved the 2D Track Map and G-G Friction Circle into a dedicated Static Top HUD pinned above all analysis tabs (`Inputs & Speed`, `Ride Height & Rake`, `Shock Histograms`, `Tires & Pressures`, and `Channels & Export`) with a 1-click `[▲ Collapse HUD]` / `[▼ Expand Top HUD]` toggle.
-* **Aspect-Preserving 2D Circuit Map:**
-  * True 1:1 isometric track proportions keep both ovals and road courses accurately shaped, complete with an S/F marker, `↺ 90°` rotate / `Reset` controls, and click-and-drag track scrubbing.
-* **Motorsport G-G Traction Circle:**
-  * Aligned to standard motorsport conventions (`◀ Turn Left` / `Turn Right ▶`) with phase-colored grip points (braking, throttle, pure lateral cornering, transition), 1.0G/2.0G reference rings, a peak traction boundary hull, and live cornering/braking G readouts.

@@ -670,6 +670,39 @@ fn parse_iracing_session_yaml_internal(
     (true, extracted_garage_tires)
 }
 
+fn has_thermal_gradient(t: &StintTireSet) -> bool {
+    let temps = [
+        t.lf.temp_l, t.lf.temp_m, t.lf.temp_r,
+        t.rf.temp_l, t.rf.temp_m, t.rf.temp_r,
+        t.lr.temp_l, t.lr.temp_m, t.lr.temp_r,
+        t.rr.temp_l, t.rr.temp_m, t.rr.temp_r,
+    ];
+    let mut min_t = f32::MAX;
+    let mut max_t = f32::MIN;
+    let mut count = 0;
+    for &temp in &temps {
+        if temp > 5.0 {
+            min_t = min_t.min(temp);
+            max_t = max_t.max(temp);
+            count += 1;
+        }
+    }
+    count >= 2 && (max_t - min_t) > 0.5
+}
+
+fn is_hotter_than_baseline(t: &StintTireSet, baseline: &StintTireSet) -> bool {
+    let corner_rose = |cur: &crate::models::TireCornerData, base: &crate::models::TireCornerData| -> bool {
+        (cur.temp_l - base.temp_l) > 1.0
+            || (cur.temp_m - base.temp_m) > 1.0
+            || (cur.temp_r - base.temp_r) > 1.0
+            || (base.pressure > 1.0 && (cur.pressure - base.pressure) > 0.5)
+    };
+    corner_rose(&t.lf, &baseline.lf)
+        || corner_rose(&t.rf, &baseline.rf)
+        || corner_rose(&t.lr, &baseline.lr)
+        || corner_rose(&t.rr, &baseline.rr)
+}
+
 /// Applies parsed `CarSetup` garage tire measurements to the player's latest unlocked completed stint
 /// and `latest_tire_data` once out of the car (`!s.player_is_in_car`).
 /// Running this after `process_telemetry_frame` prevents stale `player_is_in_car == true` state on
@@ -684,10 +717,8 @@ pub fn apply_car_setup_tires(garage_tires: &StintTireSet, s: &mut WarRoomState) 
             s.last_consumed_car_setup_tires = Some(garage_tires.clone());
         } else {
             s.last_consumed_car_setup_tires = None;
+            s.baseline_car_setup_tires = Some(garage_tires.clone());
         }
-        return false;
-    }
-    if !garage_tires.has_real_wear() {
         return false;
     }
 
@@ -697,6 +728,33 @@ pub fn apply_car_setup_tires(garage_tires: &StintTireSet, s: &mut WarRoomState) 
         .is_some_and(|prev| prev.matches_wear_and_temps(garage_tires));
     if is_already_consumed {
         return false;
+    }
+
+    let has_pending_stint = s
+        .drivers
+        .get(&player_idx)
+        .is_some_and(|d| {
+            d.stints
+                .iter()
+                .rev()
+                .any(|st| !st.is_imported && !st.is_active && st.laps_completed > 0 && !st.tires_locked)
+        });
+
+    if !garage_tires.has_real_wear() {
+        if !has_pending_stint {
+            s.baseline_car_setup_tires = Some(garage_tires.clone());
+            return false;
+        }
+        let differs_from_baseline = s
+            .baseline_car_setup_tires
+            .as_ref()
+            .is_some_and(|base| is_hotter_than_baseline(garage_tires, base));
+        let valid_100pct_hot_run = garage_tires.has_temps()
+            && (has_thermal_gradient(garage_tires) || differs_from_baseline);
+        if !valid_100pct_hot_run {
+            s.baseline_car_setup_tires = Some(garage_tires.clone());
+            return false;
+        }
     }
 
     let mut updated = false;
@@ -715,7 +773,7 @@ pub fn apply_car_setup_tires(garage_tires: &StintTireSet, s: &mut WarRoomState) 
             updated = true;
         }
     }
-    if !has_live_stints {
+    if !has_live_stints && garage_tires.has_real_wear() {
         s.latest_tire_data = garage_tires.clone();
         s.latest_tire_data.has_data = true;
         updated = true;
