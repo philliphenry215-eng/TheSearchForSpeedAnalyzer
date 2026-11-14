@@ -75,6 +75,7 @@ pub struct IbtTelemetryLabState {
     pub include_subfolders: bool,
     pub show_main_track_and_gg: bool,
     pub track_rotation_deg: f32,
+    pub track_orient_sf_bottom: bool,
     pub is_top_hud_collapsed: bool,
     worker: LoadWorkerState,
     has_initialized_dir: bool,
@@ -103,6 +104,7 @@ impl Default for IbtTelemetryLabState {
             include_subfolders: true,
             show_main_track_and_gg: false,
             track_rotation_deg: 0.0,
+            track_orient_sf_bottom: true,
             is_top_hud_collapsed: false,
             worker: LoadWorkerState::Idle,
             has_initialized_dir: false,
@@ -1166,8 +1168,11 @@ impl IbtTelemetryLabState {
                     let comparison = lap_b.map(|lb| compare_laps(lap_a, lb, 300));
 
                     // STATIC TOP TELEMETRY HUD: 2D Track Map & G-G Traction Circle
-                    let has_track_or_gg = norm_a.track_map_points.is_some() || norm_a.lat_accel_g.is_some();
+                    let has_track_or_gg = sess.venue_track_map.is_some()
+                        || norm_a.track_map_points.is_some()
+                        || norm_a.lat_accel_g.is_some();
                     if has_track_or_gg {
+                        let mut do_regen_track_map = false;
                         self.render_static_top_telemetry_hud(
                             ui,
                             settings,
@@ -1176,7 +1181,35 @@ impl IbtTelemetryLabState {
                             lap_b,
                             &norm_a,
                             comparison.as_ref(),
+                            &mut do_regen_track_map,
                         );
+                        if do_regen_track_map {
+                            if let Some(ref mut live_sess) = self.session {
+                                match crate::ibt::regenerate_venue_track_map_from_lap(
+                                    live_sess,
+                                    lap_a_idx,
+                                    300,
+                                    &crate::ibt::track_maps_dir(),
+                                ) {
+                                    Ok(()) => {
+                                        *toast_out = Some((
+                                            format!(
+                                                "Rebuilt venue track map from Lap {} ({})",
+                                                lap_a.descriptor.lap_number,
+                                                live_sess.metadata.track_display_name
+                                            ),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        *toast_out = Some((
+                                            format!("Track map regen failed: {}", e),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                         ui.add_space(6.0);
                     }
 
@@ -3201,6 +3234,7 @@ impl IbtTelemetryLabState {
         lap_b: Option<&LapAnalysis>,
         norm_a: &NormalizedLapTrace,
         comparison: Option<&LapComparisonReport>,
+        do_regen_track_map: &mut bool,
     ) {
         let panel_bg = settings.panel_color();
         let elevated = settings.card_elevated_color();
@@ -3283,7 +3317,17 @@ impl IbtTelemetryLabState {
 
                 // 2 Equal Columns: 2D Circuit Map (Left) + G-G Circle (Right)
                 ui.columns(2, |cols| {
-                    if let Some(ref pts_a) = norm_a.track_map_points {
+                    let venue_pts_opt = sess
+                        .venue_track_map
+                        .as_ref()
+                        .map(|m| m.points.as_slice())
+                        .or(norm_a.track_map_points.as_deref());
+                    if let Some(venue_pts) = venue_pts_opt {
+                        let source_is_gps = sess
+                            .venue_track_map
+                            .as_ref()
+                            .map(|m| m.source_is_gps)
+                            .unwrap_or_else(|| crate::ibt::lap_has_valid_gps(lap_a));
                         egui::Frame::none()
                             .fill(elevated)
                             .stroke(egui::Stroke::new(1.0, divider))
@@ -3294,12 +3338,13 @@ impl IbtTelemetryLabState {
                                     ui,
                                     settings,
                                     &sess.metadata.track_display_name,
-                                    pts_a,
-                                    comparison.and_then(|c| c.lap_b.track_map_points.as_deref()),
-                                    lap_a.descriptor.lap_number,
-                                    lap_b.map(|lb| lb.descriptor.lap_number),
+                                    venue_pts,
+                                    source_is_gps,
+                                    lap_b.is_some(),
                                     &mut self.hover_dist_pct,
                                     &mut self.track_rotation_deg,
+                                    &mut self.track_orient_sf_bottom,
+                                    do_regen_track_map,
                                     canvas_h,
                                 );
                             });
@@ -3330,17 +3375,79 @@ impl IbtTelemetryLabState {
     }
 }
 
+fn rotate_norm_pt(p: [f32; 2], cos_t: f32, sin_t: f32) -> [f32; 2] {
+    let dx = p[0] - 0.5;
+    let dy = p[1] - 0.5;
+    [0.5 + dx * cos_t - dy * sin_t, 0.5 + dx * sin_t + dy * cos_t]
+}
+
+fn compute_sf_tangent(pts: &[[f32; 2]]) -> Option<[f32; 2]> {
+    let n = pts.len();
+    if n < 2 {
+        return None;
+    }
+    let k = (n / 60).clamp(1, 5).min(n / 2).max(1);
+    let prev = pts[(n - k) % n];
+    let next = pts[k % n];
+    let tx = next[0] - prev[0];
+    let ty = next[1] - prev[1];
+    if tx * tx + ty * ty > 1e-8 {
+        return Some([tx, ty]);
+    }
+    let fx = pts[1][0] - pts[0][0];
+    let fy = pts[1][1] - pts[0][1];
+    if fx * fx + fy * fy > 1e-8 {
+        Some([fx, fy])
+    } else {
+        None
+    }
+}
+
+/// Computes rigid 2D rotation angle (radians) placing the Start/Finish straight horizontally
+/// at the bottom of the bounding box (`+Y` in screen space) with the S/F tick perpendicular
+/// to the bottom edge of the box.
+pub(crate) fn compute_sf_bottom_rotation_rad(pts: &[[f32; 2]]) -> f32 {
+    if pts.len() < 4 {
+        return 0.0;
+    }
+    let Some([tx, ty]) = compute_sf_tangent(pts) else {
+        return 0.0;
+    };
+
+    // Rotate tangent (tx, ty) so its vertical screen component becomes 0 (horizontal)
+    let mut theta = -ty.atan2(tx);
+    let cos_t = theta.cos();
+    let sin_t = theta.sin();
+
+    let mut min_ry = f32::MAX;
+    let mut max_ry = f32::MIN;
+    for &p in pts {
+        let r = rotate_norm_pt(p, cos_t, sin_t);
+        min_ry = min_ry.min(r[1]);
+        max_ry = max_ry.max(r[1]);
+    }
+    let sf_ry = rotate_norm_pt(pts[0], cos_t, sin_t)[1];
+    let mid_ry = (min_ry + max_ry) * 0.5;
+
+    // In screen coordinates (+Y downward), S/F must sit in the bottom half (sf_ry >= mid_ry)
+    if sf_ry < mid_ry {
+        theta += std::f32::consts::PI;
+    }
+    theta
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_2d_track_map(
     ui: &mut egui::Ui,
     settings: &AppSettings,
     track_name: &str,
-    track_pts_a: &[[f32; 2]],
-    track_pts_b: Option<&[[f32; 2]]>,
-    _lap_a_num: i32,
-    _lap_b_num: Option<i32>,
+    venue_pts: &[[f32; 2]],
+    source_is_gps: bool,
+    has_compare_lap: bool,
     hover_dist_pct: &mut Option<f32>,
     rotation_deg: &mut f32,
+    orient_sf_bottom: &mut bool,
+    do_regen_track_map: &mut bool,
     canvas_h: f32,
 ) {
     let elevated = settings.card_elevated_color();
@@ -3369,6 +3476,24 @@ fn draw_2d_track_map(
             );
         }
         ui.add_space(4.0);
+        let orient_label = if *orient_sf_bottom { "S/F Bottom" } else { "North Up" };
+        let orient_btn = egui::Button::new(
+            egui::RichText::new(orient_label)
+                .size(ui_size(10.0))
+                .color(if *orient_sf_bottom { primary } else { white }),
+        );
+        if ui
+            .add(orient_btn)
+            .on_hover_text(if *orient_sf_bottom {
+                "Auto-aligned: Start/Finish straight at bottom (click for North Up)"
+            } else {
+                "Compass orientation: North Up (click to align Start/Finish at bottom)"
+            })
+            .clicked()
+        {
+            *orient_sf_bottom = !*orient_sf_bottom;
+            *rotation_deg = 0.0;
+        }
         if ui
             .small_button("↺ 90°")
             .on_hover_text("Rotate track orientation by +90°")
@@ -3379,7 +3504,7 @@ fn draw_2d_track_map(
         if *rotation_deg != 0.0 {
             if ui
                 .small_button("Reset")
-                .on_hover_text("Reset track orientation to default (0°)")
+                .on_hover_text("Reset manual rotation offset to 0°")
                 .clicked()
             {
                 *rotation_deg = 0.0;
@@ -3389,6 +3514,17 @@ fn draw_2d_track_map(
                     .color(secondary)
                     .size(ui_size(9.5)),
             );
+        }
+        if ui
+            .small_button("⟳ Map")
+            .on_hover_text(if source_is_gps {
+                "Cached Venue Map (GPS Lat/Lon). Click to rebuild & save from selected Lap A."
+            } else {
+                "Cached Venue Map (Course Est.). Click to rebuild & save from selected Lap A."
+            })
+            .clicked()
+        {
+            *do_regen_track_map = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
@@ -3412,7 +3548,7 @@ fn draw_2d_track_map(
     painter.rect_filled(rect, 8.0, elevated);
     painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, divider));
 
-    if track_pts_a.len() < 2 {
+    if venue_pts.len() < 2 {
         painter.text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -3423,15 +3559,18 @@ fn draw_2d_track_map(
         return;
     }
 
-    // 1. Rotation transformation helper
-    let rot_rad = *rotation_deg * std::f32::consts::PI / 180.0;
+    // 1. Rigid 2D rotation (Auto S/F-Bottom base + manual 90° offset, zero mirroring)
+    let auto_rad = if *orient_sf_bottom {
+        compute_sf_bottom_rotation_rad(venue_pts)
+    } else {
+        0.0
+    };
+    let rot_rad = auto_rad + (*rotation_deg * std::f32::consts::PI / 180.0);
     let cos_t = rot_rad.cos();
     let sin_t = rot_rad.sin();
     let rotate_pt = |p: [f32; 2]| -> [f32; 2] {
-        if *rotation_deg != 0.0 {
-            let dx = p[0] - 0.5;
-            let dy = p[1] - 0.5;
-            [0.5 + dx * cos_t - dy * sin_t, 0.5 + dx * sin_t + dy * cos_t]
+        if rot_rad != 0.0 {
+            rotate_norm_pt(p, cos_t, sin_t)
         } else {
             p
         }
@@ -3442,28 +3581,19 @@ fn draw_2d_track_map(
     let mut max_x = f32::MIN;
     let mut min_y = f32::MAX;
     let mut max_y = f32::MIN;
-    for &pt in track_pts_a {
+    for &pt in venue_pts {
         let rpt = rotate_pt(pt);
         min_x = min_x.min(rpt[0]);
         max_x = max_x.max(rpt[0]);
         min_y = min_y.min(rpt[1]);
         max_y = max_y.max(rpt[1]);
     }
-    if let Some(pts_b) = track_pts_b {
-        for &pt in pts_b {
-            let rpt = rotate_pt(pt);
-            min_x = min_x.min(rpt[0]);
-            max_x = max_x.max(rpt[0]);
-            min_y = min_y.min(rpt[1]);
-            max_y = max_y.max(rpt[1]);
-        }
-    }
 
     let span_x = (max_x - min_x).max(0.001);
     let span_y = (max_y - min_y).max(0.001);
 
-    // Uniform 1:1 isometric scale fitting canvas rect with padding
-    let pad = 16.0;
+    // Uniform 1:1 isometric scale fitting canvas rect with padding (room for S/F label)
+    let pad = 22.0;
     let avail_draw_w = (rect.width() - pad * 2.0).max(10.0);
     let avail_draw_h = (rect.height() - pad * 2.0).max(10.0);
     let scale_px = (avail_draw_w / span_x).min(avail_draw_h / span_y);
@@ -3479,44 +3609,65 @@ fn draw_2d_track_map(
         )
     };
 
-    // 3. Draw circuit path (underlay + main ribbon)
-    for i in 0..track_pts_a.len() - 1 {
-        let p0 = map_pt(track_pts_a[i]);
-        let p1 = map_pt(track_pts_a[i + 1]);
+    // 3. Draw fixed venue circuit path (underlay + main ribbon)
+    for i in 0..venue_pts.len() - 1 {
+        let p0 = map_pt(venue_pts[i]);
+        let p1 = map_pt(venue_pts[i + 1]);
         painter.line_segment([p0, p1], egui::Stroke::new(6.0, with_alpha(secondary, 45)));
     }
-    if let (Some(&first), Some(&last)) = (track_pts_a.first(), track_pts_a.last()) {
+    if let (Some(&first), Some(&last)) = (venue_pts.first(), venue_pts.last()) {
         painter.line_segment([map_pt(last), map_pt(first)], egui::Stroke::new(6.0, with_alpha(secondary, 45)));
     }
 
-    for i in 0..track_pts_a.len() - 1 {
-        let p0 = map_pt(track_pts_a[i]);
-        let p1 = map_pt(track_pts_a[i + 1]);
+    for i in 0..venue_pts.len() - 1 {
+        let p0 = map_pt(venue_pts[i]);
+        let p1 = map_pt(venue_pts[i + 1]);
         painter.line_segment([p0, p1], egui::Stroke::new(2.4, with_alpha(white, 220)));
     }
-    if let (Some(&first), Some(&last)) = (track_pts_a.first(), track_pts_a.last()) {
+    if let (Some(&first), Some(&last)) = (venue_pts.first(), venue_pts.last()) {
         painter.line_segment([map_pt(last), map_pt(first)], egui::Stroke::new(2.4, with_alpha(white, 220)));
     }
 
-    // 4. Draw Start/Finish marker
-    if let Some(&sf_pt) = track_pts_a.first() {
+    // 4. Draw perpendicular Start/Finish crossbar tick and S/F label
+    if let Some(&sf_pt) = venue_pts.first() {
         let sf_pos = map_pt(sf_pt);
-        painter.circle_filled(sf_pos, 3.5, egui::Color32::WHITE);
+        let normal = if let Some([tx, ty]) = compute_sf_tangent(venue_pts) {
+            let stx = tx * cos_t - ty * sin_t;
+            let sty = tx * sin_t + ty * cos_t;
+            let len = (stx * stx + sty * sty).sqrt().max(1e-5);
+            egui::vec2(-sty / len, stx / len)
+        } else {
+            egui::vec2(0.0, 1.0)
+        };
+
+        // Tick cuts cleanly perpendicular across the track ribbon
+        painter.line_segment(
+            [sf_pos - normal * 7.5, sf_pos + normal * 7.5],
+            egui::Stroke::new(2.4, primary),
+        );
+
+        // Place S/F label on the outside of the track loop away from the center
+        let to_outside = sf_pos - rect.center();
+        let out_normal = if normal.dot(to_outside) >= 0.0 {
+            normal
+        } else {
+            -normal
+        };
         painter.text(
-            sf_pos + egui::vec2(6.0, -6.0),
-            egui::Align2::LEFT_BOTTOM,
+            sf_pos + out_normal * 14.5,
+            egui::Align2::CENTER_CENTER,
             "S/F",
-            display_font(10.0),
+            display_font(9.5),
             primary,
         );
     }
 
-    // 5. Interactive scrubbing on click or drag
+    // 5. Interactive scrubbing on click or drag along fixed track centerline
     if let Some(mouse_pos) = response.hover_pos() {
         if rect.contains(mouse_pos) {
             let mut closest_idx = 0;
             let mut min_dist_sq = f32::MAX;
-            for (idx, &pt) in track_pts_a.iter().enumerate() {
+            for (idx, &pt) in venue_pts.iter().enumerate() {
                 let screen_p = map_pt(pt);
                 let d2 = screen_p.distance_sq(mouse_pos);
                 if d2 < min_dist_sq {
@@ -3526,28 +3677,22 @@ fn draw_2d_track_map(
             }
 
             if response.clicked() || response.dragged() {
-                let pct = (closest_idx as f32 / ((track_pts_a.len() - 1).max(1) as f32)).clamp(0.0, 1.0);
+                let pct = (closest_idx as f32 / ((venue_pts.len() - 1).max(1) as f32)).clamp(0.0, 1.0);
                 *hover_dist_pct = Some(pct);
             }
         }
     }
 
-    // 6. Draw active car scrubber dot
+    // 6. Draw car position scrubber dot(s) riding on the fixed venue track centerline
     if let Some(pct) = *hover_dist_pct {
-        let idx = (pct.clamp(0.0, 1.0) * ((track_pts_a.len() - 1) as f32)).round() as usize;
-        if let Some(&pt) = track_pts_a.get(idx.min(track_pts_a.len() - 1)) {
+        let idx = (pct.clamp(0.0, 1.0) * ((venue_pts.len() - 1) as f32)).round() as usize;
+        if let Some(&pt) = venue_pts.get(idx.min(venue_pts.len() - 1)) {
             let car_pos = map_pt(pt);
-            painter.circle_filled(car_pos, 5.5, primary);
-            painter.circle_stroke(car_pos, 8.0, egui::Stroke::new(1.5, egui::Color32::WHITE));
-        }
-
-        if let Some(pts_b) = track_pts_b {
-            let idx_b = (pct.clamp(0.0, 1.0) * ((pts_b.len() - 1) as f32)).round() as usize;
-            if let Some(&pt_b) = pts_b.get(idx_b.min(pts_b.len() - 1)) {
-                let car_pos_b = map_pt(pt_b);
-                painter.circle_filled(car_pos_b, 4.5, secondary);
-                painter.circle_stroke(car_pos_b, 6.5, egui::Stroke::new(1.2, egui::Color32::WHITE));
+            if has_compare_lap {
+                painter.circle_stroke(car_pos, 9.0, egui::Stroke::new(2.0, secondary));
             }
+            painter.circle_filled(car_pos, 5.5, primary);
+            painter.circle_stroke(car_pos, 7.5, egui::Stroke::new(1.5, egui::Color32::WHITE));
         }
     }
 
@@ -4551,5 +4696,52 @@ mod tests {
             center.y,
             accel_screen.y
         );
+    }
+
+    #[test]
+    fn test_auto_sf_bottom_orientation_places_sf_horizontal_at_bottom() {
+        // Construct a tilted stadium oval (like Homestead North-Up) with S/F at index 0
+        for &tilt in &[0.65_f32, -0.85, 2.1, 3.8] {
+            let n = 120usize;
+            let mut pts = Vec::with_capacity(n);
+            for i in 0..n {
+                let theta = (i as f32 / n as f32) * 2.0 * std::f32::consts::PI;
+                let x = 0.34 * theta.sin();
+                let y = 0.16 * theta.cos(); // S/F starts on bottom straight prior to tilt
+                let rx = 0.5 + x * tilt.cos() - y * tilt.sin();
+                let ry = 0.5 + x * tilt.sin() + y * tilt.cos();
+                pts.push([rx, ry]);
+            }
+
+            let rot_rad = compute_sf_bottom_rotation_rad(&pts);
+            let cos_t = rot_rad.cos();
+            let sin_t = rot_rad.sin();
+
+            let rpts: Vec<[f32; 2]> = pts.iter().map(|&p| rotate_norm_pt(p, cos_t, sin_t)).collect();
+            let mut min_y = f32::MAX;
+            let mut max_y = f32::MIN;
+            for &r in &rpts {
+                min_y = min_y.min(r[1]);
+                max_y = max_y.max(r[1]);
+            }
+            let mid_y = (min_y + max_y) * 0.5;
+            assert!(
+                rpts[0][1] > mid_y,
+                "S/F must be placed in bottom half of bounding box for tilt {}: sf_y={} <= mid_y={}",
+                tilt,
+                rpts[0][1],
+                mid_y
+            );
+
+            let tangent = compute_sf_tangent(&rpts).expect("Tangent expected");
+            let tan_len = (tangent[0] * tangent[0] + tangent[1] * tangent[1]).sqrt();
+            let vertical_component = (tangent[1] / tan_len).abs();
+            assert!(
+                vertical_component < 1e-3,
+                "S/F straight must be horizontal (vertical component ~0, got {}) for tilt {}",
+                vertical_component,
+                tilt
+            );
+        }
     }
 }

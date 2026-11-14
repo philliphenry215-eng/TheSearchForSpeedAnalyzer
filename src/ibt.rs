@@ -229,6 +229,8 @@ pub struct IbtChannelInfo {
 pub struct IbtSessionMetadata {
     pub file_name: String,
     pub file_size_bytes: usize,
+    pub track_id: Option<i32>,
+    pub track_north_offset_rad: Option<f32>,
     pub track_display_name: String,
     pub track_config_name: String,
     pub track_length: String,
@@ -352,6 +354,10 @@ pub struct DriverInputsAnalysis {
     pub lat_accel_g: Option<Vec<f32>>,
     pub long_accel_g: Option<Vec<f32>>,
     pub yaw_rad: Option<Vec<f32>>,
+    /// Local East/North position in meters relative to session GPS origin `(Lat, Lon)`.
+    pub gps_pos_m: Option<Vec<[f32; 2]>>,
+    /// Velocity-aligned course heading (`YawNorth` corrected for sideslip via `VelocityX`/`VelocityY`).
+    pub course_yaw_rad: Option<Vec<f32>>,
 
     pub speed_mph_stats: ChannelStats,
     pub speed_kph_stats: ChannelStats,
@@ -672,6 +678,18 @@ pub struct LapComparisonReport {
     pub side_rake_delta_mm: Option<Vec<f32>>,
 }
 
+/// Persisted MoTeC-style fixed circuit outline for a specific track & configuration.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct VenueTrackMap {
+    pub venue_key: String,
+    pub track_display_name: String,
+    pub track_config_name: String,
+    pub track_id: Option<i32>,
+    pub source_is_gps: bool,
+    pub source_lap_number: i32,
+    pub points: Vec<[f32; 2]>,
+}
+
 /// Full Parsed .IBT Session Container
 #[derive(Clone, Debug)]
 pub struct IbtSession {
@@ -681,6 +699,7 @@ pub struct IbtSession {
     pub analyzed_laps: Vec<LapAnalysis>,
     pub fastest_lap_idx: Option<usize>,
     pub garage_tires: Option<crate::StintTireSet>,
+    pub venue_track_map: Option<VenueTrackMap>,
 }
 
 // ============================================================================
@@ -893,7 +912,9 @@ pub fn parse_ibt_file(path: &Path) -> Result<IbtSession, String> {
         .and_then(|n| n.to_str())
         .unwrap_or("telemetry.ibt")
         .to_string();
-    parse_ibt_bytes(&bytes, &file_name)
+    let mut session = parse_ibt_bytes(&bytes, &file_name)?;
+    resolve_or_cache_session_track_map(&mut session, &track_maps_dir());
+    Ok(session)
 }
 
 /// Parses raw `.ibt` binary bytes into a complete `IbtSession`.
@@ -1133,6 +1154,18 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
     let full_long_accel = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LongAccel"));
     let full_yaw = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("YawNorth"))
         .or_else(|| extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("Yaw")));
+    let full_lat_f64 = extract_channel_f64(tick_buffer, buf_len, total_ticks, channel_map.get("Lat"));
+    let full_lon_f64 = extract_channel_f64(tick_buffer, buf_len, total_ticks, channel_map.get("Lon"));
+    let full_gps_pos_m = match (&full_lat_f64, &full_lon_f64) {
+        (Some(lats), Some(lons)) => extract_gps_local_meters(lats, lons),
+        _ => None,
+    };
+    let full_vx = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("VelocityX"));
+    let full_vy = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("VelocityY"));
+    let full_course_yaw = match (&full_yaw, &full_vx, &full_vy) {
+        (Some(yaw), Some(vx), Some(vy)) => Some(compute_course_yaw_from_velocity(yaw, vx, vy)),
+        _ => None,
+    };
 
     // Ride height channels
     let full_lf_rh = extract_channel_f32(tick_buffer, buf_len, total_ticks, channel_map.get("LFrideHeight"));
@@ -1254,7 +1287,7 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
         let lap_dist_pct = lap_dist_pct_channel[s..e].to_vec();
         let lap_dist_m = lap_dist_m_channel[s..e].to_vec();
 
-        let inputs = compute_driver_inputs(
+        let mut inputs = compute_driver_inputs(
             slice_opt(&full_speed, s, e),
             slice_opt(&full_throttle, s, e),
             slice_opt(&full_brake, s, e),
@@ -1266,6 +1299,8 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
             slice_opt(&full_long_accel, s, e),
             slice_opt(&full_yaw, s, e),
         );
+        inputs.gps_pos_m = slice_opt(&full_gps_pos_m, s, e);
+        inputs.course_yaw_rad = slice_opt(&full_course_yaw, s, e);
 
         let suspension = compute_suspension_dynamics(
             slice_opt(&full_lf_rh, s, e),
@@ -1345,6 +1380,13 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
         });
     }
 
+    let venue_track_map = build_venue_track_map_from_session(
+        &metadata,
+        &analyzed_laps,
+        fastest_lap_idx,
+        300,
+    );
+
     Ok(IbtSession {
         metadata,
         channels,
@@ -1352,6 +1394,7 @@ pub fn parse_ibt_bytes(bytes: &[u8], file_name: &str) -> Result<IbtSession, Stri
         analyzed_laps,
         fastest_lap_idx,
         garage_tires,
+        venue_track_map,
     })
 }
 
@@ -1543,6 +1586,24 @@ fn parse_yaml_metadata(yaml_str: &str) -> IbtSessionMetadata {
 
     if let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(yaml_str) {
         let weekend = &root["WeekendInfo"];
+        meta.track_id = weekend["TrackID"]
+            .as_i64()
+            .map(|id| id as i32)
+            .or_else(|| {
+                weekend["TrackID"]
+                    .as_str()
+                    .and_then(|s| s.trim().parse::<i32>().ok())
+            });
+        meta.track_north_offset_rad = weekend["TrackNorthOffset"]
+            .as_f64()
+            .map(|v| v as f32)
+            .or_else(|| {
+                weekend["TrackNorthOffset"].as_str().and_then(|s| {
+                    let trimmed = s.trim();
+                    let num_part = trimmed.split_whitespace().next().unwrap_or(trimmed);
+                    num_part.parse::<f32>().ok()
+                })
+            });
         if let Some(t) = weekend["TrackDisplayName"]
             .as_str()
             .or_else(|| weekend["TrackName"].as_str())
@@ -1947,25 +2008,241 @@ pub fn interpolate_onto_grid(src_dist: &[f32], src_vals: &[f32], target_grid: &[
     out
 }
 
+/// Converts 64-bit iRacing GPS `(Lat, Lon)` degree channels into local East/North meters (`[f32; 2]`)
+/// relative to the first valid sample in `f64` precision before downcasting to `f32`.
+pub fn extract_gps_local_meters(lat_deg: &[f64], lon_deg: &[f64]) -> Option<Vec<[f32; 2]>> {
+    let n = lat_deg.len().min(lon_deg.len());
+    if n < 4 {
+        return None;
+    }
+
+    let is_valid_lat_lon = |lat: f64, lon: f64| -> bool {
+        lat.is_finite()
+            && lon.is_finite()
+            && lat.abs() <= 90.0
+            && lon.abs() <= 180.0
+            && (lat.abs() > 1e-4 || lon.abs() > 1e-4)
+    };
+
+    let (lat0, lon0) = (0..n)
+        .find_map(|i| {
+            let lat = lat_deg[i];
+            let lon = lon_deg[i];
+            if is_valid_lat_lon(lat, lon) {
+                Some((lat, lon))
+            } else {
+                None
+            }
+        })?;
+
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+    let cos_lat0 = lat0.to_radians().cos();
+
+    let mut out = Vec::with_capacity(n);
+    let mut valid_count = 0usize;
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for i in 0..n {
+        let lat = lat_deg[i];
+        let lon = lon_deg[i];
+        if is_valid_lat_lon(lat, lon) {
+            let east_m = (lon - lon0).to_radians() * EARTH_RADIUS_M * cos_lat0;
+            let north_m = (lat - lat0).to_radians() * EARTH_RADIUS_M;
+            min_x = min_x.min(east_m);
+            max_x = max_x.max(east_m);
+            min_y = min_y.min(north_m);
+            max_y = max_y.max(north_m);
+            valid_count += 1;
+            out.push([east_m as f32, north_m as f32]);
+        } else {
+            out.push([f32::NAN, f32::NAN]);
+        }
+    }
+
+    let span = (max_x - min_x).abs().max((max_y - min_y).abs());
+    if valid_count >= 10 && span > 5.0 {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// Computes velocity course heading from `YawNorth` plus car-local sideslip `(VelocityX, VelocityY)`.
+fn compute_course_yaw_from_velocity(yaw_north: &[f32], vx: &[f32], vy: &[f32]) -> Vec<f32> {
+    let n = yaw_north.len().min(vx.len()).min(vy.len());
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let psi = yaw_north[i];
+        let fwd = vx[i];
+        let lat = vy[i];
+        if psi.is_finite() && fwd.is_finite() && lat.is_finite() && fwd > 2.0 {
+            let beta = lat.atan2(fwd).clamp(-0.6, 0.6);
+            out.push(psi - beta);
+        } else {
+            out.push(psi);
+        }
+    }
+    out
+}
+
+/// Returns `true` if the given lap contains usable 2D GPS `(Lat, Lon)` coordinates.
+pub fn lap_has_valid_gps(lap: &LapAnalysis) -> bool {
+    let Some(ref pts) = lap.inputs.gps_pos_m else {
+        return false;
+    };
+    if pts.len() < 10 {
+        return false;
+    }
+    let mut valid = 0usize;
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for &[x, y] in pts {
+        if x.is_finite() && y.is_finite() {
+            valid += 1;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+    }
+    valid * 2 >= pts.len() && (max_x - min_x).abs().max((max_y - min_y).abs()) > 5.0
+}
+
+fn compute_track_map_from_gps(
+    gps_pts: &[[f32; 2]],
+    lap_dist_pct: &[f32],
+    num_points: usize,
+) -> Option<(Vec<f32>, Vec<f32>)> {
+    let n = gps_pts.len().min(lap_dist_pct.len());
+    if n < 10 {
+        return None;
+    }
+    let mut dists = Vec::with_capacity(n);
+    let mut xs = Vec::with_capacity(n);
+    let mut ys = Vec::with_capacity(n);
+    for i in 0..n {
+        let [x, y] = gps_pts[i];
+        let d = lap_dist_pct[i];
+        if x.is_finite() && y.is_finite() && d.is_finite() {
+            dists.push(d);
+            xs.push(x);
+            ys.push(y);
+        }
+    }
+    if dists.len() * 2 < n || dists.len() < 10 {
+        return None;
+    }
+
+    let pts = num_points.max(2);
+    let grid_dist_pct: Vec<f32> = (0..pts).map(|i| (i as f32) / ((pts - 1) as f32)).collect();
+    let grid_x = interpolate_onto_grid(&dists, &xs, &grid_dist_pct);
+    let grid_y = interpolate_onto_grid(&dists, &ys, &grid_dist_pct);
+    Some((grid_x, grid_y))
+}
+
 /// Generates normalized 2D circuit coordinates `([x, y] in 0.04..=0.96)` for a lap.
-/// Uses `YawNorth` (or integrated `YawRate` / `LatAccel` / `SteeringWheelAngle`),
-/// corrects loop closure drift, and scales with preserved aspect ratio.
+/// Prioritizes true `Lat`/`Lon` GPS local meters (MoTeC style), falling back to
+/// velocity-aligned heading / `YawNorth` / `LatAccel` + `Speed` dead reckoning.
 pub fn compute_track_map_from_lap(lap: &LapAnalysis, num_points: usize) -> Option<Vec<[f32; 2]>> {
     let n = lap.lap_dist_pct.len();
     if n < 4 {
         return None;
     }
 
-    // Determine heading at each tick
+    let pts = num_points.max(2);
+    let grid_dist_pct: Vec<f32> = (0..pts)
+        .map(|i| (i as f32) / ((pts - 1) as f32))
+        .collect();
+
+    // Primary Path: True 64-bit GPS Lat/Lon projected to local meters (East/North)
+    let (grid_x, grid_y) = if let Some(ref gps_pts) = lap.inputs.gps_pos_m {
+        if let Some(gps_grid) = compute_track_map_from_gps(gps_pts, &lap.lap_dist_pct, pts) {
+            gps_grid
+        } else {
+            compute_dead_reckoned_grid(lap, pts, &grid_dist_pct)
+        }
+    } else {
+        compute_dead_reckoned_grid(lap, pts, &grid_dist_pct)
+    };
+
+    // Compute bounding box
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for &x in &grid_x {
+        if x.is_finite() {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+        }
+    }
+    for &y in &grid_y {
+        if y.is_finite() {
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+    }
+
+    let span_x = (max_x - min_x).abs();
+    let span_y = (max_y - min_y).abs();
+    let max_span = span_x.max(span_y);
+
+    if max_span < 1.0 {
+        // Fallback: synthetic smooth test circuit
+        let fallback_pts: Vec<[f32; 2]> = grid_dist_pct
+            .iter()
+            .map(|&p| {
+                let theta = p * 2.0 * std::f32::consts::PI;
+                let r = 0.36 + 0.08 * (theta * 3.0).sin();
+                [0.5 + r * theta.cos(), 0.5 + r * theta.sin()]
+            })
+            .collect();
+        return Some(fallback_pts);
+    }
+
+    let scale = 0.82 / max_span;
+    let center_x = (min_x + max_x) * 0.5;
+    let center_y = (min_y + max_y) * 0.5;
+
+    let mut normalized_points = Vec::with_capacity(pts);
+    for i in 0..pts {
+        let nx = 0.5 + (grid_x[i] - center_x) * scale;
+        let ny = 0.5 - (grid_y[i] - center_y) * scale; // invert Y so North is UP
+        normalized_points.push([nx.clamp(0.04, 0.96), ny.clamp(0.04, 0.96)]);
+    }
+
+    Some(normalized_points)
+}
+
+fn compute_dead_reckoned_grid(
+    lap: &LapAnalysis,
+    _pts: usize,
+    grid_dist_pct: &[f32],
+) -> (Vec<f32>, Vec<f32>) {
+    let n = lap.lap_dist_pct.len();
+
+    // Determine heading at each tick (prefer velocity-aligned course heading over raw YawNorth)
     let mut heading: Vec<f32> = Vec::with_capacity(n);
-    if let Some(ref yaws) = lap.inputs.yaw_rad {
-        if yaws.len() == n {
-            heading.extend_from_slice(yaws);
+    if let Some(ref course) = lap.inputs.course_yaw_rad {
+        if course.len() == n {
+            heading.extend_from_slice(course);
+        }
+    }
+    if heading.is_empty() {
+        if let Some(ref yaws) = lap.inputs.yaw_rad {
+            if yaws.len() == n {
+                heading.extend_from_slice(yaws);
+            }
         }
     }
 
     if heading.is_empty() {
-        // Integrate yaw rate from lat_accel and speed
         let mut cur_heading = 0.0_f32;
         heading.push(cur_heading);
 
@@ -2042,63 +2319,221 @@ pub fn compute_track_map_from_lap(lap: &LapAnalysis, num_points: usize) -> Optio
         raw_y[i] -= f * err_y;
     }
 
-    // Resample onto uniform grid_dist_pct (0.0 ..= 1.0, length num_points)
-    let pts = num_points.max(2);
-    let grid_dist_pct: Vec<f32> = (0..pts)
-        .map(|i| (i as f32) / ((pts - 1) as f32))
-        .collect();
+    let grid_x = interpolate_onto_grid(&lap.lap_dist_pct, &raw_x, grid_dist_pct);
+    let grid_y = interpolate_onto_grid(&lap.lap_dist_pct, &raw_y, grid_dist_pct);
+    (grid_x, grid_y)
+}
 
-    let grid_x = interpolate_onto_grid(&lap.lap_dist_pct, &raw_x, &grid_dist_pct);
-    let grid_y = interpolate_onto_grid(&lap.lap_dist_pct, &raw_y, &grid_dist_pct);
-
-    // Compute bounding box
-    let mut min_x = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut min_y = f32::INFINITY;
-    let mut max_y = f32::NEG_INFINITY;
-
-    for &x in &grid_x {
-        if x.is_finite() {
-            min_x = min_x.min(x);
-            max_x = max_x.max(x);
+fn sanitize_venue_slug(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_underscore = false;
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_underscore = false;
+        } else if !prev_underscore && !out.is_empty() {
+            out.push('_');
+            prev_underscore = true;
         }
     }
-    for &y in &grid_y {
-        if y.is_finite() {
-            min_y = min_y.min(y);
-            max_y = max_y.max(y);
+    while out.ends_with('_') {
+        out.pop();
+    }
+    out
+}
+
+/// Stable cache key identifying an iRacing track + configuration.
+pub fn venue_key_for_metadata(meta: &IbtSessionMetadata) -> String {
+    let name_slug = sanitize_venue_slug(&meta.track_display_name);
+    let cfg_slug = sanitize_venue_slug(&meta.track_config_name);
+    if let Some(tid) = meta.track_id.filter(|&id| id > 0) {
+        if cfg_slug.is_empty() {
+            format!("track_{}", tid)
+        } else {
+            format!("track_{}_{}", tid, cfg_slug)
+        }
+    } else if !cfg_slug.is_empty() && !name_slug.is_empty() {
+        format!("{}_{}", name_slug, cfg_slug)
+    } else if !name_slug.is_empty() {
+        name_slug
+    } else {
+        "unknown_venue".to_string()
+    }
+}
+
+/// Default persistent directory for cached MoTeC-style venue track maps (`<settings_dir>/track_maps`).
+pub fn track_maps_dir() -> PathBuf {
+    crate::settings::get_settings_dir().join("track_maps")
+}
+
+pub fn load_venue_track_map_from_dir(dir: &Path, venue_key: &str) -> Option<VenueTrackMap> {
+    let path = dir.join(format!("{}.json", venue_key));
+    let raw = fs::read_to_string(path).ok()?;
+    let map: VenueTrackMap = serde_json::from_str(&raw).ok()?;
+    if map.points.len() >= 10 {
+        Some(map)
+    } else {
+        None
+    }
+}
+
+pub fn save_venue_track_map_to_dir(dir: &Path, map: &VenueTrackMap) -> Result<(), String> {
+    fs::create_dir_all(dir)
+        .map_err(|e| format!("Failed to create track_maps directory '{}': {}", dir.display(), e))?;
+    let path = dir.join(format!("{}.json", map.venue_key));
+    let json = serde_json::to_string_pretty(map)
+        .map_err(|e| format!("Failed to serialize venue track map: {}", e))?;
+    fs::write(&path, json)
+        .map_err(|e| format!("Failed to write venue track map '{}': {}", path.display(), e))
+}
+
+/// Picks the cleanest complete green flying lap (falling back gracefully) for track map generation.
+pub fn select_cleanest_lap_idx(
+    laps: &[LapAnalysis],
+    fastest_lap_idx: Option<usize>,
+) -> Option<usize> {
+    if laps.is_empty() {
+        return None;
+    }
+
+    let coverage = |l: &LapAnalysis| l.descriptor.max_dist_pct - l.descriptor.min_dist_pct;
+    let is_green_full = |l: &LapAnalysis| {
+        let d = &l.descriptor;
+        !d.is_out_lap && !d.is_in_lap && d.is_complete && !d.has_off_track && coverage(l) >= 0.90
+    };
+
+    // Prefer fastest clean green flying lap that also has valid GPS
+    if let Some((idx, _)) = laps
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_green_full(l) && lap_has_valid_gps(l))
+        .min_by(|(_, a), (_, b)| {
+            a.descriptor
+                .duration_secs
+                .partial_cmp(&b.descriptor.duration_secs)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        return Some(idx);
+    }
+
+    // Next: fastest clean green flying lap without GPS check
+    if let Some((idx, _)) = laps
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| is_green_full(l))
+        .min_by(|(_, a), (_, b)| {
+            a.descriptor
+                .duration_secs
+                .partial_cmp(&b.descriptor.duration_secs)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        return Some(idx);
+    }
+
+    // Next: fastest complete lap (even with minor off-track) with >= 0.85 coverage
+    if let Some((idx, _)) = laps
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| !l.descriptor.is_out_lap && !l.descriptor.is_in_lap && coverage(l) >= 0.85)
+        .min_by(|(_, a), (_, b)| {
+            a.descriptor
+                .duration_secs
+                .partial_cmp(&b.descriptor.duration_secs)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        return Some(idx);
+    }
+
+    if let Some(fidx) = fastest_lap_idx {
+        if fidx < laps.len() && coverage(&laps[fidx]) >= 0.50 {
+            return Some(fidx);
         }
     }
 
-    let span_x = (max_x - min_x).abs();
-    let span_y = (max_y - min_y).abs();
-    let max_span = span_x.max(span_y);
+    laps.iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| {
+            coverage(a)
+                .partial_cmp(&coverage(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+}
 
-    if max_span < 1.0 {
-        // Fallback: synthetic smooth test circuit
-        let fallback_pts: Vec<[f32; 2]> = grid_dist_pct
-            .iter()
-            .map(|&p| {
-                let theta = p * 2.0 * std::f32::consts::PI;
-                let r = 0.36 + 0.08 * (theta * 3.0).sin();
-                [0.5 + r * theta.cos(), 0.5 + r * theta.sin()]
-            })
-            .collect();
-        return Some(fallback_pts);
+pub fn build_venue_track_map_from_lap(
+    meta: &IbtSessionMetadata,
+    lap: &LapAnalysis,
+    num_points: usize,
+) -> Option<VenueTrackMap> {
+    let points = compute_track_map_from_lap(lap, num_points)?;
+    Some(VenueTrackMap {
+        venue_key: venue_key_for_metadata(meta),
+        track_display_name: meta.track_display_name.clone(),
+        track_config_name: meta.track_config_name.clone(),
+        track_id: meta.track_id,
+        source_is_gps: lap_has_valid_gps(lap),
+        source_lap_number: lap.descriptor.lap_number,
+        points,
+    })
+}
+
+pub fn build_venue_track_map_from_session(
+    meta: &IbtSessionMetadata,
+    laps: &[LapAnalysis],
+    fastest_lap_idx: Option<usize>,
+    num_points: usize,
+) -> Option<VenueTrackMap> {
+    let lap_idx = select_cleanest_lap_idx(laps, fastest_lap_idx)?;
+    build_venue_track_map_from_lap(meta, &laps[lap_idx], num_points)
+}
+
+/// Loads an existing persistent venue track map from `dir`, or saves the session's clean-lap map.
+/// Automatically upgrades a non-GPS cached map when a new `.ibt` file supplies true GPS coordinates.
+pub fn resolve_or_cache_session_track_map(session: &mut IbtSession, dir: &Path) {
+    let key = venue_key_for_metadata(&session.metadata);
+    let can_persist = !session.metadata.track_display_name.is_empty()
+        && session.metadata.track_display_name != "Unknown Track";
+
+    let fresh_is_gps = session
+        .venue_track_map
+        .as_ref()
+        .map(|m| m.source_is_gps)
+        .unwrap_or(false);
+
+    if let Some(cached) = load_venue_track_map_from_dir(dir, &key) {
+        if cached.source_is_gps || !fresh_is_gps {
+            session.venue_track_map = Some(cached);
+            return;
+        }
     }
 
-    let scale = 0.82 / max_span;
-    let center_x = (min_x + max_x) * 0.5;
-    let center_y = (min_y + max_y) * 0.5;
-
-    let mut normalized_points = Vec::with_capacity(pts);
-    for i in 0..pts {
-        let nx = 0.5 + (grid_x[i] - center_x) * scale;
-        let ny = 0.5 - (grid_y[i] - center_y) * scale; // invert Y so North is UP
-        normalized_points.push([nx.clamp(0.04, 0.96), ny.clamp(0.04, 0.96)]);
+    if can_persist {
+        if let Some(ref map) = session.venue_track_map {
+            let _ = save_venue_track_map_to_dir(dir, map);
+        }
     }
+}
 
-    Some(normalized_points)
+/// Rebuilds the cached venue track map explicitly from a chosen lap (e.g. "Regen Map" from Lap A)
+/// and persists it to disk so future sessions at that venue use it.
+pub fn regenerate_venue_track_map_from_lap(
+    session: &mut IbtSession,
+    lap_idx: usize,
+    num_points: usize,
+    dir: &Path,
+) -> Result<(), String> {
+    let lap = session
+        .analyzed_laps
+        .get(lap_idx)
+        .ok_or_else(|| "Selected lap index out of bounds".to_string())?;
+    let map = build_venue_track_map_from_lap(&session.metadata, lap, num_points)
+        .ok_or_else(|| "Selected lap does not have enough coordinate data to build a map".to_string())?;
+    save_venue_track_map_to_dir(dir, &map)?;
+    session.venue_track_map = Some(map);
+    Ok(())
 }
 
 /// Normalizes all channels of a `LapAnalysis` onto a uniform `LapDistPct` grid (`0.0..=1.0`).
@@ -2369,6 +2804,8 @@ pub fn compute_driver_inputs(
         lat_accel_g,
         long_accel_g,
         yaw_rad,
+        gps_pos_m: None,
+        course_yaw_rad: None,
         speed_mph_stats,
         speed_kph_stats,
         throttle_stats,
@@ -4509,5 +4946,101 @@ CarSetup:
         let p_end = map_pts[299];
         let closure_dist = ((p_start[0] - p_end[0]).powi(2) + (p_start[1] - p_end[1]).powi(2)).sqrt();
         assert!(closure_dist < 0.05, "Track must close seamlessly, dist: {}", closure_dist);
+    }
+
+    #[test]
+    fn test_gps_lat_lon_track_map_precision_and_venue_caching() {
+        let yaml = r#"---
+WeekendInfo:
+  TrackID: 367
+  TrackDisplayName: Homestead Miami Speedway
+  TrackConfigName: Oval
+  TrackNorthOffset: 0.72 rad
+  TrackLength: 2.41 km
+  TrackType: oval
+...
+"#;
+        let defs = [
+            ("SessionTime", "Time", "s", IbtVarType::Double),
+            ("Lap", "Lap", "", IbtVarType::Int),
+            ("LapDistPct", "Pct", "%", IbtVarType::Float),
+            ("PlayerTrackSurface", "Surf", "", IbtVarType::Int),
+            ("Speed", "Speed", "m/s", IbtVarType::Float),
+            ("YawNorth", "Yaw", "rad", IbtVarType::Float),
+            ("Lat", "Latitude", "deg", IbtVarType::Double),
+            ("Lon", "Longitude", "deg", IbtVarType::Double),
+        ];
+
+        let lat_center = 25.4519_f64;
+        let lon_center = -80.4086_f64;
+        let meters_per_deg_lat = 111_195.0_f64;
+        let meters_per_deg_lon = 111_195.0_f64 * lat_center.to_radians().cos();
+        let tilt = 0.65_f64; // Tilted NE-SW like real Homestead Miami Speedway
+
+        let mut builder = SyntheticIbtBuilder::new(30, yaml, &defs);
+        let mut t = 0.0_f64;
+
+        // Lap 1 (dirty off-track lap) + Lap 2 (clean green PB lap)
+        for &(lap_num, off_track, ticks, widen) in &[(1i32, true, 120usize, 80.0_f64), (2i32, false, 180usize, 0.0_f64)] {
+            for i in 0..ticks {
+                let pct = (i as f64) / ((ticks - 1) as f64);
+                let theta = pct * 2.0 * std::f64::consts::PI;
+                // Wide stadium oval: 500m x 220m half-axes; Lap 1 includes wide distortion to verify clean Lap 2 wins
+                let x_local = 500.0 * theta.sin() + widen * (pct * 6.0).sin();
+                let y_local = -220.0 * theta.cos();
+                let east_m = x_local * tilt.cos() - y_local * tilt.sin();
+                let north_m = x_local * tilt.sin() + y_local * tilt.cos();
+
+                let mut row = builder.new_row();
+                builder.set_f64(&mut row, "SessionTime", t);
+                builder.set_i32(&mut row, "Lap", lap_num);
+                builder.set_f32(&mut row, "LapDistPct", pct as f32);
+                builder.set_i32(
+                    &mut row,
+                    "PlayerTrackSurface",
+                    if off_track && (20..=60).contains(&i) { 0 } else { 3 },
+                );
+                builder.set_f32(&mut row, "Speed", 72.0);
+                // Intentionally noisy YawNorth (drifting slide) to prove GPS path overrides YawNorth
+                builder.set_f32(&mut row, "YawNorth", (i as f32) * 0.25);
+                builder.set_f64(&mut row, "Lat", lat_center + north_m / meters_per_deg_lat);
+                builder.set_f64(&mut row, "Lon", lon_center + east_m / meters_per_deg_lon);
+                builder.push_row(&row);
+                t += 1.0 / 30.0;
+            }
+        }
+
+        let bytes = builder.finish(1700000000, 0.0, 1.0, 1);
+        let mut session = parse_ibt_bytes(&bytes, "homestead_gps.ibt").expect("GPS .ibt must parse");
+
+        assert_eq!(session.metadata.track_id, Some(367));
+        assert!((session.metadata.track_north_offset_rad.unwrap_or(0.0) - 0.72).abs() < 1e-3);
+        let venue = session.venue_track_map.clone().expect("Venue track map must build");
+        assert!(venue.source_is_gps, "Venue track map must use true GPS Lat/Lon");
+        assert_eq!(venue.source_lap_number, 2, "Must select clean flying Lap 2 over off-track Lap 1");
+        assert_eq!(venue.venue_key, "track_367_oval");
+        assert_eq!(venue.points.len(), 300);
+
+        // Save/load cache roundtrip in an isolated temp folder
+        let temp_dir = std::env::temp_dir().join(format!("s4s_track_map_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        // First put an inferior non-GPS cached map on disk and verify GPS auto-upgrades it
+        let mut stale_non_gps = venue.clone();
+        stale_non_gps.source_is_gps = false;
+        stale_non_gps.source_lap_number = 99;
+        save_venue_track_map_to_dir(&temp_dir, &stale_non_gps).expect("Save stale non-GPS cache");
+
+        resolve_or_cache_session_track_map(&mut session, &temp_dir);
+        let reloaded = load_venue_track_map_from_dir(&temp_dir, &venue.venue_key).expect("Reload upgraded cache");
+        assert!(reloaded.source_is_gps, "GPS session must upgrade stale non-GPS cache");
+        assert_eq!(reloaded.source_lap_number, 2);
+
+        // Explicit user regeneration from Lap 1 must overwrite persisted venue cache
+        regenerate_venue_track_map_from_lap(&mut session, 0, 300, &temp_dir).expect("Regen from Lap 1");
+        let after_regen = load_venue_track_map_from_dir(&temp_dir, &venue.venue_key).expect("Reload regenerated map");
+        assert_eq!(after_regen.source_lap_number, 1);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
